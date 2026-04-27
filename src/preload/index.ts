@@ -1,0 +1,122 @@
+import { contextBridge, ipcRenderer } from 'electron';
+
+import { IPC } from '@shared/ipc-channels';
+
+console.log('[preload] running, contextIsolated=', process.contextIsolated);
+
+const api = {
+  app: {
+    getVersion: (): Promise<string> => ipcRenderer.invoke(IPC.APP_GET_VERSION),
+    getHome: (): Promise<string> => ipcRenderer.invoke(IPC.APP_GET_HOME),
+  },
+  workspace: {
+    list: () => ipcRenderer.invoke(IPC.WORKSPACE_LIST),
+    pickFolder: () => ipcRenderer.invoke(IPC.WORKSPACE_PICK),
+    open: (path: string) => ipcRenderer.invoke(IPC.WORKSPACE_OPEN, path),
+    scan: (id: string, path: string) => ipcRenderer.invoke(IPC.WORKSPACE_SCAN, id, path),
+    setActive: (id: string) => ipcRenderer.invoke(IPC.WORKSPACE_SET_ACTIVE, id),
+  },
+  fs: {
+    readDir: (path: string) => ipcRenderer.invoke(IPC.FS_READ_DIR, path),
+    readFile: (path: string) => ipcRenderer.invoke(IPC.FS_READ_FILE, path),
+    readBinary: (path: string) => ipcRenderer.invoke(IPC.FS_READ_BINARY, path),
+    writeFile: (path: string, data: string) =>
+      ipcRenderer.invoke(IPC.FS_WRITE_FILE, path, data),
+    listFiles: (cwd: string) => ipcRenderer.invoke(IPC.FS_LIST_FILES, cwd),
+    create: (path: string, kind: 'file' | 'folder') =>
+      ipcRenderer.invoke(IPC.FS_CREATE, path, kind),
+    rename: (src: string, dest: string) => ipcRenderer.invoke(IPC.FS_RENAME, src, dest),
+    delete: (path: string) => ipcRenderer.invoke(IPC.FS_DELETE, path),
+    duplicate: (path: string) => ipcRenderer.invoke(IPC.FS_DUPLICATE, path),
+    reveal: (path: string) => ipcRenderer.invoke(IPC.FS_REVEAL, path),
+    watch: (root: string, cb: (dirs: string[]) => void) => {
+      const listener = (_e: unknown, ev: { root: string; dirs: string[] }) => {
+        if (ev.root === root) cb(ev.dirs);
+      };
+      ipcRenderer.on(IPC.FS_WATCH_EVENT, listener);
+      void ipcRenderer.invoke(IPC.FS_WATCH, root, true);
+      return () => {
+        ipcRenderer.off(IPC.FS_WATCH_EVENT, listener);
+        void ipcRenderer.invoke(IPC.FS_WATCH, root, false);
+      };
+    },
+  },
+  git: {
+    status: (path: string) => ipcRenderer.invoke(IPC.GIT_STATUS, path),
+    diff: (path: string, file?: string) => ipcRenderer.invoke(IPC.GIT_DIFF, path, file),
+    stage: (cwd: string, paths: string[]) => ipcRenderer.invoke(IPC.GIT_STAGE, cwd, paths),
+    unstage: (cwd: string, paths: string[]) =>
+      ipcRenderer.invoke(IPC.GIT_UNSTAGE, cwd, paths),
+    discard: (cwd: string, paths: string[]) =>
+      ipcRenderer.invoke(IPC.GIT_DISCARD, cwd, paths),
+    commit: (cwd: string, message: string, opts?: { amend?: boolean }) =>
+      ipcRenderer.invoke(IPC.GIT_COMMIT, cwd, message, opts),
+    branches: (cwd: string) => ipcRenderer.invoke(IPC.GIT_BRANCHES, cwd),
+    checkout: (cwd: string, name: string) =>
+      ipcRenderer.invoke(IPC.GIT_CHECKOUT, cwd, name),
+    createBranch: (cwd: string, name: string, from?: string) =>
+      ipcRenderer.invoke(IPC.GIT_CREATE_BRANCH, cwd, name, from),
+    log: (cwd: string, limit?: number) => ipcRenderer.invoke(IPC.GIT_LOG, cwd, limit),
+    fetch: (cwd: string) => ipcRenderer.invoke(IPC.GIT_FETCH, cwd),
+    push: (cwd: string) => ipcRenderer.invoke(IPC.GIT_PUSH, cwd),
+    pull: (cwd: string) => ipcRenderer.invoke(IPC.GIT_PULL, cwd),
+  },
+  search: {
+    grep: (cwd: string, query: string, opts?: unknown) =>
+      ipcRenderer.invoke(IPC.SEARCH_GREP, cwd, query, opts),
+  },
+  pty: {
+    create: (opts: unknown) => ipcRenderer.invoke(IPC.PTY_CREATE, opts),
+    write: (sessionId: string, data: string) =>
+      ipcRenderer.invoke(IPC.PTY_WRITE, sessionId, data),
+    resize: (sessionId: string, cols: number, rows: number) =>
+      ipcRenderer.invoke(IPC.PTY_RESIZE, sessionId, cols, rows),
+    kill: (sessionId: string) => ipcRenderer.invoke(IPC.PTY_KILL, sessionId),
+    onData: (sessionId: string, cb: (data: string) => void) => {
+      const channel = `${IPC.PTY_DATA}:${sessionId}`;
+      const listener = (_e: unknown, data: string) => cb(data);
+      ipcRenderer.on(channel, listener);
+      return () => ipcRenderer.off(channel, listener);
+    },
+    onExit: (sessionId: string, cb: (code: number | null) => void) => {
+      const channel = `${IPC.PTY_EXIT}:${sessionId}`;
+      const listener = (_e: unknown, code: number | null) => cb(code);
+      ipcRenderer.on(channel, listener);
+      return () => ipcRenderer.off(channel, listener);
+    },
+  },
+  tmux: {
+    listPanes: (sessionName?: string) =>
+      ipcRenderer.invoke(IPC.TMUX_LIST_PANES, sessionName),
+    capturePane: (paneId: string, lines?: number) =>
+      ipcRenderer.invoke(IPC.TMUX_CAPTURE_PANE, paneId, lines),
+    selectPane: (paneId: string) => ipcRenderer.invoke(IPC.TMUX_SELECT_PANE, paneId),
+    sendKeys: (paneId: string, text: string, submit?: boolean) =>
+      ipcRenderer.invoke(IPC.TMUX_SEND_KEYS, paneId, text, submit),
+  },
+  settings: {
+    list: (projectPath: string | null) =>
+      ipcRenderer.invoke(IPC.SETTINGS_LIST, projectPath),
+    read: (filePath: string) => ipcRenderer.invoke(IPC.SETTINGS_READ, filePath),
+    write: (filePath: string, content: string) =>
+      ipcRenderer.invoke(IPC.SETTINGS_WRITE, filePath, content),
+  },
+};
+
+try {
+  // Forward menu-driven events to the renderer through a minimal pub/sub.
+const appEvents = {
+  onCloseTab(cb: () => void): () => void {
+    const listener = () => cb();
+    ipcRenderer.on('app:close-tab', listener);
+    return () => ipcRenderer.off('app:close-tab', listener);
+  },
+};
+
+contextBridge.exposeInMainWorld('devspace', { ...api, appEvents });
+  console.log('[preload] exposed window.devspace');
+} catch (err) {
+  console.error('[preload] exposeInMainWorld failed:', err);
+}
+
+export type DevspaceApi = typeof api;

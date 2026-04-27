@@ -1,0 +1,15 @@
+node_modules
+dist-electron
+out
+release
+.DS_Store
+*.log
+.vite
+.eslintcache
+.playwright-mcp
+.claude
+
+# Local tooling — mempalace mining, scratch mockups
+mempalace.yaml
+entities.json
+mockup/
