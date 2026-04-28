@@ -5,6 +5,26 @@ All notable changes to DevSpace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.3.17] — 2026-04-28
+
+### Added
+- **Bundled monospace fonts.** JetBrains Mono for Latin / programming and
+  Sarabun for Thai now ship with the app — terminal rendering no longer
+  depends on whatever monospace font the OS picks for missing glyphs.
+- `@xterm/addon-unicode11` enables Unicode 11 width tables in the
+  terminal so Thai combining vowels and tone marks (สระบน / ล่าง,
+  วรรณยุกต์) are counted as zero-width and stack correctly over their
+  base consonant. Fixes cursor offsets and overlapping glyphs that
+  previously made Thai output unreadable on macOS.
+
+### Changed
+- Terminal `fontFamily` stack now leads with `JetBrains Mono` (Latin via
+  `unicode-range`) and `Sarabun` (Thai via `unicode-range`), with
+  `TlwgMono` / `DejaVu Sans Mono` / `Sukhumvit Set` / `Thonburi` as
+  cross-platform fallbacks. Sarabun's tighter metrics keep leading
+  vowels (`เ`, `ไ`, `ใ`, `แ`) close to their base consonant inside
+  monospace cells.
+
 ## [0.3.16] — 2026-04-28
 
 ### Added
@@ -57,5 +77,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   project, persistent tmux-backed CLI panes, multi-agent Team mode, and
   Claude Code account/files settings.
 
+[0.3.17]: https://github.com/icueth/devspace-ide-for-claude-code/releases/tag/v0.3.17
 [0.3.16]: https://github.com/icueth/devspace-ide-for-claude-code/releases/tag/v0.3.16
 [0.3.14]: https://github.com/icueth/devspace-ide-for-claude-code/releases/tag/v0.3.14

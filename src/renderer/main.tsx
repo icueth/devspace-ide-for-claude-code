@@ -4,6 +4,16 @@ import ReactDOM from 'react-dom/client';
 import App from './App';
 import './index.css';
 
+// Bundled fonts. JetBrains Mono covers Latin/Cyrillic/Greek (programming
+// glyphs); Sarabun covers Thai (designed by Cadson Demak — tighter
+// metrics than macOS Sukhumvit Set so vowels เ/ไ/ใ/แ don't drift away
+// from their base consonant in a monospace cell). Browser CSS routes
+// each char to whichever bundled font has the matching unicode-range.
+import '@fontsource/jetbrains-mono/400.css';
+import '@fontsource/jetbrains-mono/700.css';
+import '@fontsource/sarabun/400.css';
+import '@fontsource/sarabun/700.css';
+
 console.log('[renderer] boot start', {
   hasDevspace: typeof (window as unknown as { devspace?: unknown }).devspace !== 'undefined',
 });

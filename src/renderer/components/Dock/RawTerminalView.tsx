@@ -1,4 +1,5 @@
 import { FitAddon } from '@xterm/addon-fit';
+import { Unicode11Addon } from '@xterm/addon-unicode11';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import { Terminal } from '@xterm/xterm';
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -90,7 +91,14 @@ export function RawTerminalView({ sessionId, isActive }: RawTerminalViewProps) {
     const term = new Terminal({
       cursorBlink: true,
       fontSize: 13,
-      fontFamily: 'Menlo, Monaco, "Courier New", monospace',
+      // Both 'JetBrains Mono' (Latin) and 'Sarabun' (Thai) are bundled and
+      // each scoped to its own unicode-range, so Latin always renders in JB
+      // Mono and Thai always renders in Sarabun regardless of OS. TlwgMono /
+      // DejaVu Sans Mono are kept as Linux fallbacks for users who prefer
+      // their distro's monospace Thai. unicode11 below handles cell width
+      // math for combining vowels/tones.
+      fontFamily:
+        '"JetBrains Mono", "Sarabun", "TlwgMono", "DejaVu Sans Mono", "Sukhumvit Set", "Thonburi", Menlo, Monaco, "Courier New", monospace',
       scrollback: 10_000,
       theme: THEME,
       allowProposedApi: true,
@@ -99,6 +107,12 @@ export function RawTerminalView({ sessionId, isActive }: RawTerminalViewProps) {
     const fitAddon = new FitAddon();
     term.loadAddon(fitAddon);
     term.loadAddon(new WebLinksAddon());
+    // Unicode 11 width tables — fixes Thai combining vowels/tones (zero-width)
+    // and other complex scripts that the default Unicode 6 tables miscount,
+    // which causes cursor offsets and overlapping glyphs in Thai/Arabic/etc.
+    const unicode11 = new Unicode11Addon();
+    term.loadAddon(unicode11);
+    term.unicode.activeVersion = '11';
     term.open(host);
     termRef.current = term;
     fitRef.current = fitAddon;
