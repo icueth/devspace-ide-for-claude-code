@@ -1,9 +1,10 @@
 import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import { Terminal } from '@xterm/xterm';
-import { useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import '@xterm/xterm/css/xterm.css';
 
+import { TerminalContextMenu, type TerminalMenuItem } from '@renderer/components/Dock/TerminalContextMenu';
 import { api } from '@renderer/lib/api';
 
 interface RawTerminalViewProps {
@@ -34,6 +35,26 @@ const THEME = {
   brightWhite: '#ffffff',
 };
 
+// tmux's default prefix is Ctrl+B (0x02). The user can pick a different
+// modifier in Settings → tmux → Config; we pull that token from the main
+// process and translate it to a control byte. Anything we can't parse falls
+// back to Ctrl+B so the menu still works.
+const DEFAULT_TMUX_PREFIX = '\x02';
+
+function prefixTokenToByte(token: string | null | undefined): string {
+  if (!token) return DEFAULT_TMUX_PREFIX;
+  const m = /^[Cc]-([a-zA-Z])$/.exec(token.trim());
+  if (!m) return DEFAULT_TMUX_PREFIX;
+  const ch = m[1]!.toLowerCase();
+  // ASCII control byte: Ctrl+a = 0x01, Ctrl+b = 0x02, etc.
+  return String.fromCharCode(ch.charCodeAt(0) - 96);
+}
+
+interface ContextMenuState {
+  x: number;
+  y: number;
+}
+
 /**
  * Mounts xterm against an existing PTY session. Lazy-rendered by the parent
  * pane so tabs that stay in chat mode never pay the xterm bundle/render
@@ -45,6 +66,21 @@ export function RawTerminalView({ sessionId, isActive }: RawTerminalViewProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
+  const [menu, setMenu] = useState<ContextMenuState | null>(null);
+  const [tmuxPrefixByte, setTmuxPrefixByte] = useState<string>(DEFAULT_TMUX_PREFIX);
+
+  useEffect(() => {
+    let cancelled = false;
+    void api.tmux
+      .getConfig()
+      .then((cfg) => {
+        if (!cancelled) setTmuxPrefixByte(prefixTokenToByte(cfg.prefixKey));
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -138,9 +174,147 @@ export function RawTerminalView({ sessionId, isActive }: RawTerminalViewProps) {
     return () => cancelAnimationFrame(raf);
   }, [isActive]);
 
+  const writeToSession = useCallback(
+    (data: string) => {
+      if (!sessionId) return;
+      void api.pty.write(sessionId, data);
+    },
+    [sessionId],
+  );
+
+  const sendTmux = useCallback(
+    (key: string) => writeToSession(`${tmuxPrefixByte}${key}`),
+    [writeToSession, tmuxPrefixByte],
+  );
+
+  const handleContextMenu = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    // Shift+right-click bypasses the in-app menu so users can still reach the
+    // browser's native context menu when they explicitly ask for it.
+    if (e.shiftKey) return;
+    e.preventDefault();
+    setMenu({ x: e.clientX, y: e.clientY });
+  }, []);
+
+  const buildMenuItems = useCallback((): TerminalMenuItem[] => {
+    const term = termRef.current;
+    const selection = term?.getSelection() ?? '';
+    // Show the user's actual prefix in hint labels (e.g. "⌃A c" if they
+    // remapped to Ctrl+A). Falls back to ⌃B for the stock binding.
+    const prefixHint = (() => {
+      const code = tmuxPrefixByte.charCodeAt(0);
+      if (code >= 1 && code <= 26) {
+        return `⌃${String.fromCharCode(code + 64)}`;
+      }
+      return '⌃B';
+    })();
+    return [
+      {
+        id: 'copy',
+        label: 'Copy',
+        hint: '⌘C',
+        disabled: !selection,
+        onSelect: () => {
+          if (!selection) return;
+          void navigator.clipboard.writeText(selection).catch(() => undefined);
+          term?.clearSelection();
+        },
+      },
+      {
+        id: 'paste',
+        label: 'Paste',
+        hint: '⌘V',
+        onSelect: async () => {
+          try {
+            const text = await navigator.clipboard.readText();
+            if (text) writeToSession(text);
+          } catch {
+            /* clipboard read denied — silent */
+          }
+        },
+      },
+      {
+        id: 'select-all',
+        label: 'Select all',
+        onSelect: () => term?.selectAll(),
+      },
+      {
+        id: 'clear',
+        label: 'Clear screen',
+        hint: '⌃L',
+        onSelect: () => writeToSession('\x0c'),
+      },
+      { id: 'sep-1', label: '', separator: true },
+      {
+        id: 'tmux-new-window',
+        label: 'New tmux window',
+        hint: `${prefixHint} c`,
+        onSelect: () => sendTmux('c'),
+      },
+      {
+        id: 'tmux-split-h',
+        label: 'Split pane (horizontal)',
+        hint: `${prefixHint} "`,
+        onSelect: () => sendTmux('"'),
+      },
+      {
+        id: 'tmux-split-v',
+        label: 'Split pane (vertical)',
+        hint: `${prefixHint} %`,
+        onSelect: () => sendTmux('%'),
+      },
+      {
+        id: 'tmux-choose',
+        label: 'Choose window/session…',
+        hint: `${prefixHint} w`,
+        onSelect: () => sendTmux('w'),
+      },
+      {
+        id: 'tmux-cmd',
+        label: 'tmux command prompt',
+        hint: `${prefixHint} :`,
+        onSelect: () => sendTmux(':'),
+      },
+      {
+        id: 'tmux-detach',
+        label: 'Detach session',
+        hint: `${prefixHint} d`,
+        onSelect: () => sendTmux('d'),
+      },
+      { id: 'sep-2', label: '', separator: true },
+      {
+        id: 'manage-sessions',
+        label: 'Manage tmux sessions…',
+        onSelect: () => {
+          window.dispatchEvent(
+            new CustomEvent('devspace:open-settings', { detail: { tab: 'tmux' } }),
+          );
+        },
+      },
+      {
+        id: 'kill-pane',
+        label: 'Kill tmux pane',
+        hint: `${prefixHint} x`,
+        danger: true,
+        onSelect: () => sendTmux('x'),
+      },
+    ];
+  }, [sendTmux, writeToSession, tmuxPrefixByte]);
+
   return (
-    <div className="h-full w-full bg-surface" onClick={() => termRef.current?.focus()}>
+    <div
+      className="h-full w-full bg-surface"
+      onClick={() => termRef.current?.focus()}
+      onContextMenu={handleContextMenu}
+    >
       <div ref={hostRef} className="h-full w-full" />
+      {menu && (
+        <TerminalContextMenu
+          x={menu.x}
+          y={menu.y}
+          items={buildMenuItems()}
+          onClose={() => setMenu(null)}
+        />
+      )}
     </div>
   );
 }

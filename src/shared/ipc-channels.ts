@@ -60,6 +60,14 @@ export const IPC = {
   TMUX_CAPTURE_PANE: 'tmux:capture-pane',
   TMUX_SELECT_PANE: 'tmux:select-pane',
   TMUX_SEND_KEYS: 'tmux:send-keys',
+  TMUX_LIST_SESSIONS: 'tmux:list-sessions',
+  TMUX_KILL_SESSION: 'tmux:kill-session',
+  TMUX_RENAME_SESSION: 'tmux:rename-session',
+  TMUX_KILL_SERVER: 'tmux:kill-server',
+  TMUX_GET_CONFIG: 'tmux:get-config',
+  TMUX_SET_CONFIG: 'tmux:set-config',
+  TMUX_RENDER_CONF: 'tmux:render-conf',
+  TMUX_RESOLVE_BINARY: 'tmux:resolve-binary',
 
   // Claude config browser (Settings dialog)
   SETTINGS_LIST: 'settings:list',

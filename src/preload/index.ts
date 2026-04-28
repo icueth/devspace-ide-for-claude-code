@@ -93,6 +93,15 @@ const api = {
     selectPane: (paneId: string) => ipcRenderer.invoke(IPC.TMUX_SELECT_PANE, paneId),
     sendKeys: (paneId: string, text: string, submit?: boolean) =>
       ipcRenderer.invoke(IPC.TMUX_SEND_KEYS, paneId, text, submit),
+    listSessions: () => ipcRenderer.invoke(IPC.TMUX_LIST_SESSIONS),
+    killSession: (name: string) => ipcRenderer.invoke(IPC.TMUX_KILL_SESSION, name),
+    renameSession: (oldName: string, newName: string) =>
+      ipcRenderer.invoke(IPC.TMUX_RENAME_SESSION, oldName, newName),
+    killServer: () => ipcRenderer.invoke(IPC.TMUX_KILL_SERVER),
+    getConfig: () => ipcRenderer.invoke(IPC.TMUX_GET_CONFIG),
+    setConfig: (cfg: unknown) => ipcRenderer.invoke(IPC.TMUX_SET_CONFIG, cfg),
+    renderConf: (cfg: unknown) => ipcRenderer.invoke(IPC.TMUX_RENDER_CONF, cfg),
+    resolveBinary: () => ipcRenderer.invoke(IPC.TMUX_RESOLVE_BINARY),
   },
   settings: {
     list: (projectPath: string | null) =>

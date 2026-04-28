@@ -1,7 +1,11 @@
 import { createPty, getSession } from '@main/services/PtyPool';
+import {
+  getTmuxConfigSync,
+  loadTmuxConfig,
+} from '@main/services/TmuxConfigService';
 import { resolveInteractiveShellEnv } from '@main/utils/shellEnv';
 import { createLogger } from '@shared/logger';
-import type { PtySession } from '@shared/types';
+import type { PtySession, TmuxConfig } from '@shared/types';
 
 const logger = createLogger('ClaudeCliLauncher');
 
@@ -32,21 +36,46 @@ export async function resolveClaudeBinary(): Promise<string | null> {
   return findClaudeBinary();
 }
 
-async function findTmuxBinary(): Promise<string | null> {
+/**
+ * Resolve the tmux binary that DevSpace should spawn. Honors the user's
+ * configured override (`config.binaryPath`) when it points at an existing
+ * file, otherwise falls back to PATH lookup. Returns null on Windows or when
+ * tmux can't be located.
+ */
+export async function resolveTmuxBinary(): Promise<string | null> {
   if (process.platform === 'win32') return null;
+  const cfg = await loadTmuxConfig();
+  if (cfg.binaryPath) {
+    const { existsSync } = await import('node:fs');
+    if (existsSync(cfg.binaryPath)) return cfg.binaryPath;
+    logger.warn(`configured binaryPath missing: ${cfg.binaryPath} — falling back to PATH`);
+  }
   return findOnPath('tmux');
 }
 
-function tmuxSessionName(prefix: string, projectId: string, tabId: string): string {
-  // tmux allows alphanumeric + _ -. Our projectId is a 12-char hex hash;
-  // tabId is short slug ('default', 'a3f9k2', etc.).
+function tmuxSessionName(
+  cfg: TmuxConfig,
+  prefix: string,
+  projectId: string,
+  tabId: string,
+): string {
   return tabId === 'default'
-    ? `devspace-${prefix}-${projectId}`
-    : `devspace-${prefix}-${projectId}-${tabId}`;
+    ? `${cfg.sessionPrefix}-${prefix}-${projectId}`
+    : `${cfg.sessionPrefix}-${prefix}-${projectId}-${tabId}`;
 }
 
 export function claudeCliTmuxSessionName(projectId: string, tabId = 'default'): string {
-  return tmuxSessionName('cli', projectId, tabId);
+  return tmuxSessionName(getTmuxConfigSync(), 'cli', projectId, tabId);
+}
+
+export function shellTmuxSessionName(projectId: string, tabId = 'default'): string {
+  return tmuxSessionName(getTmuxConfigSync(), 'shell', projectId, tabId);
+}
+
+/** `tmux -L <socketName>` prefix args, used by every direct tmux invocation. */
+export function tmuxSocketArgs(): string[] {
+  const cfg = getTmuxConfigSync();
+  return ['-L', cfg.socketName];
 }
 
 export interface ClaudeLaunchOptions {
@@ -70,7 +99,8 @@ export async function launchClaudeCli(
   if (existing) return existing;
 
   const claudeBin = await findClaudeBinary();
-  const tmuxBin = await findTmuxBinary();
+  const cfg = await loadTmuxConfig();
+  const tmuxBin = cfg.enabled ? await resolveTmuxBinary() : null;
   const env = await resolveInteractiveShellEnv();
   const shell = env.SHELL ?? process.env.SHELL ?? '/bin/zsh';
 
@@ -78,9 +108,9 @@ export async function launchClaudeCli(
   // `new-session -A` attaches to an existing session with the same name or
   // creates it — which gives us free resume-on-reopen.
   if (tmuxBin && claudeBin) {
-    const sessionName = tmuxSessionName('cli', opts.projectId, tabId);
+    const sessionName = tmuxSessionName(cfg, 'cli', opts.projectId, tabId);
     logger.info(
-      `tmux-backed claude for project=${opts.projectId} tab=${tabId} (${sessionName})`,
+      `tmux-backed claude for project=${opts.projectId} tab=${tabId} (${sessionName}) socket=${cfg.socketName}`,
     );
     return createPty({
       projectId: opts.projectId,
@@ -89,6 +119,8 @@ export async function launchClaudeCli(
       cwd: opts.cwd,
       command: tmuxBin,
       args: [
+        '-L',
+        cfg.socketName,
         'new-session',
         '-A',
         '-s',
@@ -104,7 +136,7 @@ export async function launchClaudeCli(
 
   if (claudeBin) {
     logger.info(
-      `spawning claude (${claudeBin}) without tmux — install tmux for persistence`,
+      `spawning claude (${claudeBin}) without tmux — ${cfg.enabled ? 'install tmux for persistence' : 'tmux disabled in settings'}`,
     );
     return createPty({
       projectId: opts.projectId,
@@ -147,19 +179,24 @@ export async function launchShell(opts: ShellLaunchOptions): Promise<PtySession>
   const existing = getSession(opts.projectId, 'shell');
   if (existing) return existing;
 
-  const tmuxBin = await findTmuxBinary();
+  const cfg = await loadTmuxConfig();
+  const tmuxBin = cfg.enabled ? await resolveTmuxBinary() : null;
   const env = await resolveInteractiveShellEnv();
   const shell = env.SHELL ?? process.env.SHELL ?? '/bin/zsh';
 
   if (tmuxBin) {
-    const sessionName = tmuxSessionName('shell', opts.projectId, 'default');
-    logger.info(`tmux-backed shell for project=${opts.projectId} (${sessionName})`);
+    const sessionName = tmuxSessionName(cfg, 'shell', opts.projectId, 'default');
+    logger.info(
+      `tmux-backed shell for project=${opts.projectId} (${sessionName}) socket=${cfg.socketName}`,
+    );
     return createPty({
       projectId: opts.projectId,
       kind: 'shell',
       cwd: opts.cwd,
       command: tmuxBin,
       args: [
+        '-L',
+        cfg.socketName,
         'new-session',
         '-A',
         '-s',

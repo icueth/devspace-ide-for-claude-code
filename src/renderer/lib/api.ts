@@ -10,7 +10,9 @@ import type {
   SearchOptions,
   SearchResult,
   SettingsCategory,
+  TmuxConfig,
   TmuxPane,
+  TmuxSession,
   Workspace,
 } from '@shared/types';
 
@@ -73,6 +75,14 @@ export interface DevspaceApi {
     capturePane: (paneId: string, lines?: number) => Promise<string>;
     selectPane: (paneId: string) => Promise<boolean>;
     sendKeys: (paneId: string, text: string, submit?: boolean) => Promise<boolean>;
+    listSessions: () => Promise<TmuxSession[]>;
+    killSession: (name: string) => Promise<boolean>;
+    renameSession: (oldName: string, newName: string) => Promise<boolean>;
+    killServer: () => Promise<boolean>;
+    getConfig: () => Promise<TmuxConfig>;
+    setConfig: (cfg: TmuxConfig) => Promise<TmuxConfig>;
+    renderConf: (cfg: TmuxConfig) => Promise<string>;
+    resolveBinary: () => Promise<{ path: string | null; configured: string | null }>;
   };
   settings: {
     list: (projectPath: string | null) => Promise<SettingsCategory[]>;
@@ -149,6 +159,14 @@ function makeStubApi(): DevspaceApi {
       capturePane: () => Promise.resolve(''),
       selectPane: () => Promise.resolve(false),
       sendKeys: () => Promise.resolve(false),
+      listSessions: () => Promise.resolve([]),
+      killSession: () => Promise.resolve(false),
+      renameSession: () => Promise.resolve(false),
+      killServer: () => Promise.resolve(false),
+      getConfig: notWired('tmux.getConfig'),
+      setConfig: notWired('tmux.setConfig'),
+      renderConf: notWired('tmux.renderConf'),
+      resolveBinary: () => Promise.resolve({ path: null, configured: null }),
     },
     settings: {
       list: () => Promise.resolve([]),

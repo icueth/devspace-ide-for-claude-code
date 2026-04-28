@@ -54,6 +54,19 @@ export default function App() {
   const [goToLine, setGoToLine] = useState(false);
   const [createTeamOpen, setCreateTeamOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsInitialTab, setSettingsInitialTab] = useState<
+    'account' | 'files' | 'tmux'
+  >('account');
+
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent<{ tab?: 'account' | 'files' | 'tmux' }>).detail;
+      if (detail?.tab) setSettingsInitialTab(detail.tab);
+      setSettingsOpen(true);
+    };
+    window.addEventListener('devspace:open-settings', handler);
+    return () => window.removeEventListener('devspace:open-settings', handler);
+  }, []);
   const dockFull = useLayoutStore((s) => s.dockFull);
   const toggleDockFull = useLayoutStore((s) => s.toggleDockFull);
   const adjustSidebarWidth = useLayoutStore((s) => s.adjustSidebarWidth);
@@ -357,7 +370,10 @@ export default function App() {
         )}
 
         {settingsOpen ? (
-          <SettingsPage onClose={() => setSettingsOpen(false)} />
+          <SettingsPage
+            initialTab={settingsInitialTab}
+            onClose={() => setSettingsOpen(false)}
+          />
         ) : (
           !dockFull && teamMode !== 'focus' && (
           <section className="flex min-w-0 flex-1 flex-col">

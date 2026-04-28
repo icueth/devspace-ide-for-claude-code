@@ -26,34 +26,43 @@ import {
   FileText,
   KeyRound,
   Save,
+  Server,
   Settings as SettingsIcon,
 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 
 import { AccountSettings } from '@renderer/components/Settings/AccountSettings';
+import { TmuxSection } from '@renderer/components/Settings/TmuxSection';
 import { api } from '@renderer/lib/api';
 import { cn } from '@renderer/lib/utils';
 import { baseEditorTheme } from '@renderer/utils/codemirrorTheme';
 import { useWorkspaceStore } from '@renderer/state/workspace';
 import type { SettingsCategory, SettingsFile } from '@shared/types';
 
-type Tab = 'account' | 'files';
+type Tab = 'account' | 'files' | 'tmux';
 
 interface SettingsPageProps {
   onClose: () => void;
+  initialTab?: Tab;
 }
 
 /**
  * Full-page Claude settings — replaces the editor/dock area when open.
- * Two tabs:
+ * Three tabs:
  *   • Account — flips between Subscription and Custom API mode by writing
  *     env vars into ~/.claude/settings.json.
  *   • Files   — raw browser of every config file under ~/.claude (and the
  *     active project's .claude/, plus .mcp.json) with syntax-aware editing
  *     and explicit Save.
+ *   • tmux    — live list of tmux sessions DevSpace (and others) have
+ *     spawned, with rename / kill controls.
  */
-export function SettingsPage({ onClose }: SettingsPageProps) {
-  const [tab, setTab] = useState<Tab>('account');
+export function SettingsPage({ onClose, initialTab = 'account' }: SettingsPageProps) {
+  const [tab, setTab] = useState<Tab>(initialTab);
+
+  useEffect(() => {
+    setTab(initialTab);
+  }, [initialTab]);
 
   return (
     <section className="flex min-w-0 flex-1 flex-col bg-surface">
@@ -85,7 +94,9 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
       </div>
 
       <div className="min-h-0 flex-1 overflow-hidden">
-        {tab === 'account' ? <AccountSettings /> : <FilesSettings />}
+        {tab === 'account' && <AccountSettings />}
+        {tab === 'files' && <FilesSettings />}
+        {tab === 'tmux' && <TmuxSection />}
       </div>
     </section>
   );
@@ -95,6 +106,7 @@ function TabSwitch({ tab, onChange }: { tab: Tab; onChange: (t: Tab) => void }) 
   const tabs: Array<{ id: Tab; label: string; icon: React.ReactNode }> = [
     { id: 'account', label: 'Account', icon: <KeyRound size={11} /> },
     { id: 'files', label: 'Files', icon: <FileText size={11} /> },
+    { id: 'tmux', label: 'tmux', icon: <Server size={11} /> },
   ];
   return (
     <div className="flex items-center gap-0.5 rounded-[7px] border border-border bg-surface-2 p-[2px]">

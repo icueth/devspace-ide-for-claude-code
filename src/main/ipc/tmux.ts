@@ -2,21 +2,30 @@ import { spawn } from 'node:child_process';
 
 import { ipcMain } from 'electron';
 
+import {
+  resolveTmuxBinary,
+  tmuxSocketArgs,
+} from '@main/services/ClaudeCliLauncher';
+import {
+  loadTmuxConfig,
+  renderTmuxConfSnippet,
+  saveTmuxConfig,
+} from '@main/services/TmuxConfigService';
 import { resolveInteractiveShellEnv } from '@main/utils/shellEnv';
 import { IPC } from '@shared/ipc-channels';
 import { createLogger } from '@shared/logger';
-import type { TmuxPane } from '@shared/types';
+import type { TmuxConfig, TmuxPane, TmuxSession } from '@shared/types';
 
 const logger = createLogger('IPC:tmux');
 
-// Run a tmux command and collect stdout. Uses the default tmux server
-// (whatever socket Claude CLI's spawned tmux uses, which is typically the
-// user's default) — we don't try to be clever about sockets. If no tmux
-// server is running the command exits with non-zero and we return empty.
+// Run a tmux command on DevSpace's dedicated socket. Always prefixes `-L
+// <socketName>` so we never touch the user's default tmux server.
 async function runTmux(args: string[]): Promise<string> {
   const env = await resolveInteractiveShellEnv();
+  const bin = (await resolveTmuxBinary()) ?? 'tmux';
+  const fullArgs = [...tmuxSocketArgs(), ...args];
   return new Promise((resolve, reject) => {
-    const child = spawn('tmux', args, { env });
+    const child = spawn(bin, fullArgs, { env });
     let out = '';
     let err = '';
     child.stdout.on('data', (chunk: Buffer) => {
@@ -41,8 +50,6 @@ async function runTmux(args: string[]): Promise<string> {
   });
 }
 
-// Format string mirrors the fields we need on TmuxPane. Using tab as the
-// delimiter is safe because none of the fields can contain tabs.
 const LIST_FMT =
   '#{pane_id}\t#{pane_index}\t#{pane_title}\t#{pane_current_command}\t#{pane_pid}\t#{pane_activity}\t#{pane_current_path}';
 
@@ -67,12 +74,13 @@ function parsePanes(raw: string): TmuxPane[] {
 }
 
 export function registerTmuxIpc(): void {
+  // Eager-load the config cache so the first launcher call doesn't pay the I/O
+  // cost. Failure here is non-fatal — defaults take over.
+  void loadTmuxConfig();
+
   ipcMain.handle(
     IPC.TMUX_LIST_PANES,
     async (_e, sessionName?: string): Promise<TmuxPane[]> => {
-      // Scope to the given session (`-t <name>`) when provided; otherwise
-      // fall back to `-a` so the rail works even if we can't guess the
-      // session name for some reason.
       const args = sessionName
         ? ['list-panes', '-s', '-t', sessionName, '-F', LIST_FMT]
         : ['list-panes', '-a', '-F', LIST_FMT];
@@ -83,7 +91,6 @@ export function registerTmuxIpc(): void {
         logger.info(`list-panes → ${parsed.length} panes`);
         return parsed;
       } catch (err) {
-        // `session not found` is expected before Claude CLI spawns a team.
         const msg = (err as Error).message;
         if (msg.includes("can't find session") || msg.includes('no session')) {
           return [];
@@ -94,8 +101,6 @@ export function registerTmuxIpc(): void {
     },
   );
 
-  // Capture the last N lines of a specific pane (default 3). Pattern used for
-  // the preview strip in the Agents rail. Empty string if pane gone.
   ipcMain.handle(
     IPC.TMUX_CAPTURE_PANE,
     async (_e, paneId: string, lines = 3): Promise<string> => {
@@ -109,11 +114,6 @@ export function registerTmuxIpc(): void {
     },
   );
 
-  // Select a pane from outside the tmux client. The CLI pane rendering inside
-  // devspace doesn't own the tmux attach — those panes run as children of the
-  // Claude CLI process — so we have to speak to the tmux server over its
-  // socket, not pipe the command through our xterm PTY (which would just type
-  // it as text into the Claude prompt).
   ipcMain.handle(IPC.TMUX_SELECT_PANE, async (_e, paneId: string): Promise<boolean> => {
     try {
       await runTmux(['select-pane', '-t', paneId]);
@@ -124,8 +124,6 @@ export function registerTmuxIpc(): void {
     }
   });
 
-  // Type a message into a pane followed by Enter — lets the user dispatch to
-  // any agent without stealing focus first.
   ipcMain.handle(
     IPC.TMUX_SEND_KEYS,
     async (_e, paneId: string, text: string, submit = true): Promise<boolean> => {
@@ -140,4 +138,133 @@ export function registerTmuxIpc(): void {
       }
     },
   );
+
+  ipcMain.handle(IPC.TMUX_LIST_SESSIONS, async (): Promise<TmuxSession[]> => {
+    const fmt =
+      '#{session_name}\t#{session_id}\t#{session_windows}\t#{session_attached}\t#{session_created}\t#{session_activity}';
+    try {
+      const raw = await runTmux(['list-sessions', '-F', fmt]);
+      return await parseSessions(raw);
+    } catch (err) {
+      logger.warn('list-sessions failed:', (err as Error).message);
+      return [];
+    }
+  });
+
+  ipcMain.handle(IPC.TMUX_KILL_SESSION, async (_e, name: string): Promise<boolean> => {
+    if (!name) return false;
+    try {
+      await runTmux(['kill-session', '-t', name]);
+      logger.info(`killed session ${name}`);
+      return true;
+    } catch (err) {
+      logger.warn(`kill-session ${name} failed:`, (err as Error).message);
+      return false;
+    }
+  });
+
+  ipcMain.handle(
+    IPC.TMUX_RENAME_SESSION,
+    async (_e, oldName: string, newName: string): Promise<boolean> => {
+      if (!oldName || !newName) return false;
+      try {
+        await runTmux(['rename-session', '-t', oldName, newName]);
+        logger.info(`renamed session ${oldName} → ${newName}`);
+        return true;
+      } catch (err) {
+        logger.warn(`rename-session ${oldName} failed:`, (err as Error).message);
+        return false;
+      }
+    },
+  );
+
+  ipcMain.handle(IPC.TMUX_KILL_SERVER, async (): Promise<boolean> => {
+    try {
+      await runTmux(['kill-server']);
+      logger.info('killed tmux server');
+      return true;
+    } catch (err) {
+      const msg = (err as Error).message;
+      if (msg.includes('no server running')) return true;
+      logger.warn('kill-server failed:', msg);
+      return false;
+    }
+  });
+
+  ipcMain.handle(IPC.TMUX_GET_CONFIG, async (): Promise<TmuxConfig> => {
+    return loadTmuxConfig();
+  });
+
+  ipcMain.handle(
+    IPC.TMUX_SET_CONFIG,
+    async (_e, next: TmuxConfig): Promise<TmuxConfig> => {
+      return saveTmuxConfig(next);
+    },
+  );
+
+  ipcMain.handle(IPC.TMUX_RENDER_CONF, async (_e, cfg: TmuxConfig): Promise<string> => {
+    return renderTmuxConfSnippet(cfg);
+  });
+
+  ipcMain.handle(
+    IPC.TMUX_RESOLVE_BINARY,
+    async (): Promise<{ path: string | null; configured: string | null }> => {
+      const cfg = await loadTmuxConfig();
+      const resolved = await resolveTmuxBinary();
+      return { path: resolved, configured: cfg.binaryPath };
+    },
+  );
+}
+
+function classifySession(
+  name: string,
+  sessionPrefix: string,
+): {
+  kind: TmuxSession['kind'];
+  projectId: string | null;
+  tabId: string | null;
+} {
+  // Build dynamic patterns honoring the configured prefix (default 'devspace').
+  const escaped = sessionPrefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const claude = new RegExp(`^${escaped}-cli-([^-\\s]+)(?:-(.+))?$`).exec(name);
+  if (claude) {
+    return {
+      kind: 'claude-cli',
+      projectId: claude[1] ?? null,
+      tabId: claude[2] ?? 'default',
+    };
+  }
+  const shell = new RegExp(`^${escaped}-shell-([^-\\s]+)(?:-(.+))?$`).exec(name);
+  if (shell) {
+    return {
+      kind: 'shell',
+      projectId: shell[1] ?? null,
+      tabId: shell[2] ?? 'default',
+    };
+  }
+  return { kind: 'other', projectId: null, tabId: null };
+}
+
+async function parseSessions(raw: string): Promise<TmuxSession[]> {
+  const cfg = await loadTmuxConfig();
+  const sessions: TmuxSession[] = [];
+  for (const line of raw.split('\n')) {
+    if (!line.trim()) continue;
+    const parts = line.split('\t');
+    if (parts.length < 6) continue;
+    const [name, id, windows, attached, created, activity] = parts;
+    const cls = classifySession(name, cfg.sessionPrefix);
+    sessions.push({
+      name,
+      id,
+      windows: Number(windows) || 0,
+      attached: Number(attached) > 0,
+      created: Number(created) || 0,
+      activity: Number(activity) || 0,
+      kind: cls.kind,
+      projectId: cls.projectId,
+      tabId: cls.tabId,
+    });
+  }
+  return sessions;
 }

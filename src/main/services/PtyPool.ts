@@ -4,7 +4,11 @@ import { execFile } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { promisify } from 'node:util';
 
-import { claudeCliTmuxSessionName } from '@main/services/ClaudeCliLauncher';
+import {
+  claudeCliTmuxSessionName,
+  resolveTmuxBinary,
+  tmuxSocketArgs,
+} from '@main/services/ClaudeCliLauncher';
 import { resolveInteractiveShellEnv } from '@main/utils/shellEnv';
 import { IPC } from '@shared/ipc-channels';
 import { createLogger } from '@shared/logger';
@@ -241,8 +245,9 @@ export async function restartClaudeCli(
     entries.delete(key);
   }
   const tmuxSession = claudeCliTmuxSessionName(projectId, tabId);
+  const tmuxBin = (await resolveTmuxBinary()) ?? 'tmux';
   try {
-    await execFileP('tmux', ['kill-session', '-t', tmuxSession]);
+    await execFileP(tmuxBin, [...tmuxSocketArgs(), 'kill-session', '-t', tmuxSession]);
     logger.info(`killed tmux session ${tmuxSession}`);
   } catch (err) {
     // Session may not exist — silent is fine, otherwise log.

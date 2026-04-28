@@ -32,8 +32,13 @@ import { registerSearchIpc } from '@main/ipc/search';
 import { registerSettingsIpc } from '@main/ipc/settings';
 import { registerTmuxIpc } from '@main/ipc/tmux';
 import { registerWorkspaceIpc } from '@main/ipc/workspace';
+import {
+  resolveTmuxBinary,
+  tmuxSocketArgs,
+} from '@main/services/ClaudeCliLauncher';
 import { shutdownWatchers } from '@main/services/FileWatcherService';
 import { shutdownAll as shutdownPtyPool } from '@main/services/PtyPool';
+import { getTmuxConfigSync } from '@main/services/TmuxConfigService';
 import { resolveInteractiveShellEnv } from '@main/utils/shellEnv';
 
 declare const __APP_VERSION__: string;
@@ -252,6 +257,23 @@ app.on('before-quit', (event) => {
   try {
     shutdownPtyPool();
     shutdownWatchers();
+    // Optionally tear down our tmux server when the user opts in. Safe — we
+    // run on an isolated socket, so this never touches their other tmux work.
+    const cfg = getTmuxConfigSync();
+    if (cfg.killSessionsOnQuit) {
+      void (async () => {
+        try {
+          const { spawn } = await import('node:child_process');
+          const bin = (await resolveTmuxBinary()) ?? 'tmux';
+          spawn(bin, [...tmuxSocketArgs(), 'kill-server'], {
+            detached: true,
+            stdio: 'ignore',
+          }).unref();
+        } catch {
+          /* best-effort */
+        }
+      })();
+    }
   } catch {
     /* swallow — nothing to do during shutdown */
   }

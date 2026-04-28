@@ -111,6 +111,43 @@ export interface TmuxPane {
   cwd: string;
 }
 
+export interface TmuxConfig {
+  // Master switch — when false, ClaudeCliLauncher skips tmux even if installed.
+  enabled: boolean;
+  // Override the auto-detected `tmux` binary (absolute path). null = auto.
+  binaryPath: string | null;
+  // tmux `-L <name>` socket. Isolating from default keeps `kill-server` from
+  // touching tmux sessions the user spawned outside DevSpace.
+  socketName: string;
+  // Naming scheme: `<prefix>-cli-<projectId>` / `<prefix>-shell-<projectId>`.
+  sessionPrefix: string;
+  // Token for tmux send-prefix (e.g. "C-b", "C-a"). Renderer uses this to
+  // decide which control byte to send for the right-click context menu.
+  prefixKey: string;
+  mouseMode: boolean;
+  escapeTimeMs: number;
+  historyLimit: number;
+  statusBar: boolean;
+  // When true, kills every devspace-* session on app quit. When false (default)
+  // sessions persist so re-opening the app reattaches with state intact.
+  killSessionsOnQuit: boolean;
+}
+
+export interface TmuxSession {
+  name: string;             // session_name (e.g. "devspace-cli-<projectId>")
+  id: string;               // session_id (e.g. "$0")
+  windows: number;          // session_windows
+  attached: boolean;        // session_attached > 0
+  created: number;          // session_created timestamp (seconds)
+  activity: number;         // session_activity timestamp (seconds)
+  // Best-effort labels parsed out of the devspace-prefixed naming scheme.
+  // null when the session wasn't spawned by us (e.g. an external tmux session
+  // the user attached to manually).
+  kind: 'claude-cli' | 'shell' | 'other';
+  projectId: string | null;
+  tabId: string | null;
+}
+
 export type GitChangeType = 'modified' | 'added' | 'deleted' | 'renamed' | 'untracked' | 'conflict';
 
 export interface GitFileChange {
