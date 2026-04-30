@@ -25,6 +25,7 @@ app.commandLine.appendSwitch(
 );
 
 import { registerAppIpc } from '@main/ipc/app';
+import { registerCodeflowIpc } from '@main/ipc/codeflow';
 import { registerFsIpc } from '@main/ipc/fs';
 import { registerGitIpc } from '@main/ipc/git';
 import { registerPtyIpc } from '@main/ipc/pty';
@@ -234,6 +235,7 @@ app.whenReady().then(async () => {
   registerSearchIpc();
   registerSettingsIpc();
   registerTmuxIpc();
+  registerCodeflowIpc();
 
   await createWindow();
 

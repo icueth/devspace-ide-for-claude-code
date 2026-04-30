@@ -4,7 +4,7 @@ import { api } from '@renderer/lib/api';
 import { useGitStore } from '@renderer/state/git';
 import { useWorkspaceStore } from '@renderer/state/workspace';
 
-export type EditorTabKind = 'text' | 'image' | 'diff' | 'pdf';
+export type EditorTabKind = 'text' | 'image' | 'diff' | 'pdf' | 'codeflow';
 
 export interface EditorTab {
   path: string;
@@ -25,6 +25,10 @@ export interface EditorTab {
   diffNew?: string;
   diffCwd?: string;
   diffRelPath?: string;
+  // Populated when kind === 'codeflow' — points the view at the project the
+  // analysis should run against. Stored separately from `path` because `path`
+  // is the synthetic "codeflow:<projectPath>" key used for tab dedup.
+  codeflowProjectPath?: string;
 }
 
 export interface OpenOptions {
@@ -65,6 +69,7 @@ interface EditorState {
 
   open: (path: string, opts?: OpenOptions) => Promise<void>;
   openDiff: (cwd: string, relPath: string, absPath: string) => Promise<void>;
+  openCodeflow: (projectPath: string, projectName: string) => void;
   close: (path: string, pane?: PaneId) => void;
   closeOthers: (path: string, pane?: PaneId) => void;
   closeToRight: (path: string, pane?: PaneId) => void;
@@ -205,6 +210,25 @@ export const useEditorStore = create<
         ),
       }));
     }
+  },
+
+  openCodeflow(projectPath, projectName) {
+    const tabPath = `codeflow:${projectPath}`;
+    const existing = get().tabs.find((t) => t.path === tabPath);
+    if (existing) {
+      set({ activeTabPath: tabPath });
+      return;
+    }
+    const tab: EditorTab = {
+      path: tabPath,
+      name: `${projectName} · Codeflow`,
+      kind: 'codeflow',
+      content: '',
+      savedContent: '',
+      loading: false,
+      codeflowProjectPath: projectPath,
+    };
+    set((s) => ({ tabs: [...s.tabs, tab], activeTabPath: tabPath }));
   },
 
   closeOthers(path, pane = 'left') {

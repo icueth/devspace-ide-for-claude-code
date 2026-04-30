@@ -8,7 +8,7 @@ single window. It uses `tmux` under the hood so every agent and shell pane
 survives app restarts, panel remounts, and accidental Cmd+Q.
 
 <p align="center">
-  <a href="https://github.com/icueth/devspace-ide-for-claude-code/releases/latest/download/devspace-0.3.17-arm64.dmg">
+  <a href="https://github.com/icueth/devspace-ide-for-claude-code/releases/latest/download/devspace-0.3.18-arm64.dmg">
     <img alt="Download for macOS — Apple Silicon" src="https://img.shields.io/badge/Download%20for%20macOS-Apple%20Silicon%20(M1%2FM2%2FM3%2FM4)-000?style=for-the-badge&logo=apple&logoColor=white" />
   </a>
   &nbsp;
@@ -49,6 +49,12 @@ survives app restarts, panel remounts, and accidental Cmd+Q.
   JetBrains Mono + Sarabun with Unicode 11 width tables, so Thai combining
   marks stack correctly and leading vowels (เ ไ ใ แ) sit tight to their
   base consonant.
+- **Codeflow tab** *(new in 0.3.18)* — one click in the header asks Claude
+  Code to read the active project and write `codebase.md` + per-feature
+  `flow-*.md` architecture docs into `.claude/codeflow/`. Renders the
+  generated docs inline with tabs and Markdown preview. Re-analyses
+  incrementally — file changes flip the tab to *Out of date* via the
+  existing FileWatcher; *Force* re-runs from scratch.
 
 | | |
 |---|---|

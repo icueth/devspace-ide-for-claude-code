@@ -8,6 +8,8 @@ const api = {
   app: {
     getVersion: (): Promise<string> => ipcRenderer.invoke(IPC.APP_GET_VERSION),
     getHome: (): Promise<string> => ipcRenderer.invoke(IPC.APP_GET_HOME),
+    checkUpdate: (force?: boolean) => ipcRenderer.invoke(IPC.APP_CHECK_UPDATE, force),
+    openExternal: (url: string) => ipcRenderer.invoke(IPC.APP_OPEN_EXTERNAL, url),
   },
   workspace: {
     list: () => ipcRenderer.invoke(IPC.WORKSPACE_LIST),
@@ -109,6 +111,49 @@ const api = {
     read: (filePath: string) => ipcRenderer.invoke(IPC.SETTINGS_READ, filePath),
     write: (filePath: string, content: string) =>
       ipcRenderer.invoke(IPC.SETTINGS_WRITE, filePath, content),
+  },
+  codeflow: {
+    getStatus: (projectPath: string) =>
+      ipcRenderer.invoke(IPC.CODEFLOW_GET_STATUS, projectPath),
+    analyze: (projectPath: string, opts?: { force?: boolean }) =>
+      ipcRenderer.invoke(IPC.CODEFLOW_ANALYZE, projectPath, opts),
+    cancel: (projectPath: string) =>
+      ipcRenderer.invoke(IPC.CODEFLOW_CANCEL, projectPath),
+    readDoc: (absPath: string) =>
+      ipcRenderer.invoke(IPC.CODEFLOW_READ_DOC, absPath),
+    listDocs: (projectPath: string) =>
+      ipcRenderer.invoke(IPC.CODEFLOW_LIST_DOCS, projectPath),
+    openDir: (projectPath: string) =>
+      ipcRenderer.invoke(IPC.CODEFLOW_OPEN_DIR, projectPath),
+    buildGraph: (projectPath: string) =>
+      ipcRenderer.invoke(IPC.CODEFLOW_BUILD_GRAPH, projectPath),
+    augmentGraph: (projectPath: string, graph: unknown) =>
+      ipcRenderer.invoke(IPC.CODEFLOW_AUGMENT_GRAPH, projectPath, graph),
+    augmentCancel: (projectPath: string) =>
+      ipcRenderer.invoke(IPC.CODEFLOW_AUGMENT_CANCEL, projectPath),
+    onAugmentProgress: (projectPath: string, cb: (msg: string) => void) => {
+      const listener = (
+        _e: unknown,
+        ev: { projectPath: string; message: string },
+      ) => {
+        if (ev.projectPath === projectPath) cb(ev.message);
+      };
+      ipcRenderer.on(IPC.CODEFLOW_AUGMENT_PROGRESS, listener);
+      return () => ipcRenderer.off(IPC.CODEFLOW_AUGMENT_PROGRESS, listener);
+    },
+    onProgress: (
+      projectPath: string,
+      cb: (status: import('@shared/types').CodeflowStatus) => void,
+    ) => {
+      const listener = (
+        _e: unknown,
+        ev: { projectPath: string; status: import('@shared/types').CodeflowStatus },
+      ) => {
+        if (ev.projectPath === projectPath) cb(ev.status);
+      };
+      ipcRenderer.on(IPC.CODEFLOW_PROGRESS, listener);
+      return () => ipcRenderer.off(IPC.CODEFLOW_PROGRESS, listener);
+    },
   },
 };
 

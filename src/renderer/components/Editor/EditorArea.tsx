@@ -8,7 +8,8 @@ import { Resizer } from '@renderer/components/Layout/Resizer';
 
 // Heavy view types — loaded on demand so the initial boot bundle stays lean.
 // `@codemirror/merge` (DiffView), `react-markdown`+`highlight.js` (MarkdownPreview),
-// and the Chromium PDF iframe each only matter once a matching tab opens.
+// the Chromium PDF iframe, and the codeflow panel each only matter once a
+// matching tab opens.
 const DiffView = lazy(() =>
   import('@renderer/components/Editor/DiffView').then((m) => ({ default: m.DiffView })),
 );
@@ -19,6 +20,11 @@ const MarkdownPreview = lazy(() =>
 );
 const PdfPreview = lazy(() =>
   import('@renderer/components/Editor/PdfPreview').then((m) => ({ default: m.PdfPreview })),
+);
+const CodeflowView = lazy(() =>
+  import('@renderer/components/Codeflow/CodeflowView').then((m) => ({
+    default: m.CodeflowView,
+  })),
 );
 import { api } from '@renderer/lib/api';
 import { cn } from '@renderer/lib/utils';
@@ -81,6 +87,7 @@ function EditorPane({ pane, className }: EditorPaneProps) {
 
   const activeTab = tabs.find((t) => t.path === activeTabPath) ?? null;
   const isFocused = focusedPane === pane;
+  const isCodeflow = activeTab?.kind === 'codeflow';
 
   // Per-pane Cmd+S: only the focused pane should react.
   useEffect(() => {
@@ -156,7 +163,7 @@ function EditorPane({ pane, className }: EditorPaneProps) {
           <div className="pointer-events-none absolute inset-2 rounded-md border-2 border-dashed border-accent/70 bg-accent/10" />
         )}
       </div>
-      {activeTab && activeTab.kind === 'text' && (
+      {activeTab && activeTab.kind === 'text' && !isCodeflow && (
         <StatusBar
           tab={activeTab}
           cursor={cursor && isFocused ? cursor : null}
@@ -209,7 +216,11 @@ function EditorBody({ tab, onChange, onSave, onNavDone, mdMode }: EditorBodyProp
 
   return (
     <div className="min-h-0 flex-1">
-      {tab.kind === 'image' ? (
+      {tab.kind === 'codeflow' ? (
+        <Suspense fallback={<LazyFallback label="Loading codeflow…" />}>
+          <CodeflowView projectPath={tab.codeflowProjectPath ?? ''} />
+        </Suspense>
+      ) : tab.kind === 'image' ? (
         <ImagePreview tab={tab} />
       ) : tab.kind === 'pdf' ? (
         <Suspense fallback={<LazyFallback label="Loading PDF viewer…" />}>

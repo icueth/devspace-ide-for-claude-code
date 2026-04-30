@@ -7,6 +7,7 @@ import {
   Minimize2,
   Terminal as TerminalIcon,
   Users,
+  Workflow,
 } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 
@@ -24,6 +25,7 @@ import { FileTree } from '@renderer/components/Sidebar/FileTree';
 import { ProjectList } from '@renderer/components/Sidebar/ProjectList';
 import { SidebarFooter } from '@renderer/components/Sidebar/SidebarFooter';
 import { WorkspacePicker } from '@renderer/components/Sidebar/WorkspacePicker';
+import { UpdateBadge } from '@renderer/components/UpdateBadge';
 import { Welcome } from '@renderer/components/Welcome/Welcome';
 import { api } from '@renderer/lib/api';
 import { cn } from '@renderer/lib/utils';
@@ -42,6 +44,7 @@ export default function App() {
   const activeProjectId = useWorkspaceStore((s) => s.activeProjectId);
   const openedProjectIds = useWorkspaceStore((s) => s.openedProjectIds);
   const openFile = useEditorStore((s) => s.open);
+  const openCodeflow = useEditorStore((s) => s.openCodeflow);
 
   const sidebarWidth = useLayoutStore((s) => s.sidebarWidth);
   const dockWidth = useLayoutStore((s) => s.dockWidth);
@@ -200,7 +203,7 @@ export default function App() {
             aria-hidden
           />
           <span className="text-[12.5px] font-semibold text-text">devspace</span>
-          <span className="text-[10.5px] text-text-dim">v{version}</span>
+          <UpdateBadge fallbackVersion={version || '?'} />
           {activeProject && (
             <span
               className="ml-2 flex items-center gap-1.5 rounded-[7px] border border-border-subtle bg-surface-3 px-2.5 py-[3px] text-[11.5px] text-text-secondary"
@@ -215,6 +218,22 @@ export default function App() {
           )}
         </div>
         <div className="no-drag flex items-center gap-1.5">
+          <button
+            onClick={() => {
+              if (activeProject) openCodeflow(activeProject.path, activeProject.name);
+            }}
+            disabled={!activeProject}
+            className={cn(
+              'inline-flex h-[26px] items-center gap-1.5 rounded-[7px] border px-2.5 text-[11px] transition',
+              !activeProject
+                ? 'cursor-not-allowed border-border-subtle bg-surface-3 text-text-muted opacity-40'
+                : 'border-border-subtle bg-surface-3 text-text-secondary hover:border-border-hi hover:bg-surface-4 hover:text-text',
+            )}
+            title="Codeflow — codebase visualization + Claude-generated architecture docs"
+          >
+            <Workflow size={11} />
+            <span>Codeflow</span>
+          </button>
           <button
             onClick={() => setCreateTeamOpen(true)}
             disabled={!activeProject}

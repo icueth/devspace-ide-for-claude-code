@@ -121,7 +121,7 @@ export function EditorTabs({ pane }: EditorTabsProps) {
                   'animate-in fade-in-0 zoom-in-95',
                 )}
               >
-                {tab.kind !== 'diff' && (
+                {tab.kind !== 'diff' && tab.kind !== 'codeflow' && (
                   <>
                     <Item onSelect={() => addFileToClaudeCli(tab.path)}>
                       Add to Claude CLI

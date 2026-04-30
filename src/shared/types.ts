@@ -1,3 +1,23 @@
+export interface UpdateInfo {
+  // Currently-running app version (no leading "v").
+  current: string;
+  // Latest release tag (raw, may include leading "v"). null on error.
+  latest: string | null;
+  // True when latest > current via numeric semver compare.
+  hasUpdate: boolean;
+  // GitHub release page (open in browser for manual install).
+  releaseUrl: string | null;
+  // Direct DMG asset URL when published; null if release has no .dmg.
+  downloadUrl: string | null;
+  // Markdown release notes — rendered in an "Update available" dialog.
+  releaseNotes: string | null;
+  // User-facing error message when the check failed (rate limit, offline,
+  // GitHub down). hasUpdate is always false in this case.
+  error: string | null;
+  // Epoch ms when the check was performed; used for "Last checked …" labels.
+  checkedAt: number;
+}
+
 export interface Workspace {
   id: string;
   path: string;
@@ -227,5 +247,140 @@ export interface SearchOptions {
   includeGlobs?: string[];
   excludeGlobs?: string[];
   maxResults?: number;
+}
+
+// ─── Codeflow ───────────────────────────────────────────────────────────────
+//
+// Each project gets its own analysis stored under `.devspace/codeflow/`.
+// Cache survives across sessions; freshness is judged by per-file content
+// hashes so renames-without-edit and edits-then-revert don't trigger Claude.
+
+export type CodeflowStage =
+  | 'idle'         // No job running
+  | 'walking'      // Listing files + computing hashes
+  | 'overview'     // Claude generating codebase.md (architecture overview)
+  | 'flows'        // Claude generating per-feature flow-*.md docs
+  | 'done'
+  | 'cancelled'
+  | 'error';
+
+export interface CodeflowDoc {
+  // Filename inside .devspace/codeflow/, e.g. "codebase.md", "flow-auth.md".
+  name: string;
+  // Absolute path on disk so the renderer can pass it to api.fs.readFile.
+  path: string;
+  // Modified time (ms) — lets the renderer auto-refresh open docs.
+  mtime: number;
+  size: number;
+}
+
+export interface CodeflowCacheMeta {
+  // Project root that this cache belongs to. Stored so renderer can detect
+  // a stale tab pointing at the wrong project.
+  projectPath: string;
+  // When the analysis last completed (ms epoch).
+  lastAnalyzedAt: number;
+  // Total files scanned at last analysis.
+  fileCount: number;
+  // SHA-256 over all (relPath, contentHash) pairs sorted, used to short-
+  // circuit re-runs when nothing actually changed.
+  fingerprint: string;
+}
+
+export interface CodeflowStatus {
+  stage: CodeflowStage;
+  // 0..1 — best-effort, may stay at 0 during indeterminate stages.
+  progress: number;
+  // Free-form line shown under the progress bar.
+  message: string;
+  // Surfaced after stage === 'error' so the UI can show a retry hint.
+  error: string | null;
+  // Snapshot of cache metadata if the project has been analyzed before.
+  cache: CodeflowCacheMeta | null;
+  // True when FileWatcher has observed changes since the cache was written.
+  // The renderer shows a "Re-analyze" badge based on this.
+  stale: boolean;
+  docs: CodeflowDoc[];
+}
+
+export interface CodeflowAnalyzeOptions {
+  // When true, ignore cache and re-run every stage. Defaults to false; the
+  // service will short-circuit unchanged files even on a "fresh" run.
+  force?: boolean;
+}
+
+// ─── Codeflow graph (native visualization) ──────────────────────────────────
+//
+// Native D3 visualization replacing the original iframe approach. The main
+// process walks the project, runs a regex-based import extractor, and ships
+// a flat graph to the renderer. Renderer paints with d3-force.
+
+export type CodeflowLayer =
+  | 'ui'
+  | 'api'
+  | 'service'
+  | 'model'
+  | 'util'
+  | 'test'
+  | 'config'
+  | 'tool'
+  | 'other';
+
+export interface CodeflowGraphNode {
+  id: string;        // project-relative path; doubles as unique key
+  name: string;      // basename for label
+  folder: string;    // parent dir (or "root")
+  ext: string;       // file extension without dot
+  layer: CodeflowLayer;
+  size: number;      // bytes
+  loc: number;       // line count
+  degree: number;    // (in + out) edge count
+}
+
+// How an edge was discovered.
+//   import   — static AST/regex analysis of import/require/from/include
+//   event    — Claude inferred event-bus or pub/sub coupling
+//   plugin   — Claude inferred plugin/loader registration
+//   config   — Claude inferred config-driven coupling
+//   dynamic  — Claude inferred dynamic dispatch / DI / reflection
+//   inferred — Claude inferred relation that doesn't fit a tighter bucket
+export type CodeflowEdgeKind =
+  | 'import'
+  | 'event'
+  | 'plugin'
+  | 'config'
+  | 'dynamic'
+  | 'inferred';
+
+export interface CodeflowGraphEdge {
+  source: string;    // node id
+  target: string;    // node id
+  weight: number;    // distinct refs (imports for static, salience for inferred)
+  kind: CodeflowEdgeKind;
+  // Free-form one-liner from Claude when kind !== 'import'.
+  reason?: string;
+}
+
+export interface CodeflowGraph {
+  nodes: CodeflowGraphNode[];
+  edges: CodeflowGraphEdge[];
+  stats: {
+    totalFiles: number;
+    totalLines: number;
+    totalEdges: number;
+    // Sorted desc by count.
+    languages: Array<{ ext: string; count: number; pct: number }>;
+    // True when the walk hit HARD_FILE_LIMIT — graph is a truncated subset.
+    truncated: boolean;
+    elapsedMs: number;
+    // How many import specifiers the parser saw (across all files) and how
+    // many of them resolved to a node we walked. The ratio is the most
+    // useful diagnostic when the user reports "no edges" — a low ratio means
+    // alias config is wrong; a low parsed count means the AST extractor never
+    // ran (e.g. typescript module didn't load).
+    importsParsed: number;
+    importsResolved: number;
+    aliasCount: number;
+  };
 }
 

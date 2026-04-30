@@ -5,6 +5,64 @@ All notable changes to DevSpace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.3.18] — 2026-04-30
+
+### Added
+- **Codeflow tab.** New `Codeflow` button in the header bar opens a project-
+  scoped tab with two complementary views in one tab strip:
+  - **Visualization** — embedded
+    [`codeflow`](https://github.com/braedonsaunders/codeflow) single-file
+    React app, auto-loaded with the active project's files via a synthetic
+    `FileSystemDirectoryHandle` bridge so the user never has to pick a
+    folder. The GitHub-URL/Auth/Analyze input row is hidden to avoid
+    clutter; everything else (Open Folder, sidebar, theme, export) stays.
+    *Reload viz* in the toolbar refreshes the graph after edits.
+  - **Codebase / flow-* tabs** — `claude --print` runs headless against the
+    project (prompt fed via stdin, `--output-format stream-json --verbose`
+    for live activity events, `--permission-mode acceptEdits`, tools
+    `Read,Glob,Grep,Write,Edit`). A two-stage pipeline writes
+    `codebase.md` (architecture overview) and `flow-<slug>.md` per major
+    user-facing feature. Inline Markdown preview, tabs auto-pretty their
+    names (e.g. `flow-auth.md` → `Auth`).
+- **Live activity line.** During a Claude run a monospace `<%>  <action>`
+  line shows what tool Claude just invoked (`📖 Reading src/foo.ts`,
+  `🔍 Grep "..."`, `✍️ Writing flow-billing.md`) so the progress bar's
+  movement is no longer a mystery — the % is driven by the tool-call count
+  (`1 - exp(-n/25)` curve) per stage band.
+- **Claude Code integration via `.claude/`.** Generated docs land in
+  `<project>/.claude/codeflow/` so Claude Code running in the same project
+  sees them automatically. Each successful run also:
+  - Updates `.claude/CLAUDE.md` with a guarded
+    `<!-- BEGIN devspace-codeflow -->` block pointing at the docs (file is
+    created if missing, the block is replaced in place on subsequent runs;
+    the rest of CLAUDE.md is left untouched).
+  - Writes a project-scoped skill at
+    `.claude/skills/codeflow-context/SKILL.md` so Claude reads
+    `codebase.md` / `flow-*.md` *before* answering architecture or flow
+    questions, instead of guessing.
+- **Incremental cache + auto-stale detection.** Each analysis stores a
+  fingerprint of (relPath, size, mtime) tuples for every code file. Re-runs
+  short-circuit when the fingerprint matches; FileWatcher events flip the tab
+  to *Out of date* with a one-click *Re-analyze* button. *Force* button
+  ignores the fingerprint for a full rebuild.
+- New `CodeflowService` (main) + `codeflow:*` IPC channels (get-status,
+  analyze, cancel, read-doc, list-docs, open-dir, progress stream). Cancel
+  sends SIGTERM to the live `claude` child so the user can bail mid-run.
+- New shared types `CodeflowStage`, `CodeflowStatus`, `CodeflowDoc`,
+  `CodeflowCacheMeta`, `CodeflowAnalyzeOptions`.
+- New `EditorTabKind: 'codeflow'` and `useEditorStore.openCodeflow()` action.
+  Codeflow tabs dedup per-project, never go dirty, and skip the *Add to
+  Claude CLI* context-menu entry.
+
+### Changed
+- `FileWatcherService` now also notifies `CodeflowService.markStale()` on
+  every flush so a project's codeflow tab can show its *Out of date* badge
+  the moment the user edits any tracked file. Best-effort wrapped — a
+  watcher error never crashes the codeflow side.
+- `.claude/codeflow/` ships a self-written `.gitignore` (`*`) so the
+  generated docs and the cache don't accidentally get committed. Delete the
+  `.gitignore` if you do want to commit the docs.
+
 ## [0.3.17] — 2026-04-28
 
 ### Added
@@ -77,6 +135,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   project, persistent tmux-backed CLI panes, multi-agent Team mode, and
   Claude Code account/files settings.
 
+[0.3.18]: https://github.com/icueth/devspace-ide-for-claude-code/releases/tag/v0.3.18
 [0.3.17]: https://github.com/icueth/devspace-ide-for-claude-code/releases/tag/v0.3.17
 [0.3.16]: https://github.com/icueth/devspace-ide-for-claude-code/releases/tag/v0.3.16
 [0.3.14]: https://github.com/icueth/devspace-ide-for-claude-code/releases/tag/v0.3.14

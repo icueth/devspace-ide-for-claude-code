@@ -7,6 +7,8 @@ export const IPC = {
   APP_READY: 'app:ready',
   APP_GET_VERSION: 'app:get-version',
   APP_GET_HOME: 'app:get-home',
+  APP_CHECK_UPDATE: 'app:check-update',
+  APP_OPEN_EXTERNAL: 'app:open-external',
 
   // Workspace management
   WORKSPACE_LIST: 'workspace:list',
@@ -73,6 +75,19 @@ export const IPC = {
   SETTINGS_LIST: 'settings:list',
   SETTINGS_READ: 'settings:read',
   SETTINGS_WRITE: 'settings:write',
+
+  // Codeflow — codebase visualization + Claude-generated architecture docs
+  CODEFLOW_GET_STATUS: 'codeflow:get-status',
+  CODEFLOW_ANALYZE: 'codeflow:analyze',
+  CODEFLOW_CANCEL: 'codeflow:cancel',
+  CODEFLOW_READ_DOC: 'codeflow:read-doc',
+  CODEFLOW_LIST_DOCS: 'codeflow:list-docs',
+  CODEFLOW_OPEN_DIR: 'codeflow:open-dir',
+  CODEFLOW_BUILD_GRAPH: 'codeflow:build-graph',
+  CODEFLOW_AUGMENT_GRAPH: 'codeflow:augment-graph',
+  CODEFLOW_AUGMENT_CANCEL: 'codeflow:augment-cancel',
+  CODEFLOW_AUGMENT_PROGRESS: 'codeflow:augment-progress',
+  CODEFLOW_PROGRESS: 'codeflow:progress',
 } as const;
 
 export type IpcChannel = (typeof IPC)[keyof typeof IPC];

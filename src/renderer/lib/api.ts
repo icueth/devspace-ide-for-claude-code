@@ -1,5 +1,10 @@
 import type {
+  CodeflowDoc,
+  CodeflowGraph,
+  CodeflowGraphEdge,
+  CodeflowStatus,
   DirEntry,
+  UpdateInfo,
   GitBranches,
   GitDiff,
   GitLogEntry,
@@ -20,6 +25,8 @@ export interface DevspaceApi {
   app: {
     getVersion: () => Promise<string>;
     getHome: () => Promise<string>;
+    checkUpdate: (force?: boolean) => Promise<UpdateInfo>;
+    openExternal: (url: string) => Promise<boolean>;
   };
   appEvents: {
     onCloseTab: (cb: () => void) => () => void;
@@ -89,6 +96,22 @@ export interface DevspaceApi {
     read: (filePath: string) => Promise<string>;
     write: (filePath: string, content: string) => Promise<void>;
   };
+  codeflow: {
+    getStatus: (projectPath: string) => Promise<CodeflowStatus>;
+    analyze: (projectPath: string, opts?: { force?: boolean }) => Promise<void>;
+    cancel: (projectPath: string) => Promise<void>;
+    readDoc: (absPath: string) => Promise<string>;
+    listDocs: (projectPath: string) => Promise<CodeflowDoc[]>;
+    openDir: (projectPath: string) => Promise<void>;
+    buildGraph: (projectPath: string) => Promise<CodeflowGraph>;
+    augmentGraph: (
+      projectPath: string,
+      graph: CodeflowGraph,
+    ) => Promise<{ ok: true; softEdges: CodeflowGraphEdge[] } | { ok: false; error: string }>;
+    augmentCancel: (projectPath: string) => Promise<void>;
+    onAugmentProgress: (projectPath: string, cb: (msg: string) => void) => () => void;
+    onProgress: (projectPath: string, cb: (status: CodeflowStatus) => void) => () => void;
+  };
 }
 
 declare global {
@@ -106,7 +129,12 @@ function makeStubApi(): DevspaceApi {
     return Promise.reject(err);
   };
   return {
-    app: { getVersion: notWired('app.getVersion'), getHome: notWired('app.getHome') },
+    app: {
+      getVersion: notWired('app.getVersion'),
+      getHome: notWired('app.getHome'),
+      checkUpdate: notWired('app.checkUpdate'),
+      openExternal: () => Promise.resolve(false),
+    },
     appEvents: { onCloseTab: () => () => undefined },
     workspace: {
       list: notWired('workspace.list'),
@@ -172,6 +200,19 @@ function makeStubApi(): DevspaceApi {
       list: () => Promise.resolve([]),
       read: notWired('settings.read'),
       write: notWired('settings.write'),
+    },
+    codeflow: {
+      getStatus: notWired('codeflow.getStatus'),
+      analyze: notWired('codeflow.analyze'),
+      cancel: notWired('codeflow.cancel'),
+      readDoc: notWired('codeflow.readDoc'),
+      listDocs: () => Promise.resolve([]),
+      openDir: notWired('codeflow.openDir'),
+      buildGraph: notWired('codeflow.buildGraph'),
+      augmentGraph: notWired('codeflow.augmentGraph'),
+      augmentCancel: notWired('codeflow.augmentCancel'),
+      onAugmentProgress: () => () => undefined,
+      onProgress: () => () => undefined,
     },
   } as unknown as DevspaceApi;
 }
