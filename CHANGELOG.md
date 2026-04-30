@@ -5,6 +5,37 @@ All notable changes to DevSpace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.3.20] — 2026-04-30
+
+### Added
+- **Function-level dependency graph.** New **Files / Functions** toggle in
+  the Codeflow tab toolbar. Functions mode walks every JS/TS file with the
+  TypeScript Compiler API, extracts every FunctionDeclaration /
+  MethodDeclaration / named ArrowFunction / ClassDeclaration, then walks
+  every CallExpression to attribute calls to the innermost enclosing
+  function. Cross-file call sites become edges in a d3 force graph
+  alongside the file-level view.
+- **Confidence-aware edge rendering.** Resolution is name-based (no TS
+  type checker), so when a callee name is unique across the project we
+  emit a *high-confidence* solid edge; when the name has multiple
+  declarations (e.g. `User.save` vs `Order.save`) we emit *low-confidence*
+  dashed edges to up to 4 candidates so the relationship is visible but
+  visually distinct from the certain ones.
+- **Per-file clustering.** Functions mode + the *File* color toggle paints
+  every function from the same file with a stable hash hue, so d3's force
+  layout naturally groups them into per-file clusters connected by their
+  cross-file calls.
+- **Hide orphans toggle.** Filters functions with zero resolved cross-file
+  edges (default on), since most are local helpers that just clutter the
+  view. Toggle off to see the full population.
+
+### Changed
+- Same-file calls are intentionally excluded from function-mode edges —
+  including them would turn every file into a dense self-cluster that
+  drowns out real cross-module coupling.
+- Common JS builtins and method names (`forEach`, `then`, `push`, `log`,
+  `now`, etc.) are filtered out of call extraction to reduce noise.
+
 ## [0.3.19] — 2026-04-30
 
 ### Added
@@ -193,6 +224,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   project, persistent tmux-backed CLI panes, multi-agent Team mode, and
   Claude Code account/files settings.
 
+[0.3.20]: https://github.com/icueth/devspace-ide-for-claude-code/releases/tag/v0.3.20
 [0.3.19]: https://github.com/icueth/devspace-ide-for-claude-code/releases/tag/v0.3.19
 [0.3.18]: https://github.com/icueth/devspace-ide-for-claude-code/releases/tag/v0.3.18
 [0.3.17]: https://github.com/icueth/devspace-ide-for-claude-code/releases/tag/v0.3.17

@@ -1,7 +1,9 @@
 import * as d3 from 'd3';
 import {
+  Braces,
   Brain,
   CircleSlash,
+  FileCode,
   Loader2,
   RefreshCw,
   Sparkles,
@@ -14,6 +16,7 @@ import { api } from '@renderer/lib/api';
 import { cn } from '@renderer/lib/utils';
 import type {
   CodeflowEdgeKind,
+  CodeflowFunctionGraph,
   CodeflowGraph,
   CodeflowGraphEdge,
   CodeflowGraphNode,
@@ -26,6 +29,7 @@ interface CodeflowGraphViewProps {
 }
 
 type ColorMode = 'layer' | 'folder';
+type ViewMode = 'files' | 'functions';
 
 // Layer palette — distinct hues so a glance at the canvas tells you the
 // architecture's shape even before you read any node label.
@@ -93,6 +97,9 @@ export function CodeflowGraphView({ projectPath, visible }: CodeflowGraphViewPro
   const simRef = useRef<d3.Simulation<SimNode, SimEdge> | null>(null);
   const zoomRef = useRef<d3.ZoomBehavior<SVGSVGElement, unknown> | null>(null);
   const [graph, setGraph] = useState<CodeflowGraph | null>(null);
+  const [functionGraph, setFunctionGraph] = useState<CodeflowFunctionGraph | null>(null);
+  const [viewMode, setViewMode] = useState<ViewMode>('files');
+  const [hideOrphans, setHideOrphans] = useState(true);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [colorMode, setColorMode] = useState<ColorMode>('layer');
@@ -121,9 +128,24 @@ export function CodeflowGraphView({ projectPath, visible }: CodeflowGraphViewPro
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible, projectPath]);
 
+  // Lazy-fetch the function graph the first time the user flips into
+  // Functions mode. Function-level analysis is heavier (10-50x more nodes
+  // on a real codebase), so we don't pay the cost until asked.
+  useEffect(() => {
+    if (viewMode !== 'functions' || !projectPath || functionGraph || loading) return;
+    setLoading(true);
+    setError(null);
+    void api.codeflow
+      .buildFunctionGraph(projectPath)
+      .then((fg) => setFunctionGraph(fg))
+      .catch((err: Error) => setError(err.message))
+      .finally(() => setLoading(false));
+  }, [viewMode, projectPath, functionGraph, loading]);
+
   // Project change invalidates current graph and any augment overlay.
   useEffect(() => {
     setGraph(null);
+    setFunctionGraph(null);
     setSelected(null);
     setHovered(null);
     setSoftEdges([]);
@@ -207,13 +229,62 @@ export function CodeflowGraphView({ projectPath, visible }: CodeflowGraphViewPro
   // Filtered through edgeKindVisible so the user can hide categories they
   // don't want cluttering the canvas.
   const renderedGraph: CodeflowGraph | null = useMemo(() => {
+    if (viewMode === 'functions') {
+      if (!functionGraph) return null;
+      // Convert function graph → renderable graph shape so the existing
+      // d3 simulation can paint it without a parallel render path. Each
+      // function node fakes a "folder" of its parent file so colorMode
+      // 'folder' clusters per-file. Layer ends up as 'other' for v1 —
+      // function-level layer detection isn't meaningful yet.
+      const visible = hideOrphans
+        ? functionGraph.nodes.filter((n) => n.degree > 0)
+        : functionGraph.nodes;
+      const visibleIds = new Set(visible.map((n) => n.id));
+      return {
+        nodes: visible.map((n) => ({
+          id: n.id,
+          // `name` is what the renderer's tooltip + node-details panel
+          // shows. Append `:line` so identically-named functions in
+          // different files stay distinguishable in the UI.
+          name: n.className ? `${n.className}.${n.name}` : n.name,
+          folder: n.file,
+          ext: '',
+          layer: 'other' as CodeflowLayer,
+          size: 0,
+          loc: 0,
+          degree: n.degree,
+        })),
+        edges: functionGraph.edges
+          .filter((e) => visibleIds.has(e.source) && visibleIds.has(e.target))
+          .map((e) => ({
+            source: e.source,
+            target: e.target,
+            weight: e.count,
+            // Surface confidence via edge kind so the renderer paints
+            // low-confidence (ambiguous name) edges as dashed/inferred.
+            kind: e.confidence === 'high' ? 'import' : ('inferred' as const),
+          })),
+        stats: {
+          totalFiles: functionGraph.stats.totalFunctions,
+          totalLines: 0,
+          totalEdges: functionGraph.stats.totalEdges,
+          languages: [],
+          truncated: functionGraph.stats.truncated,
+          elapsedMs: functionGraph.stats.elapsedMs,
+          importsParsed: functionGraph.stats.callsSeen,
+          importsResolved: functionGraph.stats.callsResolved,
+          aliasCount: 0,
+          fingerprint: '',
+        },
+      };
+    }
     if (!graph) return null;
     const merged: CodeflowGraphEdge[] = [
       ...graph.edges.filter((e) => edgeKindVisible[e.kind]),
       ...softEdges.filter((e) => edgeKindVisible[e.kind]),
     ];
     return { ...graph, edges: merged };
-  }, [graph, softEdges, edgeKindVisible]);
+  }, [graph, functionGraph, viewMode, hideOrphans, softEdges, edgeKindVisible]);
 
   // Edge index for blast-radius highlighting on selection: maps node id to
   // its connected node ids. Computed off the rendered (filtered+merged)
@@ -448,6 +519,10 @@ export function CodeflowGraphView({ projectPath, visible }: CodeflowGraphViewPro
         loading={loading}
         colorMode={colorMode}
         onColorMode={setColorMode}
+        viewMode={viewMode}
+        onViewMode={setViewMode}
+        hideOrphans={hideOrphans}
+        onHideOrphans={setHideOrphans}
         onReload={() => void reload()}
         onZoom={onZoom}
         onResetZoom={onResetZoom}
@@ -501,6 +576,10 @@ interface ToolbarProps {
   loading: boolean;
   colorMode: ColorMode;
   onColorMode: (m: ColorMode) => void;
+  viewMode: ViewMode;
+  onViewMode: (m: ViewMode) => void;
+  hideOrphans: boolean;
+  onHideOrphans: (v: boolean) => void;
   onReload: () => void;
   onZoom: (dir: 1 | -1) => void;
   onResetZoom: () => void;
@@ -520,6 +599,10 @@ function ToolbarOverlay({
   loading,
   colorMode,
   onColorMode,
+  viewMode,
+  onViewMode,
+  hideOrphans,
+  onHideOrphans,
   onReload,
   onZoom,
   onResetZoom,
@@ -545,22 +628,64 @@ function ToolbarOverlay({
   return (
     <>
       <div className="absolute left-3 top-3 flex items-center gap-1.5">
+        {/* View mode — file-level (one node per file) vs function-level
+            (one node per function/method, edges = cross-file calls). */}
+        <div className="inline-flex h-[26px] items-stretch rounded-[7px] border border-border-subtle bg-surface-3/90 text-[11px] backdrop-blur">
+          <ToolbarBtn
+            active={viewMode === 'files'}
+            onClick={() => onViewMode('files')}
+            title="File-level graph: one node per file, edges = imports"
+          >
+            <FileCode size={11} className="shrink-0" />
+            <span>Files</span>
+          </ToolbarBtn>
+          <ToolbarBtn
+            active={viewMode === 'functions'}
+            onClick={() => onViewMode('functions')}
+            title="Function-level graph: one node per function/method, edges = cross-file calls"
+          >
+            <Braces size={11} className="shrink-0" />
+            <span>Functions</span>
+          </ToolbarBtn>
+        </div>
         <div className="inline-flex h-[26px] items-stretch rounded-[7px] border border-border-subtle bg-surface-3/90 text-[11px] backdrop-blur">
           <ToolbarBtn
             active={colorMode === 'layer'}
             onClick={() => onColorMode('layer')}
-            title="Color nodes by detected architectural layer"
+            title={
+              viewMode === 'functions'
+                ? 'Layer mode is file-level only — function nodes default to neutral'
+                : 'Color nodes by detected architectural layer'
+            }
           >
             Layer
           </ToolbarBtn>
           <ToolbarBtn
             active={colorMode === 'folder'}
             onClick={() => onColorMode('folder')}
-            title="Color nodes by their parent folder"
+            title={
+              viewMode === 'functions'
+                ? 'Color functions by their parent file (each file gets a stable hue)'
+                : 'Color nodes by their parent folder'
+            }
           >
-            Folder
+            {viewMode === 'functions' ? 'File' : 'Folder'}
           </ToolbarBtn>
         </div>
+        {viewMode === 'functions' && (
+          <button
+            onClick={() => onHideOrphans(!hideOrphans)}
+            className={cn(
+              'inline-flex h-[26px] items-center gap-1.5 rounded-[7px] border px-2.5 text-[11px] transition',
+              hideOrphans
+                ? 'border-accent/40 bg-accent/10 text-accent'
+                : 'border-border-subtle bg-surface-3 text-text-secondary hover:border-border-hi hover:bg-surface-4 hover:text-text',
+            )}
+            title="Hide functions with no resolved cross-file calls (most are local helpers)"
+          >
+            <span>{hideOrphans ? 'Hiding orphans' : 'Show all'}</span>
+          </button>
+        )}
         <button
           onClick={onReload}
           disabled={loading || augmentRunning}

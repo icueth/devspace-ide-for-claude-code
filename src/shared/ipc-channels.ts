@@ -84,6 +84,7 @@ export const IPC = {
   CODEFLOW_LIST_DOCS: 'codeflow:list-docs',
   CODEFLOW_OPEN_DIR: 'codeflow:open-dir',
   CODEFLOW_BUILD_GRAPH: 'codeflow:build-graph',
+  CODEFLOW_BUILD_FUNCTION_GRAPH: 'codeflow:build-function-graph',
   CODEFLOW_AUGMENT_GRAPH: 'codeflow:augment-graph',
   CODEFLOW_AUGMENT_CANCEL: 'codeflow:augment-cancel',
   CODEFLOW_AUGMENT_PROGRESS: 'codeflow:augment-progress',

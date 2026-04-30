@@ -1,5 +1,6 @@
 import type {
   CodeflowDoc,
+  CodeflowFunctionGraph,
   CodeflowGraph,
   CodeflowGraphEdge,
   CodeflowStatus,
@@ -104,6 +105,7 @@ export interface DevspaceApi {
     listDocs: (projectPath: string) => Promise<CodeflowDoc[]>;
     openDir: (projectPath: string) => Promise<void>;
     buildGraph: (projectPath: string) => Promise<CodeflowGraph>;
+    buildFunctionGraph: (projectPath: string) => Promise<CodeflowFunctionGraph>;
     augmentGraph: (
       projectPath: string,
       graph: CodeflowGraph,
@@ -214,6 +216,7 @@ function makeStubApi(): DevspaceApi {
       listDocs: () => Promise.resolve([]),
       openDir: notWired('codeflow.openDir'),
       buildGraph: notWired('codeflow.buildGraph'),
+      buildFunctionGraph: notWired('codeflow.buildFunctionGraph'),
       augmentGraph: notWired('codeflow.augmentGraph'),
       augmentCancel: notWired('codeflow.augmentCancel'),
       augmentLoad: () => Promise.resolve(null),

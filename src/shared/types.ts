@@ -309,6 +309,65 @@ export interface CodeflowAnalyzeOptions {
   force?: boolean;
 }
 
+// ─── Codeflow function-level graph ──────────────────────────────────────────
+//
+// Sibling to the file-level graph. Where the file graph has one node per
+// file and one edge per import, this has one node per function/method and
+// one edge per cross-file call site. Resolution is name-based (no TS type
+// checker) so method-name collisions across classes produce low-confidence
+// edges rather than disappearing — the renderer surfaces this with
+// dashed/faded strokes.
+
+export type CodeflowFunctionKind = 'function' | 'method' | 'arrow' | 'class';
+
+export interface CodeflowFunctionNode {
+  id: string;        // `<file>::<name>:<line>` — globally unique
+  name: string;      // function/method name (or class name for kind='class')
+  file: string;      // project-relative path of the declaring file
+  line: number;      // 1-based declaration line
+  kind: CodeflowFunctionKind;
+  // Exported via `export` keyword or named in an export {…} statement.
+  // Imported-then-called counts as cross-file call regardless of this flag,
+  // but exposed here for ranking + filtering.
+  exported: boolean;
+  // Containing class for kind='method'. Empty otherwise.
+  className: string | null;
+  // (in + out) cross-file call count, filled after edges are resolved so
+  // the renderer can size nodes / filter low-degree ones without
+  // re-walking edges.
+  degree: number;
+}
+
+// Confidence level for a resolved call edge.
+//   high = the callee name is unique across the project
+//   low  = the callee name has multiple declarations; we picked the most
+//          plausible target (or emit edges to every candidate, capped)
+export type CodeflowCallConfidence = 'high' | 'low';
+
+export interface CodeflowFunctionEdge {
+  source: string;    // caller node id
+  target: string;    // callee node id
+  count: number;     // number of distinct call sites at this caller→callee
+  confidence: CodeflowCallConfidence;
+}
+
+export interface CodeflowFunctionGraph {
+  nodes: CodeflowFunctionNode[];
+  edges: CodeflowFunctionEdge[];
+  stats: {
+    totalFunctions: number;
+    totalEdges: number;
+    // How many call sites we saw vs how many turned into edges. Big gap
+    // means lots of external/library calls (expected) or unresolved name
+    // dispatch (signal to investigate).
+    callsSeen: number;
+    callsResolved: number;
+    confidence: { high: number; low: number };
+    truncated: boolean;
+    elapsedMs: number;
+  };
+}
+
 // ─── Codeflow graph (native visualization) ──────────────────────────────────
 //
 // Native D3 visualization replacing the original iframe approach. The main

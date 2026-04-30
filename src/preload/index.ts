@@ -127,6 +127,8 @@ const api = {
       ipcRenderer.invoke(IPC.CODEFLOW_OPEN_DIR, projectPath),
     buildGraph: (projectPath: string) =>
       ipcRenderer.invoke(IPC.CODEFLOW_BUILD_GRAPH, projectPath),
+    buildFunctionGraph: (projectPath: string) =>
+      ipcRenderer.invoke(IPC.CODEFLOW_BUILD_FUNCTION_GRAPH, projectPath),
     augmentGraph: (projectPath: string, graph: unknown) =>
       ipcRenderer.invoke(IPC.CODEFLOW_AUGMENT_GRAPH, projectPath, graph),
     augmentCancel: (projectPath: string) =>

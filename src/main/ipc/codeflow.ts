@@ -1,5 +1,6 @@
 import { ipcMain, shell } from 'electron';
 
+import { buildFunctionGraph } from '@main/services/CodeflowFunctionAnalyzer';
 import { buildGraph } from '@main/services/CodeflowGraphAnalyzer';
 import {
   augmentGraph,
@@ -72,6 +73,13 @@ export function registerCodeflowIpc(): void {
   ipcMain.handle(IPC.CODEFLOW_BUILD_GRAPH, async (_event, projectPath: string) => {
     return buildGraph(projectPath);
   });
+
+  ipcMain.handle(
+    IPC.CODEFLOW_BUILD_FUNCTION_GRAPH,
+    async (_event, projectPath: string) => {
+      return buildFunctionGraph(projectPath);
+    },
+  );
 
   ipcMain.handle(
     IPC.CODEFLOW_AUGMENT_GRAPH,
