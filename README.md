@@ -8,7 +8,7 @@ single window. It uses `tmux` under the hood so every agent and shell pane
 survives app restarts, panel remounts, and accidental Cmd+Q.
 
 <p align="center">
-  <a href="https://github.com/icueth/devspace-ide-for-claude-code/releases/latest/download/devspace-0.3.18-arm64.dmg">
+  <a href="https://github.com/icueth/devspace-ide-for-claude-code/releases/latest/download/devspace-0.3.19-arm64.dmg">
     <img alt="Download for macOS — Apple Silicon" src="https://img.shields.io/badge/Download%20for%20macOS-Apple%20Silicon%20(M1%2FM2%2FM3%2FM4)-000?style=for-the-badge&logo=apple&logoColor=white" />
   </a>
   &nbsp;

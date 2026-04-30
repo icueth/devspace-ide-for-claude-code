@@ -136,15 +136,28 @@ export function CodeflowGraphView({ projectPath, visible }: CodeflowGraphViewPro
     if (!projectPath) return;
     setLoading(true);
     setError(null);
-    // A rebuild invalidates Claude's previous soft edges — they referenced
-    // nodes that may no longer exist (or imply imports the static layer
-    // now captures correctly).
-    setSoftEdges([]);
     setAugmentStatus('idle');
     setAugmentError(null);
     try {
       const g = await api.codeflow.buildGraph(projectPath);
       setGraph(g);
+      // Re-hydrate soft edges from disk if we have a saved augment that
+      // matches the new fingerprint. Mismatch means the codebase has
+      // shifted enough that the cache is stale; we drop it and let the
+      // user re-augment when they want.
+      const cached = await api.codeflow.augmentLoad(
+        projectPath,
+        g.stats.fingerprint,
+      );
+      if (cached) {
+        setSoftEdges(cached.softEdges);
+        setAugmentMessage(
+          `Loaded ${cached.softEdges.length} cached soft edge${cached.softEdges.length === 1 ? '' : 's'} (${formatRelative(cached.savedAt)}).`,
+        );
+      } else {
+        setSoftEdges([]);
+        setAugmentMessage('');
+      }
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -824,6 +837,15 @@ function NodeDetails({
       </div>
     </div>
   );
+}
+
+function formatRelative(ms: number | null | undefined): string {
+  if (!ms) return 'never';
+  const diff = Date.now() - ms;
+  if (diff < 60_000) return 'just now';
+  if (diff < 60 * 60_000) return `${Math.floor(diff / 60_000)}m ago`;
+  if (diff < 24 * 60 * 60_000) return `${Math.floor(diff / (60 * 60_000))}h ago`;
+  return new Date(ms).toLocaleDateString();
 }
 
 function NeighborSection({

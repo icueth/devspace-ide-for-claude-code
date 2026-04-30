@@ -1,4 +1,5 @@
 import { type ChildProcess, spawn } from 'node:child_process';
+import * as fs from 'node:fs';
 import * as path from 'node:path';
 
 import { resolveClaudeBinary } from '@main/services/ClaudeCliLauncher';
@@ -9,6 +10,69 @@ import type {
   CodeflowGraph,
   CodeflowGraphEdge,
 } from '@shared/types';
+
+// On-disk shape of `<project>/.claude/codeflow/augment.json`. Stores the
+// graph fingerprint at write time so we can drop the cache when the user
+// has refactored enough that node ids no longer line up.
+interface PersistedAugment {
+  savedAt: number;
+  graphFingerprint: string;
+  softEdges: CodeflowGraphEdge[];
+}
+
+function augmentFile(projectRoot: string): string {
+  return path.join(projectRoot, '.claude', 'codeflow', 'augment.json');
+}
+
+export async function saveAugment(
+  projectRoot: string,
+  graphFingerprint: string,
+  softEdges: CodeflowGraphEdge[],
+): Promise<void> {
+  const file = augmentFile(projectRoot);
+  await fs.promises.mkdir(path.dirname(file), { recursive: true });
+  const payload: PersistedAugment = {
+    savedAt: Date.now(),
+    graphFingerprint,
+    softEdges,
+  };
+  await fs.promises.writeFile(file, JSON.stringify(payload, null, 2));
+}
+
+/**
+ * Load the persisted soft edges if they were saved against a graph with the
+ * same fingerprint. Returns null when no augment exists OR when the project
+ * structure has shifted (different fingerprint) — the caller should treat
+ * stale augment as "needs re-augment" rather than show possibly-wrong edges.
+ */
+export async function loadAugment(
+  projectRoot: string,
+  currentFingerprint: string,
+): Promise<{ softEdges: CodeflowGraphEdge[]; savedAt: number } | null> {
+  let raw: string;
+  try {
+    raw = await fs.promises.readFile(augmentFile(projectRoot), 'utf8');
+  } catch {
+    return null;
+  }
+  let parsed: PersistedAugment;
+  try {
+    parsed = JSON.parse(raw) as PersistedAugment;
+  } catch {
+    return null;
+  }
+  if (parsed.graphFingerprint !== currentFingerprint) return null;
+  if (!Array.isArray(parsed.softEdges)) return null;
+  return { softEdges: parsed.softEdges, savedAt: parsed.savedAt };
+}
+
+export async function clearAugment(projectRoot: string): Promise<void> {
+  try {
+    await fs.promises.unlink(augmentFile(projectRoot));
+  } catch {
+    /* already absent */
+  }
+}
 
 const logger = createLogger('CodeflowAugment');
 
@@ -243,6 +307,12 @@ export async function augmentGraph(
       const softEdges = parseSoftEdges(resultText, graph);
       logger.info(
         `augment complete: ${softEdges.length} soft edges from ${toolCount} tool calls`,
+      );
+      // Persist so reopening the project skips re-augment until the graph
+      // fingerprint changes. Best-effort — if disk is read-only or quota
+      // exhausted we still return the in-memory result.
+      void saveAugment(projectPath, graph.stats.fingerprint, softEdges).catch(
+        (err) => logger.warn(`saveAugment failed: ${(err as Error).message}`),
       );
       resolve(softEdges);
     });

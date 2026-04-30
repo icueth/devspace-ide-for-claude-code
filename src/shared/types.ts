@@ -381,6 +381,11 @@ export interface CodeflowGraph {
     importsParsed: number;
     importsResolved: number;
     aliasCount: number;
+    // sha256 over node ids (sorted, joined). Used to invalidate cached
+    // soft-edge augments — when the structure changes enough that node ids
+    // no longer match, the saved augment is dropped instead of pointing at
+    // ghost files.
+    fingerprint: string;
   };
 }
 

@@ -109,6 +109,11 @@ export interface DevspaceApi {
       graph: CodeflowGraph,
     ) => Promise<{ ok: true; softEdges: CodeflowGraphEdge[] } | { ok: false; error: string }>;
     augmentCancel: (projectPath: string) => Promise<void>;
+    augmentLoad: (
+      projectPath: string,
+      fingerprint: string,
+    ) => Promise<{ softEdges: CodeflowGraphEdge[]; savedAt: number } | null>;
+    augmentClear: (projectPath: string) => Promise<void>;
     onAugmentProgress: (projectPath: string, cb: (msg: string) => void) => () => void;
     onProgress: (projectPath: string, cb: (status: CodeflowStatus) => void) => () => void;
   };
@@ -211,6 +216,8 @@ function makeStubApi(): DevspaceApi {
       buildGraph: notWired('codeflow.buildGraph'),
       augmentGraph: notWired('codeflow.augmentGraph'),
       augmentCancel: notWired('codeflow.augmentCancel'),
+      augmentLoad: () => Promise.resolve(null),
+      augmentClear: notWired('codeflow.augmentClear'),
       onAugmentProgress: () => () => undefined,
       onProgress: () => () => undefined,
     },

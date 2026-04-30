@@ -87,6 +87,8 @@ export const IPC = {
   CODEFLOW_AUGMENT_GRAPH: 'codeflow:augment-graph',
   CODEFLOW_AUGMENT_CANCEL: 'codeflow:augment-cancel',
   CODEFLOW_AUGMENT_PROGRESS: 'codeflow:augment-progress',
+  CODEFLOW_AUGMENT_LOAD: 'codeflow:augment-load',
+  CODEFLOW_AUGMENT_CLEAR: 'codeflow:augment-clear',
   CODEFLOW_PROGRESS: 'codeflow:progress',
 } as const;
 

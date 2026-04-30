@@ -5,6 +5,64 @@ All notable changes to DevSpace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.3.19] — 2026-04-30
+
+### Added
+- **`Cmd+N` — new file shortcut.** Prompts for a filename (relative to the
+  active project root, supports nested paths like `src/components/Foo.tsx`),
+  creates the file on disk, and opens it as a new editor tab in one step.
+  Cmd+Shift+N stays bound to the menu's "New Window" role.
+
+### Changed
+- **Codeflow now writes directly to `.claude/codeflow/`.** Previously the
+  Claude headless harness blocked all writes to `.claude/` as a sensitive
+  directory — even with `--permission-mode acceptEdits` and explicit allow
+  rules in `.claude/settings.local.json`. Switched to
+  `--dangerously-skip-permissions` (the only mode that gets past the
+  hardcoded sensitive-dir block) coupled with a tightly scoped
+  `--allowed-tools Read Glob Grep Write Edit` so even with permission
+  checks off the blast radius is contained — no Bash, no WebFetch, no
+  network.
+- Switched the tool-allow flag from camelCase `--allowedTools` to kebab-case
+  `--allowed-tools`. The camelCase form is silently ignored by recent
+  claude versions, which is why earlier runs still let Claude reach for
+  `Bash` despite our restriction.
+- **AST-based import extraction.** JS/TS family files now parse through
+  the TypeScript Compiler API (`ts.createSourceFile` + visitor) instead of
+  regex. Catches dynamic `import('./literal')`, type-only imports, JSX-tag
+  imports, re-exports, `import x = require('y')`, and CommonJS `require()`
+  with no false positives from comment strings. Python and other languages
+  keep regex extraction.
+- **tsconfig path-alias resolution.** Codeflow reads
+  `compilerOptions.paths` from `tsconfig.json` (and friends) plus
+  `resolve.alias` from `vite.config.*` / `electron.vite.config.*` so
+  imports like `@renderer/foo` and `@/components/bar` resolve to the
+  actual files instead of being treated as external. DevSpace's own graph
+  drops from "scattered dots" to a fully-connected web because of this fix.
+- **Soft-edge persistence.** After *Augment with Claude*, soft edges are
+  saved to `.claude/codeflow/augment.json` keyed by graph fingerprint and
+  auto-restored on the next graph build. Reopening the project no longer
+  forces a re-augment.
+- **Diagnostic stats.** The graph footer now shows
+  `N aliases · imports M parsed / K resolved` so an empty graph is
+  debuggable without DevTools — low parsed = AST didn't run, low
+  resolved/parsed ratio = alias config is wrong.
+- **Color-mode toggle is instant.** Switching Layer ↔ Folder now smooth-
+  transitions node colors in place instead of tearing down and rebuilding
+  the d3 simulation, so the layout no longer jumps when you re-color.
+- **`.run.log` debug artifact.** Every Claude run drops
+  `.claude/codeflow/.run.log` with exit code, tool-call count, captured
+  stream-json events, stderr, and final result text. When a generation
+  produces no docs, this one file says exactly why.
+
+### Fixed
+- Sidebar file tree now refreshes in realtime on changes inside `.claude/`
+  and `.devspace/` again — an earlier defensive `IGNORED` rule had hidden
+  freshly-generated codeflow docs from the watcher. Chokidar's existing
+  150ms debounce already collapses codeflow's ~10-file write cycle into a
+  single flush event, so the IGNORED rule was solving a problem we didn't
+  have at the cost of a real one.
+
 ## [0.3.18] — 2026-04-30
 
 ### Added
@@ -135,6 +193,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   project, persistent tmux-backed CLI panes, multi-agent Team mode, and
   Claude Code account/files settings.
 
+[0.3.19]: https://github.com/icueth/devspace-ide-for-claude-code/releases/tag/v0.3.19
 [0.3.18]: https://github.com/icueth/devspace-ide-for-claude-code/releases/tag/v0.3.18
 [0.3.17]: https://github.com/icueth/devspace-ide-for-claude-code/releases/tag/v0.3.17
 [0.3.16]: https://github.com/icueth/devspace-ide-for-claude-code/releases/tag/v0.3.16

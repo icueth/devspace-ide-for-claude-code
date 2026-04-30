@@ -4,6 +4,8 @@ import { buildGraph } from '@main/services/CodeflowGraphAnalyzer';
 import {
   augmentGraph,
   cancelAugment,
+  clearAugment,
+  loadAugment,
 } from '@main/services/CodeflowGraphAugment';
 import {
   analyzeProject,
@@ -96,6 +98,17 @@ export function registerCodeflowIpc(): void {
 
   ipcMain.handle(IPC.CODEFLOW_AUGMENT_CANCEL, async (_event, projectPath: string) => {
     cancelAugment(projectPath);
+  });
+
+  ipcMain.handle(
+    IPC.CODEFLOW_AUGMENT_LOAD,
+    async (_event, projectPath: string, fingerprint: string) => {
+      return loadAugment(projectPath, fingerprint);
+    },
+  );
+
+  ipcMain.handle(IPC.CODEFLOW_AUGMENT_CLEAR, async (_event, projectPath: string) => {
+    await clearAugment(projectPath);
   });
 }
 

@@ -111,8 +111,9 @@ export default function App() {
   }, [activeProject, refreshGit]);
 
   // Global shortcuts: Cmd+Shift+F = search, Cmd+P = quick open, Cmd+G = go-to-line,
-  // Cmd+Shift+L = send editor selection to active Claude CLI pane.
+  // Cmd+N = new file, Cmd+Shift+L = send editor selection to active Claude CLI pane.
   const setBottomOpen = useLayoutStore((s) => s.setBottomOpen);
+  const askPrompt = usePromptStore((s) => s.ask);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const mod = e.metaKey || e.ctrlKey;
@@ -127,6 +128,33 @@ export default function App() {
       if (!e.shiftKey && !e.altKey && k === 'p') {
         e.preventDefault();
         setQuickOpen(true);
+        return;
+      }
+      // Cmd+N — create a new file in the active project, then open it as a
+      // tab. Cmd+Shift+N is reserved for the "New Window" menu role, so we
+      // only catch the plain Cmd+N here.
+      if (!e.shiftKey && !e.altKey && k === 'n') {
+        e.preventDefault();
+        const project = useWorkspaceStore.getState().projects.find(
+          (p) => p.id === useWorkspaceStore.getState().activeProjectId,
+        );
+        if (!project) return;
+        askPrompt({
+          title: 'New file',
+          placeholder: 'filename.ext (or path/to/file.ext)',
+          confirmLabel: 'Create',
+          onConfirm: async (name) => {
+            const trimmed = name.trim();
+            if (!trimmed) return;
+            const fullPath = `${project.path}/${trimmed}`;
+            try {
+              await api.fs.create(fullPath, 'file');
+              await useEditorStore.getState().open(fullPath);
+            } catch (err) {
+              console.error('create file failed:', err);
+            }
+          },
+        });
         return;
       }
       if (!e.shiftKey && !e.altKey && k === 'g') {
@@ -180,7 +208,7 @@ export default function App() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [setBottomOpen]);
+  }, [setBottomOpen, askPrompt]);
   const dockVisible = openedProjectIds.length > 0;
   const showBottom = bottomOpen && activeProject;
 

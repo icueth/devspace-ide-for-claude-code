@@ -72,7 +72,7 @@ export function CodeflowView({ projectPath }: CodeflowViewProps) {
 
   // The visualization tab is always available; doc tabs only appear after a
   // successful run. If the active selection is a doc that's been deleted
-  // (e.g. user wiped .devspace/codeflow/), fall back to viz.
+  // (e.g. user wiped .claude/codeflow/), fall back to viz.
   useEffect(() => {
     if (!status) return;
     if (activeName === VIZ_TAB) return;

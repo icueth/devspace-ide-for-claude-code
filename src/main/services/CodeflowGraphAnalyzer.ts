@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as ts from 'typescript';
@@ -616,6 +617,13 @@ export async function buildGraph(projectRoot: string): Promise<CodeflowGraph> {
 
   const totalLines = nodes.reduce((acc, n) => acc + n.loc, 0);
   const elapsedMs = Date.now() - t0;
+  // Stable hash over node ids — used by the augment store to detect when
+  // the codebase has shifted enough that saved soft edges should be dropped.
+  const fingerprint = createHash('sha256')
+    .update(
+      [...nodes.map((n) => n.id)].sort().join('\n'),
+    )
+    .digest('hex');
   logger.info(
     `built graph for ${projectRoot} in ${elapsedMs}ms — ${nodes.length} nodes, ${edges.length} edges, ${aliases.length} aliases, ${importsParsed} imports parsed (${importsResolved} resolved)`,
   );
@@ -632,6 +640,7 @@ export async function buildGraph(projectRoot: string): Promise<CodeflowGraph> {
       importsParsed,
       importsResolved,
       aliasCount: aliases.length,
+      fingerprint,
     },
   };
 }

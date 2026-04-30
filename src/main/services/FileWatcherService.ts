@@ -20,6 +20,10 @@ const IGNORED = [
   /(^|[\\/])\.next([\\/]|$)/,
   /(^|[\\/])\.turbo([\\/]|$)/,
   /(^|[\\/])\.cache([\\/]|$)/,
+  // We deliberately do NOT ignore `.claude/` or `.devspace/` here. Codeflow
+  // writes ~10 files per run and chokidar already debounces at 150ms, so
+  // it's a single flush — not a storm. Watching them means the file-tree
+  // sidebar refreshes when codeflow drops new docs, which is the right UX.
   /(^|[\\/])coverage([\\/]|$)/,
   /(^|[\\/])\.venv([\\/]|$)/,
 ];

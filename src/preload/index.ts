@@ -131,6 +131,10 @@ const api = {
       ipcRenderer.invoke(IPC.CODEFLOW_AUGMENT_GRAPH, projectPath, graph),
     augmentCancel: (projectPath: string) =>
       ipcRenderer.invoke(IPC.CODEFLOW_AUGMENT_CANCEL, projectPath),
+    augmentLoad: (projectPath: string, fingerprint: string) =>
+      ipcRenderer.invoke(IPC.CODEFLOW_AUGMENT_LOAD, projectPath, fingerprint),
+    augmentClear: (projectPath: string) =>
+      ipcRenderer.invoke(IPC.CODEFLOW_AUGMENT_CLEAR, projectPath),
     onAugmentProgress: (projectPath: string, cb: (msg: string) => void) => {
       const listener = (
         _e: unknown,
