@@ -334,6 +334,176 @@ function extractFromFile(rel: string, src: string, ext: string): FileExtractResu
  * Returns a graph compatible with the renderer's d3 force layout — same
  * shape as the file-level graph but with function granularity.
  */
+// Where Claude Code will look for the function-level architecture summary.
+// Lives next to the file-level docs so the existing CLAUDE.md pointer +
+// codeflow-context skill can include it without parallel infrastructure.
+function functionMapDir(projectRoot: string): string {
+  return path.join(projectRoot, '.claude', 'codeflow');
+}
+function functionGraphJsonFile(projectRoot: string): string {
+  return path.join(functionMapDir(projectRoot), 'function-graph.json');
+}
+function functionMapMdFile(projectRoot: string): string {
+  return path.join(functionMapDir(projectRoot), 'function-map.md');
+}
+
+/**
+ * Render a concise Markdown summary of the function call graph aimed at
+ * Claude Code: top inbound hubs, cross-file bridges, and a per-file
+ * exported-functions index. Bounded to ~500 lines so it fits comfortably
+ * in a session's auto-loaded context budget; the JSON sibling carries the
+ * full data for advanced lookups.
+ */
+function renderFunctionMap(
+  graph: CodeflowFunctionGraph,
+  generatedAt: number,
+): string {
+  // Index inbound edges per node so we can sort by "most called".
+  const inbound = new Map<string, number>();
+  const outbound = new Map<string, number>();
+  for (const e of graph.edges) {
+    inbound.set(e.target, (inbound.get(e.target) ?? 0) + e.count);
+    outbound.set(e.source, (outbound.get(e.source) ?? 0) + e.count);
+  }
+  const byId = new Map<string, (typeof graph.nodes)[number]>();
+  for (const n of graph.nodes) byId.set(n.id, n);
+
+  const HUB_LIMIT = 25;
+  const BRIDGE_LIMIT = 20;
+  const PER_FILE_EXPORTS_LIMIT = 8;
+
+  const hubs = [...graph.nodes]
+    .map((n) => ({ node: n, inbound: inbound.get(n.id) ?? 0 }))
+    .filter((x) => x.inbound > 0)
+    .sort((a, b) => b.inbound - a.inbound)
+    .slice(0, HUB_LIMIT);
+
+  // Cross-subsystem bridges: a function whose callers span >= 2 distinct
+  // top-level directories. These are the seams where subsystems meet.
+  const topDir = (file: string) => {
+    const i = file.indexOf('/');
+    return i >= 0 ? file.slice(0, i) : file;
+  };
+  const bridges = [...graph.nodes]
+    .map((n) => {
+      const callers = graph.edges.filter((e) => e.target === n.id);
+      const dirs = new Set(
+        callers
+          .map((e) => byId.get(e.source)?.file)
+          .filter((f): f is string => !!f)
+          .map(topDir),
+      );
+      return { node: n, callerCount: callers.length, dirCount: dirs.size, dirs };
+    })
+    .filter((x) => x.dirCount >= 2 && x.callerCount >= 3)
+    .sort((a, b) => b.dirCount - a.dirCount || b.callerCount - a.callerCount)
+    .slice(0, BRIDGE_LIMIT);
+
+  // Per-file exported functions, grouped by file.
+  const exportsByFile = new Map<string, (typeof graph.nodes)[number][]>();
+  for (const n of graph.nodes) {
+    if (!n.exported) continue;
+    let arr = exportsByFile.get(n.file);
+    if (!arr) {
+      arr = [];
+      exportsByFile.set(n.file, arr);
+    }
+    arr.push(n);
+  }
+  const sortedFiles = [...exportsByFile.keys()].sort();
+
+  const fmtNode = (n: (typeof graph.nodes)[number]) =>
+    n.className ? `${n.className}.${n.name}` : n.name;
+
+  const out: string[] = [];
+  out.push(`# Function call map`);
+  out.push('');
+  out.push(
+    `Generated ${new Date(generatedAt).toISOString().slice(0, 10)} · ` +
+      `${graph.nodes.length} functions · ${graph.edges.length} cross-file edges ` +
+      `(${graph.stats.confidence.high} high-confidence, ${graph.stats.confidence.low} ambiguous)`,
+  );
+  out.push('');
+  out.push(
+    'This file is a structural index of the codebase\'s functions and how they call each other across files. The companion `function-graph.json` has the full data; this Markdown is a curated summary for quick context.',
+  );
+  out.push('');
+
+  out.push(`## High-traffic hubs`);
+  out.push('');
+  out.push('Functions called from the most other places — entry points, shared utilities, and core service methods. These are usually the right starting point for "where does X happen" questions.');
+  out.push('');
+  if (hubs.length === 0) {
+    out.push('_(no inbound edges resolved — try Re-augment or check that import paths resolve)_');
+  } else {
+    for (const h of hubs) {
+      out.push(
+        `- **\`${fmtNode(h.node)}\`** (\`${h.node.file}:${h.node.line}\`) — called from ${h.inbound} place${h.inbound === 1 ? '' : 's'}`,
+      );
+    }
+  }
+  out.push('');
+
+  out.push(`## Cross-subsystem bridges`);
+  out.push('');
+  out.push('Functions whose callers span multiple top-level directories. Touching these typically affects more than one subsystem at once.');
+  out.push('');
+  if (bridges.length === 0) {
+    out.push('_(no multi-subsystem bridges detected)_');
+  } else {
+    for (const b of bridges) {
+      const dirs = [...b.dirs].sort().join(', ');
+      out.push(
+        `- **\`${fmtNode(b.node)}\`** (\`${b.node.file}:${b.node.line}\`) — ${b.callerCount} callers across ${b.dirCount} subsystems: \`${dirs}\``,
+      );
+    }
+  }
+  out.push('');
+
+  out.push(`## Per-file exported functions`);
+  out.push('');
+  out.push('Quick index of what each file exposes. Use this to find the right file before drilling into hubs/bridges above.');
+  out.push('');
+  for (const file of sortedFiles) {
+    const fns = exportsByFile.get(file)!;
+    const top = fns
+      .sort((a, b) => (inbound.get(b.id) ?? 0) - (inbound.get(a.id) ?? 0))
+      .slice(0, PER_FILE_EXPORTS_LIMIT);
+    out.push(`### \`${file}\``);
+    out.push('');
+    for (const n of top) {
+      const inN = inbound.get(n.id) ?? 0;
+      const outN = outbound.get(n.id) ?? 0;
+      out.push(
+        `- \`${fmtNode(n)}\` — line ${n.line} · in ${inN} · out ${outN}`,
+      );
+    }
+    if (fns.length > top.length) {
+      out.push(`- _(+ ${fns.length - top.length} more)_`);
+    }
+    out.push('');
+  }
+
+  return out.join('\n');
+}
+
+async function persistFunctionGraph(
+  projectRoot: string,
+  graph: CodeflowFunctionGraph,
+): Promise<void> {
+  await fs.promises.mkdir(functionMapDir(projectRoot), { recursive: true });
+  // Raw graph for tooling / Claude lookups; pretty-printed so a human
+  // (or Claude reading via Read tool) can grep through it readably.
+  await fs.promises.writeFile(
+    functionGraphJsonFile(projectRoot),
+    JSON.stringify(graph, null, 2),
+  );
+  await fs.promises.writeFile(
+    functionMapMdFile(projectRoot),
+    renderFunctionMap(graph, Date.now()),
+  );
+}
+
 export async function buildFunctionGraph(
   projectRoot: string,
 ): Promise<CodeflowFunctionGraph> {
@@ -444,7 +614,7 @@ export async function buildFunctionGraph(
     `function graph for ${projectRoot} in ${elapsedMs}ms — ${allNodes.length} nodes, ${edges.length} edges, ${callsResolved}/${allCalls.length} calls resolved`,
   );
 
-  return {
+  const result: CodeflowFunctionGraph = {
     nodes: allNodes,
     edges,
     stats: {
@@ -458,4 +628,15 @@ export async function buildFunctionGraph(
       elapsedMs,
     },
   };
+
+  // Persist alongside the file-level docs so Claude Code in the project's
+  // terminal can read the function map through the same .claude/CLAUDE.md
+  // pointer + codeflow-context skill that already loads codebase.md and
+  // flow-*.md. Best-effort — if the disk write fails the renderer still
+  // gets the graph.
+  void persistFunctionGraph(projectRoot, result).catch((err) => {
+    logger.warn(`persistFunctionGraph failed: ${(err as Error).message}`);
+  });
+
+  return result;
 }

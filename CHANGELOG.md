@@ -5,6 +5,35 @@ All notable changes to DevSpace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.3.21] — 2026-04-30
+
+### Added
+- **Function call map persisted to disk.** Whenever the user views the
+  Functions graph, DevSpace now writes two companion files to
+  `.claude/codeflow/`:
+  - `function-graph.json` — full nodes + edges (raw data for tooling /
+    Claude grep lookups).
+  - `function-map.md` — curated Markdown summary aimed at Claude Code:
+    high-traffic hubs (top inbound functions), cross-subsystem bridges
+    (functions whose callers span multiple top-level dirs), and a per-
+    file exported-function index. ~500 lines max so it fits in a session
+    context budget.
+
+  The auto-generated `.claude/CLAUDE.md` pointer and the
+  `codeflow-context` skill now reference both files, so a `claude` session
+  in the project will load function-level structure automatically when the
+  user asks "who calls X?" / "what does Y depend on?"-style questions.
+
+### Fixed
+- **`.claude/skills/codeflow-context/SKILL.md` is now a valid skill.** The
+  previous version wrapped the YAML frontmatter in `<!-- BEGIN
+  devspace-codeflow-skill -->` markers, which placed the comment at offset
+  0 of the file — Claude Code's skill loader requires `---\nname:\n…` at
+  the very top, so the skill never registered and Claude wouldn't read the
+  codeflow docs even when it should have. SKILL.md is now written cleanly
+  with no marker wrapping; re-run *Generate codeflow* on any project to
+  overwrite the broken file from older builds.
+
 ## [0.3.20] — 2026-04-30
 
 ### Added
@@ -224,6 +253,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   project, persistent tmux-backed CLI panes, multi-agent Team mode, and
   Claude Code account/files settings.
 
+[0.3.21]: https://github.com/icueth/devspace-ide-for-claude-code/releases/tag/v0.3.21
 [0.3.20]: https://github.com/icueth/devspace-ide-for-claude-code/releases/tag/v0.3.20
 [0.3.19]: https://github.com/icueth/devspace-ide-for-claude-code/releases/tag/v0.3.19
 [0.3.18]: https://github.com/icueth/devspace-ide-for-claude-code/releases/tag/v0.3.18
