@@ -1,8 +1,12 @@
+import { execFile } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { promisify } from 'node:util';
 import * as ts from 'typescript';
 
 import { createLogger } from '@shared/logger';
+
+const execFileAsync = promisify(execFile);
 import type {
   CodeflowCallConfidence,
   CodeflowFunctionEdge,
@@ -13,8 +17,11 @@ import type {
 
 const logger = createLogger('CodeflowFunctions');
 
-// Same skip rules as the file-level analyzer; vendored deps and build
-// artifacts shouldn't enter the function graph either.
+// Fallback skip rules used only when the project isn't a git repo (or
+// `git ls-files` fails). When git is available we honor `.gitignore`
+// instead — that's the only way to exclude project-specific noise like
+// generated protobufs, vendored packages, or terraform plan artifacts
+// without keeping a hand-curated list current.
 const SKIP_DIRS = new Set([
   'node_modules',
   '.git',
@@ -38,6 +45,16 @@ const SKIP_DIRS = new Set([
   '.pytest_cache',
   '.mypy_cache',
   '.ruff_cache',
+  // Go vendoring (commonly committed but never user-authored).
+  'vendor',
+  // Common build / dependency artifacts across other ecosystems.
+  'bin',
+  'tmp',
+  'obj',
+  'Pods',          // iOS CocoaPods
+  'Carthage',      // iOS Carthage
+  '.gradle',       // Android Gradle
+  '.terraform',    // Terraform plan cache
 ]);
 
 // We only handle JS/TS family for function extraction. Other languages need
@@ -89,7 +106,60 @@ interface FileMeta {
   size: number;
 }
 
+/**
+ * Ask git for the file list it considers "in the project" — tracked +
+ * untracked-but-not-ignored. This is the right semantic for codeflow
+ * analysis: it automatically excludes node_modules, vendor/, generated
+ * files, build artifacts, and any project-specific gitignore rules
+ * without us having to maintain a parallel list.
+ *
+ * Returns null when the project isn't a git repo or `git ls-files` fails
+ * for any reason; the caller falls back to a hand-curated SKIP_DIRS walk.
+ */
+async function gitListFiles(projectRoot: string): Promise<string[] | null> {
+  try {
+    // `--cached` tracked, `--others` untracked, `--exclude-standard`
+    // applies the user's .gitignore + global excludes. `-z` makes paths
+    // NUL-separated so newlines in filenames don't break parsing.
+    const { stdout } = await execFileAsync(
+      'git',
+      ['ls-files', '--cached', '--others', '--exclude-standard', '-z'],
+      { cwd: projectRoot, maxBuffer: 64 * 1024 * 1024 },
+    );
+    const paths = stdout.split('\0').filter(Boolean);
+    if (paths.length === 0) return null;
+    return paths;
+  } catch {
+    return null;
+  }
+}
+
 async function walk(projectRoot: string): Promise<FileMeta[]> {
+  // Preferred path: trust git's view of the project. This honors every
+  // .gitignore + .git/info/exclude + global excludes config the user has,
+  // which is the only way to keep a Go monorepo (with `vendor/`,
+  // `gen/proto/`, etc.) clean without bespoke per-project rules.
+  const tracked = await gitListFiles(projectRoot);
+  if (tracked) {
+    const out: FileMeta[] = [];
+    for (const rel of tracked) {
+      if (out.length >= HARD_FILE_LIMIT) break;
+      const ext = path.extname(rel).toLowerCase();
+      if (!TS_FAMILY.has(ext)) continue;
+      const abs = path.join(projectRoot, rel);
+      try {
+        const stat = await fs.promises.stat(abs);
+        if (!stat.isFile()) continue;
+        out.push({ rel, abs, size: stat.size });
+      } catch {
+        /* skip unreadable / deleted-since-listing */
+      }
+    }
+    return out;
+  }
+
+  // Fallback path: not a git repo (or git failed). Walk ourselves with the
+  // hand-curated SKIP_DIRS list — less precise but at least won't blow up.
   const out: FileMeta[] = [];
   async function recurse(dir: string, rel: string): Promise<void> {
     if (out.length >= HARD_FILE_LIMIT) return;

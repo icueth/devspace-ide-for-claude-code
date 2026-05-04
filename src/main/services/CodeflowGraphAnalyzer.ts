@@ -1,15 +1,22 @@
+import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { promisify } from 'node:util';
 import * as ts from 'typescript';
 
 import { createLogger } from '@shared/logger';
+
+const execFileAsync = promisify(execFile);
 import type { CodeflowGraph, CodeflowGraphNode } from '@shared/types';
 
 const logger = createLogger('CodeflowGraph');
 
-// Skip rules — same skeleton as CodeflowService.walkProject. Vendored deps and
-// build output never tell us anything useful about the codebase's real graph.
+// Fallback skip list, used only when `git ls-files` isn't available
+// (project not a git repo, or git missing). When git is available we
+// honor `.gitignore` — the only way to filter project-specific noise
+// (vendored deps, generated protobuf, terraform plan cache, etc.)
+// without keeping a hand-curated list per ecosystem.
 const SKIP_DIRS = new Set([
   'node_modules',
   '.git',
@@ -33,6 +40,15 @@ const SKIP_DIRS = new Set([
   '.pytest_cache',
   '.mypy_cache',
   '.ruff_cache',
+  // Vendored deps + build outputs across other ecosystems.
+  'vendor',     // Go / PHP composer
+  'bin',
+  'tmp',
+  'obj',
+  'Pods',       // iOS CocoaPods
+  'Carthage',   // iOS Carthage
+  '.gradle',    // Android Gradle
+  '.terraform', // Terraform plan cache
 ]);
 
 const CODE_EXTS = [
@@ -119,7 +135,57 @@ interface FileMeta {
   mtimeMs: number;
 }
 
+/**
+ * Ask git for "what's actually in the project" — tracked files + untracked
+ * but not gitignored. This is the right semantic for analysis: it
+ * automatically excludes node_modules, vendor/, generated protobufs,
+ * terraform plan caches, build artifacts, and any project-specific
+ * gitignore rules without us maintaining a parallel list.
+ *
+ * Returns null when the project isn't a git repo or `git ls-files` errors;
+ * the caller falls back to the hand-curated SKIP_DIRS walk.
+ */
+async function gitListFiles(projectRoot: string): Promise<string[] | null> {
+  try {
+    const { stdout } = await execFileAsync(
+      'git',
+      ['ls-files', '--cached', '--others', '--exclude-standard', '-z'],
+      { cwd: projectRoot, maxBuffer: 64 * 1024 * 1024 },
+    );
+    const paths = stdout.split('\0').filter(Boolean);
+    if (paths.length === 0) return null;
+    return paths;
+  } catch {
+    return null;
+  }
+}
+
 async function walk(projectRoot: string): Promise<FileMeta[]> {
+  // Preferred path: trust git. A Go monorepo with vendored deps, a Next.js
+  // app with .next/, or a terraform project with .terraform/ all "just
+  // work" because their gitignores already cover the noise.
+  const tracked = await gitListFiles(projectRoot);
+  if (tracked) {
+    const out: FileMeta[] = [];
+    for (const rel of tracked) {
+      if (out.length >= HARD_FILE_LIMIT) break;
+      const ext = path.extname(rel).toLowerCase();
+      if (!CODE_EXTS.includes(ext)) continue;
+      const abs = path.join(projectRoot, rel);
+      try {
+        const stat = await fs.promises.stat(abs);
+        if (!stat.isFile()) continue;
+        out.push({ rel, abs, size: stat.size, mtimeMs: stat.mtimeMs });
+      } catch {
+        /* skip unreadable / deleted-since-listing */
+      }
+    }
+    return out;
+  }
+
+  // Fallback path: not a git repo (or git failed). Manual walk with the
+  // SKIP_DIRS list — less precise but at least won't crash on non-git
+  // projects.
   const out: FileMeta[] = [];
   async function recurse(dir: string, rel: string): Promise<void> {
     if (out.length >= HARD_FILE_LIMIT) return;
@@ -131,8 +197,7 @@ async function walk(projectRoot: string): Promise<FileMeta[]> {
     }
     for (const entry of entries) {
       if (out.length >= HARD_FILE_LIMIT) return;
-      // Skip hidden files except .gitignore (we don't analyze it but it's
-      // worth knowing it's there for layout heuristics later).
+      // Skip hidden files (the entry NAME starts with .).
       if (entry.name.startsWith('.')) continue;
       if (entry.isDirectory()) {
         if (SKIP_DIRS.has(entry.name)) continue;

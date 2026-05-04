@@ -1,7 +1,10 @@
-import { type ChildProcess, spawn } from 'node:child_process';
+import { type ChildProcess, execFile, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { promisify } from 'node:util';
+
+const execFileAsync = promisify(execFile);
 
 import { resolveClaudeBinary } from '@main/services/ClaudeCliLauncher';
 import { resolveInteractiveShellEnv } from '@main/utils/shellEnv';
@@ -345,7 +348,47 @@ export interface CodeflowFileWithContent {
 const VIZ_MAX_FILES = 2000;
 const VIZ_MAX_FILE_BYTES = 1 * 1024 * 1024;
 
+async function gitListFiles(projectRoot: string): Promise<string[] | null> {
+  try {
+    const { stdout } = await execFileAsync(
+      'git',
+      ['ls-files', '--cached', '--others', '--exclude-standard', '-z'],
+      { cwd: projectRoot, maxBuffer: 64 * 1024 * 1024 },
+    );
+    const paths = stdout.split('\0').filter(Boolean);
+    if (paths.length === 0) return null;
+    return paths;
+  } catch {
+    return null;
+  }
+}
+
 async function walkProject(projectPath: string): Promise<FileEntry[]> {
+  // Preferred path: trust git's view of the project (tracked + untracked
+  // but not gitignored). This is the cleanest way to keep node_modules,
+  // vendor/, generated protobufs, terraform plan caches, and any
+  // project-specific noise out of Claude's prompt without us
+  // hand-curating per ecosystem.
+  const tracked = await gitListFiles(projectPath);
+  if (tracked) {
+    const out: FileEntry[] = [];
+    for (const rel of tracked) {
+      if (out.length >= 5000) break;
+      const ext = rel.split('.').pop()?.toLowerCase() ?? '';
+      if (!CODE_EXTS.has(ext)) continue;
+      try {
+        const stat = await fs.promises.stat(path.join(projectPath, rel));
+        if (!stat.isFile()) continue;
+        out.push({ rel, size: stat.size, mtimeMs: stat.mtimeMs });
+      } catch {
+        /* skip unreadable / deleted-since-listing */
+      }
+    }
+    return out;
+  }
+
+  // Fallback path: not a git repo (or git failed). Hand-curated SKIP_DIRS
+  // walk — less precise but won't crash on non-git projects.
   const out: FileEntry[] = [];
   async function walk(dir: string, rel: string): Promise<void> {
     if (out.length >= 5000) return;

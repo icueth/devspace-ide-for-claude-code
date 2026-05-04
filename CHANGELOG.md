@@ -5,6 +5,24 @@ All notable changes to DevSpace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.3.22] — 2026-05-04
+
+### Changed
+- **Codeflow now honors `.gitignore` via `git ls-files`.** Both the file-
+  level analyzer, the function-level analyzer, and the Claude doc-gen
+  walker first ask git for "what's actually in the project" (tracked +
+  untracked but not gitignored) and use that as the file list. Falls back
+  to a hand-curated `SKIP_DIRS` walk only when the project isn't a git
+  repo or git fails. Solves the long-standing density problem on Go
+  monorepos with `vendor/`, Next.js apps with `.next/`, terraform
+  projects with `.terraform/`, and anything else where the right ignore
+  rules already live in the user's `.gitignore`.
+
+### Added
+- Fallback `SKIP_DIRS` extended with `vendor`, `bin`, `tmp`, `obj`,
+  `Pods`, `Carthage`, `.gradle`, `.terraform` so non-git projects still
+  get a reasonable default ignore list.
+
 ## [0.3.21] — 2026-04-30
 
 ### Added
@@ -253,6 +271,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   project, persistent tmux-backed CLI panes, multi-agent Team mode, and
   Claude Code account/files settings.
 
+[0.3.22]: https://github.com/icueth/devspace-ide-for-claude-code/releases/tag/v0.3.22
 [0.3.21]: https://github.com/icueth/devspace-ide-for-claude-code/releases/tag/v0.3.21
 [0.3.20]: https://github.com/icueth/devspace-ide-for-claude-code/releases/tag/v0.3.20
 [0.3.19]: https://github.com/icueth/devspace-ide-for-claude-code/releases/tag/v0.3.19
