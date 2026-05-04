@@ -1,5 +1,6 @@
 import type {
   CodeflowDoc,
+  CodeflowFunctionEdge,
   CodeflowFunctionGraph,
   CodeflowGraph,
   CodeflowGraphEdge,
@@ -116,7 +117,17 @@ export interface DevspaceApi {
       fingerprint: string,
     ) => Promise<{ softEdges: CodeflowGraphEdge[]; savedAt: number } | null>;
     augmentClear: (projectPath: string) => Promise<void>;
+    augmentFunctions: (
+      projectPath: string,
+      graph: CodeflowFunctionGraph,
+    ) => Promise<{ ok: true; softEdges: CodeflowFunctionEdge[] } | { ok: false; error: string }>;
+    augmentFunctionsCancel: (projectPath: string) => Promise<void>;
+    augmentFunctionsLoad: (
+      projectPath: string,
+      fingerprint: string,
+    ) => Promise<{ softEdges: CodeflowFunctionEdge[]; savedAt: number } | null>;
     onAugmentProgress: (projectPath: string, cb: (msg: string) => void) => () => void;
+    onAugmentFunctionsProgress: (projectPath: string, cb: (msg: string) => void) => () => void;
     onProgress: (projectPath: string, cb: (status: CodeflowStatus) => void) => () => void;
   };
 }
@@ -221,7 +232,11 @@ function makeStubApi(): DevspaceApi {
       augmentCancel: notWired('codeflow.augmentCancel'),
       augmentLoad: () => Promise.resolve(null),
       augmentClear: notWired('codeflow.augmentClear'),
+      augmentFunctions: notWired('codeflow.augmentFunctions'),
+      augmentFunctionsCancel: notWired('codeflow.augmentFunctionsCancel'),
+      augmentFunctionsLoad: () => Promise.resolve(null),
       onAugmentProgress: () => () => undefined,
+      onAugmentFunctionsProgress: () => () => undefined,
       onProgress: () => () => undefined,
     },
   } as unknown as DevspaceApi;

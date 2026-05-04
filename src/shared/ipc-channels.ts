@@ -90,6 +90,10 @@ export const IPC = {
   CODEFLOW_AUGMENT_PROGRESS: 'codeflow:augment-progress',
   CODEFLOW_AUGMENT_LOAD: 'codeflow:augment-load',
   CODEFLOW_AUGMENT_CLEAR: 'codeflow:augment-clear',
+  CODEFLOW_AUGMENT_FUNCTIONS: 'codeflow:augment-functions',
+  CODEFLOW_AUGMENT_FUNCTIONS_CANCEL: 'codeflow:augment-functions-cancel',
+  CODEFLOW_AUGMENT_FUNCTIONS_LOAD: 'codeflow:augment-functions-load',
+  CODEFLOW_AUGMENT_FUNCTIONS_PROGRESS: 'codeflow:augment-functions-progress',
   CODEFLOW_PROGRESS: 'codeflow:progress',
 } as const;
 

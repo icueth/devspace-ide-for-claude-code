@@ -5,6 +5,28 @@ All notable changes to DevSpace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.3.25] — 2026-05-04
+
+### Added
+- **Function-level Augment with Claude.** The Augment button now routes to
+  a function-graph-aware backend when the user is in Functions mode.
+  Claude reads function nodes (id format `<file>::<name>:<line>`) and
+  emits soft edges for relationships static name-resolution can't see:
+  callbacks/handlers passed as args, plugin or hook registries dispatched
+  by string, interface method dispatch (`repo.Save()` vs `UserRepo.Save`
+  / `OrderRepo.Save`), and pub/sub event coupling at the function level.
+  Tightly scoped tools (`Read Glob Grep`) — no Bash, no WebFetch.
+- **Function augment persisted to disk.** Soft edges save to
+  `.claude/codeflow/function-augment.json` keyed by graph fingerprint and
+  auto-restore on the next Functions-mode build. Re-opening the project
+  doesn't re-spend Claude tokens to re-derive the same overlay.
+
+### Changed
+- Soft-only function nodes (functions reached only by Claude-inferred
+  edges, not the static call graph) survive the *Hide orphans* filter.
+  Their degree on the static graph alone would be 0 and they'd disappear;
+  now degree is computed against the augmented graph.
+
 ## [0.3.24] — 2026-05-04
 
 ### Fixed
@@ -302,6 +324,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   project, persistent tmux-backed CLI panes, multi-agent Team mode, and
   Claude Code account/files settings.
 
+[0.3.25]: https://github.com/icueth/devspace-ide-for-claude-code/releases/tag/v0.3.25
 [0.3.24]: https://github.com/icueth/devspace-ide-for-claude-code/releases/tag/v0.3.24
 [0.3.23]: https://github.com/icueth/devspace-ide-for-claude-code/releases/tag/v0.3.23
 [0.3.22]: https://github.com/icueth/devspace-ide-for-claude-code/releases/tag/v0.3.22

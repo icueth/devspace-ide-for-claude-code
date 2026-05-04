@@ -3,10 +3,13 @@ import { ipcMain, shell } from 'electron';
 import { buildFunctionGraph } from '@main/services/CodeflowFunctionAnalyzer';
 import { buildGraph } from '@main/services/CodeflowGraphAnalyzer';
 import {
+  augmentFunctionGraph,
   augmentGraph,
   cancelAugment,
+  cancelFunctionAugment,
   clearAugment,
   loadAugment,
+  loadFunctionAugment,
 } from '@main/services/CodeflowGraphAugment';
 import {
   analyzeProject,
@@ -118,6 +121,40 @@ export function registerCodeflowIpc(): void {
   ipcMain.handle(IPC.CODEFLOW_AUGMENT_CLEAR, async (_event, projectPath: string) => {
     await clearAugment(projectPath);
   });
+
+  ipcMain.handle(
+    IPC.CODEFLOW_AUGMENT_FUNCTIONS,
+    async (event, projectPath: string, graph) => {
+      const send = (message: string) => {
+        if (!event.sender.isDestroyed()) {
+          event.sender.send(IPC.CODEFLOW_AUGMENT_FUNCTIONS_PROGRESS, {
+            projectPath,
+            message,
+          });
+        }
+      };
+      try {
+        const softEdges = await augmentFunctionGraph(projectPath, graph, send);
+        return { ok: true as const, softEdges };
+      } catch (err) {
+        return { ok: false as const, error: (err as Error).message };
+      }
+    },
+  );
+
+  ipcMain.handle(
+    IPC.CODEFLOW_AUGMENT_FUNCTIONS_CANCEL,
+    async (_event, projectPath: string) => {
+      cancelFunctionAugment(projectPath);
+    },
+  );
+
+  ipcMain.handle(
+    IPC.CODEFLOW_AUGMENT_FUNCTIONS_LOAD,
+    async (_event, projectPath: string, fingerprint: string) => {
+      return loadFunctionAugment(projectPath, fingerprint);
+    },
+  );
 }
 
 // Allow the FS IPC layer to forward watcher events here without importing

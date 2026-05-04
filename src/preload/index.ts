@@ -137,6 +137,22 @@ const api = {
       ipcRenderer.invoke(IPC.CODEFLOW_AUGMENT_LOAD, projectPath, fingerprint),
     augmentClear: (projectPath: string) =>
       ipcRenderer.invoke(IPC.CODEFLOW_AUGMENT_CLEAR, projectPath),
+    augmentFunctions: (projectPath: string, graph: unknown) =>
+      ipcRenderer.invoke(IPC.CODEFLOW_AUGMENT_FUNCTIONS, projectPath, graph),
+    augmentFunctionsCancel: (projectPath: string) =>
+      ipcRenderer.invoke(IPC.CODEFLOW_AUGMENT_FUNCTIONS_CANCEL, projectPath),
+    augmentFunctionsLoad: (projectPath: string, fingerprint: string) =>
+      ipcRenderer.invoke(IPC.CODEFLOW_AUGMENT_FUNCTIONS_LOAD, projectPath, fingerprint),
+    onAugmentFunctionsProgress: (projectPath: string, cb: (msg: string) => void) => {
+      const listener = (
+        _e: unknown,
+        ev: { projectPath: string; message: string },
+      ) => {
+        if (ev.projectPath === projectPath) cb(ev.message);
+      };
+      ipcRenderer.on(IPC.CODEFLOW_AUGMENT_FUNCTIONS_PROGRESS, listener);
+      return () => ipcRenderer.off(IPC.CODEFLOW_AUGMENT_FUNCTIONS_PROGRESS, listener);
+    },
     onAugmentProgress: (projectPath: string, cb: (msg: string) => void) => {
       const listener = (
         _e: unknown,

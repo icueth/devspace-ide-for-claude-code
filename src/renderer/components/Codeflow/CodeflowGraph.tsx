@@ -16,6 +16,7 @@ import { api } from '@renderer/lib/api';
 import { cn } from '@renderer/lib/utils';
 import type {
   CodeflowEdgeKind,
+  CodeflowFunctionEdge,
   CodeflowFunctionGraph,
   CodeflowGraph,
   CodeflowGraphEdge,
@@ -115,6 +116,7 @@ export function CodeflowGraphView({ projectPath, visible }: CodeflowGraphViewPro
   const [hovered, setHovered] = useState<CodeflowGraphNode | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const [softEdges, setSoftEdges] = useState<CodeflowGraphEdge[]>([]);
+  const [softFunctionEdges, setSoftFunctionEdges] = useState<CodeflowFunctionEdge[]>([]);
   const [augmentStatus, setAugmentStatus] = useState<AugmentStatus>('idle');
   const [augmentMessage, setAugmentMessage] = useState<string>('');
   const [augmentError, setAugmentError] = useState<string | null>(null);
@@ -146,7 +148,23 @@ export function CodeflowGraphView({ projectPath, visible }: CodeflowGraphViewPro
     setError(null);
     void api.codeflow
       .buildFunctionGraph(projectPath)
-      .then((fg) => setFunctionGraph(fg))
+      .then(async (fg) => {
+        setFunctionGraph(fg);
+        // Try to restore Claude-augmented soft edges from disk if a
+        // previous run cached them against the same node-id fingerprint.
+        try {
+          const fp = await fingerprintFunctionGraphForLoad(fg);
+          const cached = await api.codeflow.augmentFunctionsLoad(projectPath, fp);
+          if (cached) {
+            setSoftFunctionEdges(cached.softEdges);
+            setAugmentMessage(
+              `Loaded ${cached.softEdges.length} cached function soft edge${cached.softEdges.length === 1 ? '' : 's'} (${formatRelative(cached.savedAt)}).`,
+            );
+          }
+        } catch {
+          /* best-effort cache restore */
+        }
+      })
       .catch((err: Error) => setError(err.message))
       .finally(() => setLoading(false));
   }, [viewMode, projectPath, functionGraph, loading]);
@@ -160,6 +178,7 @@ export function CodeflowGraphView({ projectPath, visible }: CodeflowGraphViewPro
     setSelected(null);
     setHovered(null);
     setSoftEdges([]);
+    setSoftFunctionEdges([]);
     setAugmentStatus('idle');
     setAugmentMessage('');
     setAugmentError(null);
@@ -200,7 +219,47 @@ export function CodeflowGraphView({ projectPath, visible }: CodeflowGraphViewPro
   }, [projectPath]);
 
   const augment = useCallback(async () => {
-    if (!projectPath || !graph || augmentStatus === 'running') return;
+    if (!projectPath || augmentStatus === 'running') return;
+    // Route to the right backend based on which view the user is looking
+    // at — file-level augment uses file paths as node ids, function-level
+    // augment uses `<file>::<name>:<line>` ids. Mixing them produces no
+    // visible edges (the previous "augment in functions mode does nothing"
+    // bug).
+    if (viewMode === 'functions') {
+      if (!functionGraph) return;
+      setAugmentStatus('running');
+      setAugmentMessage('Starting Claude…');
+      setAugmentError(null);
+      const unsub = api.codeflow.onAugmentFunctionsProgress(projectPath, (msg) => {
+        setAugmentMessage(msg);
+      });
+      try {
+        const res = await api.codeflow.augmentFunctions(projectPath, functionGraph);
+        if (res.ok) {
+          setSoftFunctionEdges(res.softEdges);
+          setAugmentStatus('idle');
+          setAugmentMessage(
+            `Added ${res.softEdges.length} function soft edge${res.softEdges.length === 1 ? '' : 's'}.`,
+          );
+        } else if (res.error === 'cancelled') {
+          setAugmentStatus('cancelled');
+          setAugmentMessage('Cancelled.');
+        } else {
+          setAugmentStatus('error');
+          setAugmentError(res.error);
+          setAugmentMessage('');
+        }
+      } catch (err) {
+        setAugmentStatus('error');
+        setAugmentError((err as Error).message);
+        setAugmentMessage('');
+      } finally {
+        unsub();
+      }
+      return;
+    }
+
+    if (!graph) return;
     setAugmentStatus('running');
     setAugmentMessage('Starting Claude…');
     setAugmentError(null);
@@ -230,12 +289,16 @@ export function CodeflowGraphView({ projectPath, visible }: CodeflowGraphViewPro
     } finally {
       unsub();
     }
-  }, [projectPath, graph, augmentStatus]);
+  }, [projectPath, graph, functionGraph, viewMode, augmentStatus]);
 
   const cancelAugment = useCallback(() => {
     if (!projectPath) return;
-    void api.codeflow.augmentCancel(projectPath);
-  }, [projectPath]);
+    if (viewMode === 'functions') {
+      void api.codeflow.augmentFunctionsCancel(projectPath);
+    } else {
+      void api.codeflow.augmentCancel(projectPath);
+    }
+  }, [projectPath, viewMode]);
 
   // Merged graph (static + Claude soft edges) actually rendered by d3.
   // Filtered through edgeKindVisible so the user can hide categories they
@@ -248,8 +311,20 @@ export function CodeflowGraphView({ projectPath, visible }: CodeflowGraphViewPro
       // function node fakes a "folder" of its parent file so colorMode
       // 'folder' clusters per-file. Layer ends up as 'other' for v1 —
       // function-level layer detection isn't meaningful yet.
+      // Augmented set = static + Claude-found soft edges. Soft function
+      // edges always render as 'inferred' (dashed) to distinguish from the
+      // static call graph.
+      const allFunctionEdges = [...functionGraph.edges, ...softFunctionEdges];
+      // Build a degree index off the augmented set so soft-only nodes
+      // (functions reached only by inferred edges) survive the orphan
+      // filter — their degree on the static graph alone would be 0.
+      const augmentedDegree = new Map<string, number>();
+      for (const e of allFunctionEdges) {
+        augmentedDegree.set(e.source, (augmentedDegree.get(e.source) ?? 0) + 1);
+        augmentedDegree.set(e.target, (augmentedDegree.get(e.target) ?? 0) + 1);
+      }
       const visible = hideOrphans
-        ? functionGraph.nodes.filter((n) => n.degree > 0)
+        ? functionGraph.nodes.filter((n) => (augmentedDegree.get(n.id) ?? 0) > 0)
         : functionGraph.nodes;
       const visibleIds = new Set(visible.map((n) => n.id));
       return {
@@ -264,16 +339,17 @@ export function CodeflowGraphView({ projectPath, visible }: CodeflowGraphViewPro
           layer: 'other' as CodeflowLayer,
           size: 0,
           loc: 0,
-          degree: n.degree,
+          degree: augmentedDegree.get(n.id) ?? 0,
         })),
-        edges: functionGraph.edges
+        edges: allFunctionEdges
           .filter((e) => visibleIds.has(e.source) && visibleIds.has(e.target))
           .map((e) => ({
             source: e.source,
             target: e.target,
             weight: e.count,
             // Surface confidence via edge kind so the renderer paints
-            // low-confidence (ambiguous name) edges as dashed/inferred.
+            // low-confidence (ambiguous name OR Claude-inferred) edges
+            // as dashed/inferred.
             kind: e.confidence === 'high' ? 'import' : ('inferred' as const),
           })),
         stats: {
@@ -296,7 +372,7 @@ export function CodeflowGraphView({ projectPath, visible }: CodeflowGraphViewPro
       ...softEdges.filter((e) => edgeKindVisible[e.kind]),
     ];
     return { ...graph, edges: merged };
-  }, [graph, functionGraph, viewMode, hideOrphans, softEdges, edgeKindVisible]);
+  }, [graph, functionGraph, viewMode, hideOrphans, softEdges, softFunctionEdges, edgeKindVisible]);
 
   // Edge index for blast-radius highlighting on selection: maps node id to
   // its connected node ids. Computed off the rendered (filtered+merged)
@@ -572,7 +648,9 @@ export function CodeflowGraphView({ projectPath, visible }: CodeflowGraphViewPro
         augmentStatus={augmentStatus}
         augmentMessage={augmentMessage}
         augmentError={augmentError}
-        softEdgeCount={softEdges.length}
+        softEdgeCount={
+          viewMode === 'functions' ? softFunctionEdges.length : softEdges.length
+        }
         onAugment={() => void augment()}
         onCancelAugment={cancelAugment}
         edgeKindVisible={edgeKindVisible}
@@ -1005,6 +1083,22 @@ function NodeDetails({
       </div>
     </div>
   );
+}
+
+/**
+ * Renderer-side function-graph fingerprint, mirroring the backend's
+ * `fingerprintFunctionGraph`. Stable across runs as long as the set of
+ * node ids is unchanged — used purely to gate the augment cache restore.
+ */
+async function fingerprintFunctionGraphForLoad(
+  graph: CodeflowFunctionGraph,
+): Promise<string> {
+  const ids = graph.nodes.map((n) => n.id).sort().join('\n');
+  const buf = new TextEncoder().encode(ids);
+  const hash = await crypto.subtle.digest('SHA-256', buf);
+  return Array.from(new Uint8Array(hash))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
 }
 
 function formatRelative(ms: number | null | undefined): string {
