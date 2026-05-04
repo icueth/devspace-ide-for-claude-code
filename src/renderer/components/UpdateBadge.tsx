@@ -1,16 +1,15 @@
+import 'highlight.js/styles/github-dark.css';
+
 import * as Dialog from '@radix-ui/react-dialog';
-import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Download, ExternalLink, Loader2, Sparkles, X } from 'lucide-react';
+import ReactMarkdown from 'react-markdown';
+import rehypeHighlight from 'rehype-highlight';
+import remarkGfm from 'remark-gfm';
 
 import { api } from '@renderer/lib/api';
 import { cn } from '@renderer/lib/utils';
 import type { UpdateInfo } from '@shared/types';
-
-const MarkdownPreview = lazy(() =>
-  import('@renderer/components/Editor/MarkdownPreview').then((m) => ({
-    default: m.MarkdownPreview,
-  })),
-);
 
 interface Props {
   // The version string already shown by App header — we mirror it as fallback
@@ -66,11 +65,22 @@ export function UpdateBadge({ fallbackVersion }: Props) {
       <Dialog.Trigger asChild>
         <button
           className={cn(
-            'no-drag inline-flex items-center gap-1 rounded-full px-1.5 text-[10.5px] transition',
+            'no-drag relative inline-flex items-center gap-1 rounded-full px-2 py-[1px] text-[10.5px] transition',
             hasUpdate
-              ? 'border border-accent/60 bg-accent/15 text-accent shadow-[0_0_8px_var(--color-accent-glow)] hover:brightness-110'
+              ? 'border border-accent/60 bg-accent/15 text-accent hover:brightness-110'
               : 'text-text-dim hover:text-text-secondary',
           )}
+          style={
+            hasUpdate
+              ? {
+                  // Pulsing outer glow — keyframes defined inline so we
+                  // don't have to ship a global stylesheet update for one
+                  // badge. Synced to a 1.6s breathe so it reads as "alive,
+                  // do something" without being annoying.
+                  animation: 'devspace-update-pulse 1.6s ease-in-out infinite',
+                }
+              : undefined
+          }
           title={
             hasUpdate
               ? `Update available: ${info?.latest} — click for details`
@@ -79,13 +89,34 @@ export function UpdateBadge({ fallbackVersion }: Props) {
         >
           <span>{versionLabel}</span>
           {hasUpdate && (
-            <span
-              className="ml-0.5 h-1.5 w-1.5 rounded-full bg-accent"
-              style={{ boxShadow: '0 0 4px var(--color-accent-glow)' }}
-            />
+            <span className="relative ml-0.5 inline-flex h-1.5 w-1.5">
+              {/* Radar ping behind the dot — Tailwind's animate-ping
+                  scales from 1 → 2.25 with fading opacity, matching the
+                  classic notification-dot affordance. */}
+              <span className="absolute inset-0 inline-flex animate-ping rounded-full bg-accent opacity-75" />
+              <span
+                className="relative inline-flex h-1.5 w-1.5 rounded-full bg-accent"
+                style={{ boxShadow: '0 0 6px var(--color-accent-glow)' }}
+              />
+            </span>
           )}
         </button>
       </Dialog.Trigger>
+      {/* Inline keyframes so the badge pulse works without touching the
+          global stylesheet. The shadow swing is what reads as "blinking"
+          to the user — opacity alone is too subtle on a small pill. */}
+      <style>{`
+        @keyframes devspace-update-pulse {
+          0%, 100% {
+            box-shadow: 0 0 6px rgba(76, 141, 255, 0.35),
+                        0 0 0 0 rgba(76, 141, 255, 0.45);
+          }
+          50% {
+            box-shadow: 0 0 14px rgba(76, 141, 255, 0.65),
+                        0 0 0 4px rgba(76, 141, 255, 0.0);
+          }
+        }
+      `}</style>
 
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm data-[state=open]:animate-in data-[state=open]:fade-in-0" />
@@ -130,9 +161,9 @@ export function UpdateBadge({ fallbackVersion }: Props) {
             </button>
           </div>
 
-          <div className="min-h-[200px] flex-1 overflow-y-auto">
+          <div className="min-h-[200px] flex-1 overflow-y-auto px-5 py-4">
             {info?.error ? (
-              <div className="px-5 py-4 text-[12px] text-semantic-error">
+              <div className="text-[12px] text-semantic-error">
                 <div className="font-semibold">Couldn't reach GitHub</div>
                 <div className="mt-1 text-[11px] text-text-muted">
                   {info.error}
@@ -143,35 +174,39 @@ export function UpdateBadge({ fallbackVersion }: Props) {
                 Checking for updates…
               </div>
             ) : !hasUpdate ? (
-              <div className="px-5 py-6 text-center text-[12px] text-text-muted">
+              <div className="py-6 text-center text-[12px] text-text-muted">
                 <div className="text-text">You're on the latest version.</div>
                 <div className="mt-1">
                   Last checked {formatRelative(info.checkedAt)}.
                 </div>
               </div>
             ) : (
-              <Suspense
-                fallback={
-                  <div className="flex h-full items-center justify-center text-[11px] text-text-muted">
-                    Loading release notes…
-                  </div>
-                }
-              >
-                <MarkdownPreview
-                  markdown={info.releaseNotes ?? '_No release notes provided._'}
-                />
-              </Suspense>
+              // Render markdown inline so it flows in normal layout — the
+              // editor's MarkdownPreview uses `position: absolute` for the
+              // split-pane case, which collapses inside this dialog body
+              // and breaks scrolling. The prose-invert classes give us
+              // matching typography to the rest of the app.
+              <div className="prose prose-invert max-w-none text-[13px] leading-relaxed prose-headings:mt-4 prose-headings:mb-2 prose-h1:text-[16px] prose-h2:text-[14px] prose-h3:text-[13px] prose-p:my-2 prose-ul:my-2 prose-li:my-0.5 prose-code:rounded prose-code:bg-surface-3 prose-code:px-1 prose-code:py-0.5 prose-code:text-[12px] prose-code:before:content-none prose-code:after:content-none prose-pre:my-3 prose-pre:rounded-md prose-pre:bg-surface-3 prose-pre:p-3 prose-pre:text-[11.5px] prose-a:text-accent prose-a:no-underline hover:prose-a:underline">
+                <ReactMarkdown
+                  remarkPlugins={[remarkGfm]}
+                  rehypePlugins={[[rehypeHighlight, { detect: true }]]}
+                >
+                  {info.releaseNotes ?? '_No release notes provided._'}
+                </ReactMarkdown>
+              </div>
             )}
           </div>
 
           {hasUpdate && (
-            <div className="flex shrink-0 items-center justify-between gap-2 border-t border-border-subtle px-5 py-3">
-              <div className="text-[10.5px] text-text-muted">
+            // Footer wraps when the dialog narrows so neither the unsigned
+            // hint nor the action buttons get squashed off-screen.
+            <div className="flex shrink-0 flex-wrap items-center justify-between gap-x-3 gap-y-2 border-t border-border-subtle px-5 py-3">
+              <div className="min-w-0 flex-1 basis-[220px] text-[10.5px] text-text-muted">
                 DevSpace is unsigned — drag the new app into{' '}
                 <code className="rounded bg-surface-3 px-1">/Applications</code>{' '}
                 replacing the old one.
               </div>
-              <div className="flex items-center gap-1.5">
+              <div className="flex shrink-0 items-center gap-1.5">
                 {info?.releaseUrl && (
                   <button
                     onClick={() => {

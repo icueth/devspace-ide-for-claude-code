@@ -5,6 +5,23 @@ All notable changes to DevSpace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.3.23] — 2026-05-04
+
+### Fixed
+- **Update badge actually pulses now.** The "update available" pill in the
+  header used to just glow statically with a fixed shadow — easy to miss.
+  It now runs a 1.6s breathing pulse on the outer ring plus a `animate-ping`
+  radar pulse behind the dot, so a new release reads as "do something"
+  instead of blending into the background chrome.
+- **Update dialog markdown layout.** The release-notes pane was using the
+  editor's `MarkdownPreview`, which positions its content with
+  `absolute inset-0` for the split-pane case — inside a fixed-height
+  Radix dialog that collapsed to zero height and scrolling broke. Replaced
+  with a direct `ReactMarkdown` render inside the dialog body, with prose-
+  invert styles tuned for the dialog's typography. Also flex-wrapped the
+  footer so the "DevSpace is unsigned" hint and the Download/Release-page
+  buttons don't squash each other on narrow widths.
+
 ## [0.3.22] — 2026-05-04
 
 ### Changed
@@ -271,6 +288,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   project, persistent tmux-backed CLI panes, multi-agent Team mode, and
   Claude Code account/files settings.
 
+[0.3.23]: https://github.com/icueth/devspace-ide-for-claude-code/releases/tag/v0.3.23
 [0.3.22]: https://github.com/icueth/devspace-ide-for-claude-code/releases/tag/v0.3.22
 [0.3.21]: https://github.com/icueth/devspace-ide-for-claude-code/releases/tag/v0.3.21
 [0.3.20]: https://github.com/icueth/devspace-ide-for-claude-code/releases/tag/v0.3.20
