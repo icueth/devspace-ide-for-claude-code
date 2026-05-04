@@ -5,6 +5,29 @@ All notable changes to DevSpace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.3.27] — 2026-05-04
+
+### Added
+- **Function-level analysis now covers every supported language.** Was
+  TS/JS-only via the TypeScript Compiler API, which left Go projects
+  (and every other language) staring at a blank canvas. Added a regex
+  extractor for Go, Python, Rust, Ruby, PHP, Swift, Kotlin, Lua, Scala,
+  Java, C#, Dart, Elixir, Erlang, Haskell, R, Julia, and shell.
+  Per-language regex matches the keyword-led declaration form (`func`,
+  `def`, `fn`, `function`, `fun`, `defp`, etc.); call sites use a
+  universal `\b(\w+)\s*\(` pattern with a multi-language keyword
+  filter so `if`/`for`/`while`/`return`/`new`/`async`/etc. don't emit
+  spurious edges.
+- Comments stripped before regex scan (block, line, hash) so
+  commented-out code doesn't show up as ghost declarations or calls.
+
+### Fixed
+- **Empty-state message in Functions mode.** When the function graph
+  has zero nodes (an unsupported language project, or everything was
+  gitignored) the canvas used to silently render blank — users
+  thought the feature was broken. Now shows a clear card listing the
+  supported languages and suggesting to fall back to Files mode.
+
 ## [0.3.26] — 2026-05-04
 
 ### Fixed
@@ -343,6 +366,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   project, persistent tmux-backed CLI panes, multi-agent Team mode, and
   Claude Code account/files settings.
 
+[0.3.27]: https://github.com/icueth/devspace-ide-for-claude-code/releases/tag/v0.3.27
 [0.3.26]: https://github.com/icueth/devspace-ide-for-claude-code/releases/tag/v0.3.26
 [0.3.25]: https://github.com/icueth/devspace-ide-for-claude-code/releases/tag/v0.3.25
 [0.3.24]: https://github.com/icueth/devspace-ide-for-claude-code/releases/tag/v0.3.24

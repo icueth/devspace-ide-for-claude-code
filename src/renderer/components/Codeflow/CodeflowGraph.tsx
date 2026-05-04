@@ -675,7 +675,7 @@ export function CodeflowGraphView({ projectPath, visible }: CodeflowGraphViewPro
         }
       />
 
-      {(loading || (!graph && !error)) && (
+      {(loading || (!graph && !error && viewMode === 'files')) && (
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center text-text-muted">
           <div className="flex items-center gap-2 rounded-md bg-surface-3/80 px-3 py-2 text-[12px] backdrop-blur">
             <Loader2 size={13} className="animate-spin" />
@@ -683,6 +683,28 @@ export function CodeflowGraphView({ projectPath, visible }: CodeflowGraphViewPro
           </div>
         </div>
       )}
+
+      {/* Friendly empty-state for Functions mode when extraction returns
+          zero nodes — used to be a silently-blank canvas. Tells the user
+          exactly what's missing instead of leaving them guessing. */}
+      {viewMode === 'functions' &&
+        !loading &&
+        functionGraph &&
+        functionGraph.nodes.length === 0 && (
+          <div className="pointer-events-none absolute inset-0 flex items-center justify-center px-8">
+            <div className="pointer-events-auto max-w-[420px] rounded-lg border border-border-subtle bg-surface-3/95 px-4 py-3 text-center text-[12px] backdrop-blur">
+              <div className="text-[13px] font-semibold text-text">
+                No functions detected
+              </div>
+              <div className="mt-1.5 text-text-muted">
+                Function-level extraction supports JS/TS/Go/Python/Rust/Ruby/PHP/Swift/Kotlin/Lua/Java/C#/Dart/Elixir/Erlang/Haskell/R/Julia/shell. Either the project has no source files we recognise, or every code file is gitignored.
+              </div>
+              <div className="mt-2 text-[10.5px] text-text-dim">
+                Switch back to <strong className="text-text-secondary">Files</strong> mode to see the file-level graph.
+              </div>
+            </div>
+          </div>
+        )}
 
       {error && (
         <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 max-w-[480px] rounded-md border border-semantic-error/40 bg-semantic-error/10 px-4 py-3 text-center text-[12px] text-semantic-error">

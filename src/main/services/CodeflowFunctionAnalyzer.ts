@@ -58,11 +58,89 @@ const SKIP_DIRS = new Set([
   '.terraform',    // Terraform plan cache
 ]);
 
-// We only handle JS/TS family for function extraction. Other languages need
-// their own parsers (tree-sitter for Python, etc.) which is a future-phase
-// expansion. Keep the rest invisible to the function graph rather than
-// half-supported.
+// JS/TS family — extracted via the TypeScript Compiler API, full AST.
 const TS_FAMILY = new Set(['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs']);
+const GO_EXT = '.go';
+
+// Per-language regex patterns for **declarations**. Each pattern's first
+// capture group is the function/method name. We pick the keyword-led
+// shapes only so we don't false-positive on every paren-call in a comment.
+// Calls are matched separately with a universal regex below.
+const DECL_PATTERNS: Record<string, RegExp> = {
+  '.go':     /(?:^|\n)\s*func\s+(?:\([^)]+\)\s+)?(\w+)\s*[<(]/g,
+  '.py':     /(?:^|\n)\s*(?:async\s+)?def\s+(\w+)\s*\(/g,
+  '.pyw':    /(?:^|\n)\s*(?:async\s+)?def\s+(\w+)\s*\(/g,
+  '.pyi':    /(?:^|\n)\s*(?:async\s+)?def\s+(\w+)\s*\(/g,
+  '.rs':     /(?:^|\n)\s*(?:pub\s+(?:\([^)]*\)\s+)?)?(?:async\s+)?fn\s+(\w+)\s*[<(]/g,
+  '.rb':     /(?:^|\n)\s*def\s+(?:self\.)?(\w+)/g,
+  '.php':    /(?:^|\n)\s*(?:public|private|protected|static|final|abstract)?\s*(?:public|private|protected|static|final|abstract)?\s*function\s+(\w+)\s*\(/g,
+  '.swift':  /(?:^|\n)\s*(?:public|private|internal|fileprivate|open)?\s*(?:static\s+)?func\s+(\w+)\s*[<(]/g,
+  '.kt':     /(?:^|\n)\s*(?:public|private|protected|internal)?\s*(?:suspend\s+)?fun\s+(?:<[^>]+>\s+)?(\w+)\s*\(/g,
+  '.kts':    /(?:^|\n)\s*(?:public|private|protected|internal)?\s*(?:suspend\s+)?fun\s+(?:<[^>]+>\s+)?(\w+)\s*\(/g,
+  '.scala':  /(?:^|\n)\s*(?:override\s+)?(?:private|protected|public)?\s*def\s+(\w+)\s*[\[(:]/g,
+  '.lua':    /(?:^|\n)\s*(?:local\s+)?function\s+(?:[\w.]+:)?(?:[\w.]+\.)?(\w+)\s*\(/g,
+  '.cs':     /(?:^|\n)\s*(?:public|private|protected|internal|static|virtual|override|abstract|sealed|async)\s+(?:[\w<>,\s\[\]]+)\s+(\w+)\s*\(/g,
+  '.java':   /(?:^|\n)\s*(?:public|private|protected|static|final|abstract|synchronized)\s+(?:[\w<>,\s\[\]]+)\s+(\w+)\s*\(/g,
+  '.dart':   /(?:^|\n)\s*(?:Future<[^>]+>|void|[\w<>,\s\[\]]+?)\s+(\w+)\s*\(/g,
+  '.ex':     /(?:^|\n)\s*defp?\s+(\w+)/g,
+  '.exs':    /(?:^|\n)\s*defp?\s+(\w+)/g,
+  '.erl':    /(?:^|\n)(\w+)\s*\([^)]*\)\s*->/g,
+  '.hs':     /(?:^|\n)(\w+)\s*::/g, // Haskell type signatures
+  '.r':      /(?:^|\n)\s*(\w+)\s*<-\s*function\s*\(/g,
+  '.R':      /(?:^|\n)\s*(\w+)\s*<-\s*function\s*\(/g,
+  '.jl':     /(?:^|\n)\s*function\s+(\w+)\s*\(/g,
+  '.sh':     /(?:^|\n)\s*(?:function\s+)?(\w+)\s*\(\s*\)\s*\{/g,
+  '.bash':   /(?:^|\n)\s*(?:function\s+)?(\w+)\s*\(\s*\)\s*\{/g,
+  '.zsh':    /(?:^|\n)\s*(?:function\s+)?(\w+)\s*\(\s*\)\s*\{/g,
+};
+
+const SUPPORTED_FUNCTION_EXTS = new Set([
+  ...TS_FAMILY,
+  ...Object.keys(DECL_PATTERNS),
+]);
+
+// Universal regex for "what looks like a function call". We filter the
+// matches against language keywords below so `if (...)`, `for (...)`,
+// etc. don't emit edges.
+const CALL_RE = /\b(\w+)\s*\(/g;
+
+// Keywords + common builtins/syntax across the supported languages —
+// anything in this set is dropped from call-site extraction. Better to
+// miss a real call than to emit hundreds of false `if/for/while/...`
+// edges that drown the canvas.
+const LANGUAGE_KEYWORDS = new Set([
+  // Control flow / declarations across most languages
+  'if', 'else', 'elif', 'elsif', 'unless', 'until',
+  'for', 'foreach', 'while', 'do', 'loop', 'repeat',
+  'switch', 'case', 'when', 'match', 'select',
+  'return', 'yield', 'break', 'continue', 'goto', 'pass',
+  'function', 'fun', 'fn', 'def', 'func', 'lambda', 'sub',
+  'class', 'struct', 'enum', 'union', 'interface', 'trait', 'protocol', 'impl',
+  'type', 'typedef', 'typealias', 'using', 'namespace', 'module', 'package',
+  'public', 'private', 'protected', 'internal', 'fileprivate', 'open',
+  'static', 'final', 'abstract', 'virtual', 'override', 'sealed',
+  'const', 'let', 'var', 'val', 'mut', 'volatile', 'readonly',
+  'async', 'await', 'sync', 'spawn', 'go', 'defer',
+  'try', 'catch', 'finally', 'throw', 'throws', 'raise', 'rescue', 'ensure',
+  'new', 'delete', 'sizeof', 'typeof', 'instanceof',
+  'in', 'is', 'as', 'not', 'and', 'or', 'xor',
+  'true', 'false', 'null', 'nil', 'undefined', 'None', 'True', 'False',
+  'this', 'self', 'super', 'me',
+  'with', 'from', 'import', 'export', 'use', 'require',
+  'extends', 'implements', 'inherits',
+  // Stuff that looks like calls but is rarely interesting cross-module
+  'print', 'println', 'printf', 'sprintf', 'fprintf', 'log', 'debug',
+  'error', 'warn', 'info', 'trace', 'fatal',
+  'len', 'length', 'size', 'count', 'cap',
+  'make', 'append', 'copy', 'panic', 'recover',
+  'parseInt', 'parseFloat', 'isNaN', 'isFinite',
+  'String', 'Number', 'Boolean', 'Array', 'Object', 'Map', 'Set', 'Date',
+  'JSON', 'Math', 'Promise', 'RegExp',
+  'console', 'window', 'document', 'process', 'global',
+  // Bash / shell builtins
+  'echo', 'cd', 'cp', 'mv', 'rm', 'mkdir', 'cat', 'grep', 'awk', 'sed',
+  'export', 'source', 'eval', 'exec', 'test',
+]);
 const TS_SCRIPT_KIND: Record<string, ts.ScriptKind> = {
   '.ts': ts.ScriptKind.TS,
   '.tsx': ts.ScriptKind.TSX,
@@ -146,7 +224,7 @@ async function walk(projectRoot: string): Promise<FileMeta[]> {
     for (const rel of tracked) {
       if (out.length >= HARD_FILE_LIMIT) break;
       const ext = path.extname(rel).toLowerCase();
-      if (!TS_FAMILY.has(ext)) continue;
+      if (!SUPPORTED_FUNCTION_EXTS.has(ext)) continue;
       const abs = path.join(projectRoot, rel);
       try {
         const stat = await fs.promises.stat(abs);
@@ -181,7 +259,7 @@ async function walk(projectRoot: string): Promise<FileMeta[]> {
         );
       } else if (entry.isFile()) {
         const ext = path.extname(entry.name).toLowerCase();
-        if (!TS_FAMILY.has(ext)) continue;
+        if (!SUPPORTED_FUNCTION_EXTS.has(ext)) continue;
         const relPath = rel ? `${rel}/${entry.name}` : entry.name;
         try {
           const stat = await fs.promises.stat(path.join(dir, entry.name));
@@ -229,6 +307,7 @@ interface FileExtractResult {
  * is a "best effort" call graph, not a sound one.
  */
 function extractFromFile(rel: string, src: string, ext: string): FileExtractResult {
+  if (!TS_FAMILY.has(ext)) return extractRegexFile(rel, src, ext);
   const kind = TS_SCRIPT_KIND[ext] ?? ts.ScriptKind.TS;
   const sf = ts.createSourceFile(rel, src, ts.ScriptTarget.Latest, true, kind);
 
@@ -578,6 +657,136 @@ async function persistFunctionGraph(
     functionMapMdFile(projectRoot),
     renderFunctionMap(graph, Date.now()),
   );
+}
+
+/**
+ * Generic regex-based extractor used for every non-TS language. Worse
+ * than the AST path on accuracy (it'll occasionally pick up commented-
+ * out declarations and miss multi-line edge cases) but covers Go,
+ * Python, Rust, Ruby, PHP, Swift, Kotlin, Lua, C#, Java, Dart, Elixir,
+ * Erlang, Haskell, R, Julia, and shell with one code path. Cross-file
+ * resolution is name-based (same as TS) — no scope, no type check.
+ *
+ * Caller attribution: each call site is attributed to the most recent
+ * declared function in the same file, which is right for top-down
+ * top-level languages but not great for class methods. We still avoid
+ * intra-file edges so this only matters for the "which caller" panel
+ * accuracy, not for the cross-file graph topology.
+ */
+function extractRegexFile(rel: string, src: string, ext: string): FileExtractResult {
+  const nodes: CodeflowFunctionNode[] = [];
+  const calls: CallSite[] = [];
+  const fileLayer = detectLayer(rel);
+  const moduleId = nodeId(rel, '<module>', 1);
+  let hasModuleCalls = false;
+
+  // Stripping line/block/hash comments out of the source before regex
+  // scanning eliminates a huge chunk of false positives (commented-out
+  // function() calls that the universal CALL_RE would otherwise match).
+  // The replacement preserves newline count so line numbers stay
+  // accurate.
+  const stripped = src
+    .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '))
+    .replace(/\/\/[^\n]*/g, '')
+    .replace(/(^|\n)\s*#[^\n]*/g, (m) => m.replace(/[^\n]/g, ' '));
+
+  // Build a quick line index so a call's offset → 1-based line.
+  const lineStarts: number[] = [0];
+  for (let i = 0; i < stripped.length; i++) {
+    if (stripped[i] === '\n') lineStarts.push(i + 1);
+  }
+  const lineFor = (offset: number): number => {
+    // Binary search would be tighter; linear is fine for our file sizes.
+    let lo = 0;
+    let hi = lineStarts.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >>> 1;
+      if (lineStarts[mid]! <= offset) lo = mid;
+      else hi = mid - 1;
+    }
+    return lo + 1;
+  };
+
+  // Phase 1 — function declarations. Sorted by line so the call-site
+  // attribution loop below can find the nearest preceding declaration
+  // with a simple pointer.
+  const declPattern = DECL_PATTERNS[ext];
+  if (declPattern) {
+    declPattern.lastIndex = 0;
+    let m: RegExpExecArray | null;
+    while ((m = declPattern.exec(stripped)) !== null) {
+      const name = m[1];
+      if (!name) continue;
+      // Skip declarations whose name happens to match a keyword (some
+      // langs let you use keywords as identifiers; rare but possible).
+      if (LANGUAGE_KEYWORDS.has(name)) continue;
+      const line = lineFor(m.index);
+      const id = nodeId(rel, name, line);
+      nodes.push({
+        id,
+        name,
+        file: rel,
+        line,
+        kind: 'function',
+        // Heuristic: declarations starting with capital letter in
+        // public-by-default langs (Go, Rust, PHP) read as exported.
+        // For the rest we set false; cross-file resolution doesn't
+        // gate on this so the only consequence is the renderer's
+        // ranking.
+        exported:
+          (ext === '.go' || ext === '.rs' || ext === '.php') &&
+          /^[A-Z]/.test(name),
+        className: null,
+        layer: fileLayer,
+        degree: 0,
+      });
+    }
+  }
+
+  // Sort declarations by line so we can binary-search "innermost
+  // enclosing function" by line number for each call site.
+  nodes.sort((a, b) => a.line - b.line);
+
+  // Phase 2 — call sites. We attribute each call to the most recent
+  // preceding declaration in the same file, modulo any synthetic
+  // module node when the call appears before the first declaration.
+  CALL_RE.lastIndex = 0;
+  let cm: RegExpExecArray | null;
+  while ((cm = CALL_RE.exec(stripped)) !== null) {
+    const callee = cm[1];
+    if (!callee) continue;
+    if (LANGUAGE_KEYWORDS.has(callee)) continue;
+    if (NOISE_NAMES.has(callee)) continue;
+    const line = lineFor(cm.index);
+    // Find caller — last declaration whose line <= current line. Linear
+    // back-walk; for the typical declaration count per file (<200) this
+    // is cheap.
+    let callerId = moduleId;
+    for (let i = nodes.length - 1; i >= 0; i--) {
+      if (nodes[i]!.line <= line) {
+        callerId = nodes[i]!.id;
+        break;
+      }
+    }
+    if (callerId === moduleId) hasModuleCalls = true;
+    calls.push({ callerId, calleeName: callee, calleeMember: null });
+  }
+
+  if (hasModuleCalls) {
+    nodes.unshift({
+      id: moduleId,
+      name: '<module>',
+      file: rel,
+      line: 1,
+      kind: 'function',
+      exported: false,
+      className: null,
+      layer: fileLayer,
+      degree: 0,
+    });
+  }
+
+  return { nodes, calls };
 }
 
 export async function buildFunctionGraph(
