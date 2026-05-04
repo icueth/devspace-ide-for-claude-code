@@ -101,7 +101,10 @@ const HARD_BYTE_LIMIT = 1 * 1024 * 1024;
  * Drives the default coloring on the graph; the user can switch to "by
  * folder" if they want raw directory clusters instead.
  */
-function detectLayer(rel: string): CodeflowGraphNode['layer'] {
+// Exported so the function-graph analyzer can stamp each function node
+// with its parent file's detected layer — keeps the color "Layer" mode
+// meaningful in Functions view instead of painting everything neutral.
+export function detectLayer(rel: string): CodeflowGraphNode['layer'] {
   const p = rel.toLowerCase();
   if (
     /(^|\/)(test|tests|__tests__|spec|specs)(\/|$)|\.(test|spec)\.[a-z]+$/.test(p)

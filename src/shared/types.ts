@@ -332,6 +332,11 @@ export interface CodeflowFunctionNode {
   exported: boolean;
   // Containing class for kind='method'. Empty otherwise.
   className: string | null;
+  // Detected architectural layer of the parent file (ui, api, service,
+  // util, …). Lets the renderer's "Layer" color mode actually mean
+  // something in Functions view — without this every node ended up as
+  // 'other' and the canvas was a sea of grey.
+  layer: CodeflowLayer;
   // (in + out) cross-file call count, filled after edges are resolved so
   // the renderer can size nodes / filter low-degree ones without
   // re-walking edges.

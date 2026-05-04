@@ -5,6 +5,25 @@ All notable changes to DevSpace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.3.26] — 2026-05-04
+
+### Fixed
+- **Functions viz now actually shows colors and edges.** Three issues
+  conspired to make Functions mode look blank:
+  1. Every function node was stamped `layer: 'other'` in the renderer
+     conversion, so the *Layer* color toggle (the default) painted the
+     entire graph the same neutral grey. Function nodes now carry the
+     parent file's detected layer (ui / api / service / util / …)
+     computed in the analyzer, so the Layer toggle is meaningful.
+  2. The static-import edge color was `rgba(255,255,255,0.12)` — fine
+     against ~50 file nodes, effectively invisible against thousands of
+     function nodes. Bumped to `rgba(255,255,255,0.35)` so cross-file
+     calls register as actual lines.
+  3. The d3 position cache wasn't cleared when flipping view modes, so
+     function nodes inherited coordinates from file ids that didn't
+     match anything — half the graph spawned at (0, 0) and never moved.
+     Cache now wipes on `viewMode` change for a fresh layout.
+
 ## [0.3.25] — 2026-05-04
 
 ### Added
@@ -324,6 +343,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   project, persistent tmux-backed CLI panes, multi-agent Team mode, and
   Claude Code account/files settings.
 
+[0.3.26]: https://github.com/icueth/devspace-ide-for-claude-code/releases/tag/v0.3.26
 [0.3.25]: https://github.com/icueth/devspace-ide-for-claude-code/releases/tag/v0.3.25
 [0.3.24]: https://github.com/icueth/devspace-ide-for-claude-code/releases/tag/v0.3.24
 [0.3.23]: https://github.com/icueth/devspace-ide-for-claude-code/releases/tag/v0.3.23

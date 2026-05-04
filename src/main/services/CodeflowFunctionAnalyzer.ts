@@ -4,6 +4,7 @@ import * as path from 'node:path';
 import { promisify } from 'node:util';
 import * as ts from 'typescript';
 
+import { detectLayer } from '@main/services/CodeflowGraphAnalyzer';
 import { createLogger } from '@shared/logger';
 
 const execFileAsync = promisify(execFile);
@@ -241,6 +242,9 @@ function extractFromFile(rel: string, src: string, ext: string): FileExtractResu
   let hasModuleCalls = false;
   // Stack of innermost enclosing function-node ids during traversal.
   const fnStack: string[] = [];
+  // Cache the file's detected layer once — it's the same for every node
+  // we produce from this file.
+  const fileLayer = detectLayer(rel);
 
   function pushNode(
     name: string,
@@ -258,6 +262,7 @@ function extractFromFile(rel: string, src: string, ext: string): FileExtractResu
       kind,
       exported,
       className,
+      layer: fileLayer,
       degree: 0,
     });
     return id;
@@ -388,6 +393,7 @@ function extractFromFile(rel: string, src: string, ext: string): FileExtractResu
       kind: 'function',
       exported: false,
       className: null,
+      layer: fileLayer,
       degree: 0,
     });
   }

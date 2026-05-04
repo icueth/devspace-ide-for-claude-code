@@ -57,11 +57,13 @@ function folderColor(folder: string): string {
   return `hsl(${hue} 65% 60%)`;
 }
 
-// Soft-edge palette — each kind gets a distinct color so the user can read
-// the augmented overlay at a glance. Stays softer than the static-import
-// stroke so the original graph still reads as the "spine".
+// Soft-edge palette — each kind gets a distinct color so the user can
+// read the augmented overlay at a glance. The `import` stroke is brighter
+// than it used to be because at function-graph density the old
+// `rgba(255,255,255,0.12)` was effectively invisible against the dark
+// canvas.
 const EDGE_KIND_COLORS: Record<CodeflowEdgeKind, string> = {
-  import: 'rgba(255,255,255,0.12)',
+  import: 'rgba(255,255,255,0.35)',
   event: '#fb923c',     // orange — pub/sub
   plugin: '#22d3ee',    // cyan — registries / loaders
   config: '#fbbf24',    // yellow — configuration coupling
@@ -184,6 +186,16 @@ export function CodeflowGraphView({ projectPath, visible }: CodeflowGraphViewPro
     setAugmentError(null);
     positionCacheRef.current = new Map();
   }, [projectPath]);
+
+  // viewMode flip wipes the position cache too — file-graph node ids and
+  // function-graph node ids share zero overlap, so any cached coordinates
+  // are useless for the new mode and we want a fresh layout instead of
+  // restoring zero positions for everything.
+  useEffect(() => {
+    positionCacheRef.current = new Map();
+    setSelected(null);
+    setHovered(null);
+  }, [viewMode]);
 
   const reload = useCallback(async () => {
     if (!projectPath) return;
@@ -336,7 +348,11 @@ export function CodeflowGraphView({ projectPath, visible }: CodeflowGraphViewPro
           name: n.className ? `${n.className}.${n.name}` : n.name,
           folder: n.file,
           ext: '',
-          layer: 'other' as CodeflowLayer,
+          // Stamp the layer detected for the parent file so the Layer
+          // color toggle paints functions by the file's architectural
+          // role (ui / api / service / util / …) instead of a uniform
+          // grey from the previous `'other'` placeholder.
+          layer: n.layer,
           size: 0,
           loc: 0,
           degree: augmentedDegree.get(n.id) ?? 0,
