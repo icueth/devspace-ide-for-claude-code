@@ -96,6 +96,15 @@ export function CodeflowGraphView({ projectPath, visible }: CodeflowGraphViewPro
   const svgRef = useRef<SVGSVGElement | null>(null);
   const simRef = useRef<d3.Simulation<SimNode, SimEdge> | null>(null);
   const zoomRef = useRef<d3.ZoomBehavior<SVGSVGElement, unknown> | null>(null);
+  // Cache the last known x/y of every node we've ever simulated so a graph
+  // rebuild (e.g. after augment, or a soft-edge filter toggle) re-uses the
+  // settled layout instead of re-randomizing every position. Without this,
+  // augment-with-claude would visually "lose" the static layout: nodes
+  // scatter, edges look like they disappeared until the new simulation
+  // reaches steady state ~3 seconds later.
+  const positionCacheRef = useRef<Map<string, { x: number; y: number }>>(
+    new Map(),
+  );
   const [graph, setGraph] = useState<CodeflowGraph | null>(null);
   const [functionGraph, setFunctionGraph] = useState<CodeflowFunctionGraph | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>('files');
@@ -142,7 +151,9 @@ export function CodeflowGraphView({ projectPath, visible }: CodeflowGraphViewPro
       .finally(() => setLoading(false));
   }, [viewMode, projectPath, functionGraph, loading]);
 
-  // Project change invalidates current graph and any augment overlay.
+  // Project change invalidates current graph, augment overlay, and the
+  // position cache (otherwise the new project's nodes would inherit
+  // coordinates picked for completely unrelated files).
   useEffect(() => {
     setGraph(null);
     setFunctionGraph(null);
@@ -152,6 +163,7 @@ export function CodeflowGraphView({ projectPath, visible }: CodeflowGraphViewPro
     setAugmentStatus('idle');
     setAugmentMessage('');
     setAugmentError(null);
+    positionCacheRef.current = new Map();
   }, [projectPath]);
 
   const reload = useCallback(async () => {
@@ -323,9 +335,24 @@ export function CodeflowGraphView({ projectPath, visible }: CodeflowGraphViewPro
     const h = Math.max(height, 400);
     svg.attr('viewBox', `0 0 ${w} ${h}`);
 
-    // Clone so d3 can mutate fx/fy/x/y without leaking back into React state.
-    const nodes: SimNode[] = renderedGraph.nodes.map((n) => ({ ...n }));
+    // Clone so d3 can mutate fx/fy/x/y without leaking back into React
+    // state. Restore each node's last known position (if any) so a re-
+    // render (augment finished, edge filter flipped, soft-edge toggle)
+    // continues from the settled layout instead of starting from random.
+    const cache = positionCacheRef.current;
+    const nodes: SimNode[] = renderedGraph.nodes.map((n) => {
+      const prev = cache.get(n.id);
+      return prev ? { ...n, x: prev.x, y: prev.y } : { ...n };
+    });
     const edges: SimEdge[] = renderedGraph.edges.map((e) => ({ ...e }));
+    // If most nodes were already in the cache the layout is essentially
+    // intact and we just need a small alpha kick to incorporate new
+    // edges. Otherwise it's a fresh graph — full alpha to lay it out.
+    const reusedFraction =
+      nodes.length === 0
+        ? 0
+        : nodes.filter((n) => cache.has(n.id)).length / nodes.length;
+    const startAlpha = reusedFraction > 0.5 ? 0.3 : 1;
 
     const root = svg.append('g').attr('class', 'cf-root');
 
@@ -386,9 +413,10 @@ export function CodeflowGraphView({ projectPath, visible }: CodeflowGraphViewPro
         'collision',
         d3.forceCollide<SimNode>().radius((d) => 5 + Math.sqrt(d.degree) * 2),
       )
-      .alpha(1)
+      .alpha(startAlpha)
       .alphaDecay(0.03);
 
+    let tickCount = 0;
     sim.on('tick', () => {
       edgeSel
         .attr('x1', (d) => (d.source as SimNode).x ?? 0)
@@ -396,6 +424,15 @@ export function CodeflowGraphView({ projectPath, visible }: CodeflowGraphViewPro
         .attr('x2', (d) => (d.target as SimNode).x ?? 0)
         .attr('y2', (d) => (d.target as SimNode).y ?? 0);
       nodeSel.attr('cx', (d) => d.x ?? 0).attr('cy', (d) => d.y ?? 0);
+      // Cheap snapshot every ~5 ticks so an unmount-mid-simulation still
+      // hands the next render a near-current layout to resume from.
+      if (++tickCount % 5 === 0) {
+        for (const n of nodes) {
+          if (n.x != null && n.y != null) {
+            cache.set(n.id, { x: n.x, y: n.y });
+          }
+        }
+      }
     });
 
     // Drag interaction lets the user push hubs out of the way to reveal
@@ -432,6 +469,12 @@ export function CodeflowGraphView({ projectPath, visible }: CodeflowGraphViewPro
 
     simRef.current = sim;
     return () => {
+      // Final snapshot so the next mount picks up where we left off.
+      for (const n of nodes) {
+        if (n.x != null && n.y != null) {
+          cache.set(n.id, { x: n.x, y: n.y });
+        }
+      }
       sim.stop();
       simRef.current = null;
       zoomRef.current = null;

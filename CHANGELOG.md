@@ -5,6 +5,20 @@ All notable changes to DevSpace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.3.24] — 2026-05-04
+
+### Fixed
+- **Augment no longer "loses" the file graph layout.** Running *Augment
+  with Claude* used to tear down the d3 simulation and start every node
+  from a random position, so the static layout would visually scatter for
+  ~3 seconds before settling — the user perceived this as "edges
+  disappeared." The graph now keeps a `positionCacheRef` snapshot of every
+  node's last `(x, y)` and restores those positions across re-renders. If
+  most nodes carry over from the previous layout (>50%) the simulation
+  starts at `alpha=0.3` so it just nudges to incorporate new edges
+  instead of re-laying out from chaos. Cache is wiped on project change
+  so unrelated coordinates don't leak across projects.
+
 ## [0.3.23] — 2026-05-04
 
 ### Fixed
@@ -288,6 +302,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   project, persistent tmux-backed CLI panes, multi-agent Team mode, and
   Claude Code account/files settings.
 
+[0.3.24]: https://github.com/icueth/devspace-ide-for-claude-code/releases/tag/v0.3.24
 [0.3.23]: https://github.com/icueth/devspace-ide-for-claude-code/releases/tag/v0.3.23
 [0.3.22]: https://github.com/icueth/devspace-ide-for-claude-code/releases/tag/v0.3.22
 [0.3.21]: https://github.com/icueth/devspace-ide-for-claude-code/releases/tag/v0.3.21
