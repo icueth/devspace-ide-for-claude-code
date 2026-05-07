@@ -2,10 +2,11 @@
 
 > One-window MacBook dev workspace with **Claude Code CLI** at the core.
 
-DevSpace is a native macOS Electron app that wraps your daily coding loop — file
-tree, code editor, terminal, git, and **Claude Code agent teams** — into a
-single window. It uses `tmux` under the hood so every agent and shell pane
-survives app restarts, panel remounts, and accidental Cmd+Q.
+DevSpace is a native macOS Electron app that wraps your daily coding loop —
+file tree, code editor, terminal, git, **Claude Code agent teams**, and a
+live **codebase visualization** powered by Claude — into a single window.
+It uses `tmux` under the hood so every agent and shell pane survives app
+restarts, panel remounts, and accidental Cmd+Q.
 
 <p align="center">
   <a href="https://github.com/icueth/devspace-ide-for-claude-code/releases/latest/download/devspace-0.3.27-arm64.dmg">
@@ -21,56 +22,178 @@ survives app restarts, panel remounts, and accidental Cmd+Q.
   </a>
 </p>
 
-![DevSpace · Claude Code Team mode](img/screenshot-team-mode.png)
+![DevSpace · Codeflow file-level dependency graph](img/screenshot-codeflow-files.png)
 
 ---
 
 ## Highlights
 
-- **Claude Code CLI dock** — first-class panel for `claude`, with persistent
-  tmux-backed sessions per project.
-- **Agent Team mode** — run a multi-agent crew (lead, devs, reviewer, qa) side
-  by side, each in its own pane, color-coded and status-aware.
-- **CodeMirror 6 editor** — tabs, multi-language highlighting, diff view,
-  markdown / image / pdf preview, go-to-line, quick open (`⌘P`).
-- **Project-aware workspace** — pick a parent folder, DevSpace auto-detects
-  every project inside (git, package.json, go.mod, …).
-- **Integrated git** — branch picker, status panel, staged/unstaged diff right
-  next to your editor.
-- **Search-in-project** (`⌘⇧F`), command palette, prompt dialog, account
-  settings.
-- **Resilient PTY** — terminal panes are tmux sessions, so `claude` keeps
-  running even if you close the window.
-- **Configurable tmux + terminal context menu** *(new in 0.3.16)* —
-  Settings → tmux for binary, socket, prefix, history, and mouse mode, plus
-  right-click in any terminal for Copy / Paste / split / new window / pick
-  session.
-- **Proper Thai rendering in the terminal** *(new in 0.3.17)* — bundled
-  JetBrains Mono + Sarabun with Unicode 11 width tables, so Thai combining
-  marks stack correctly and leading vowels (เ ไ ใ แ) sit tight to their
-  base consonant.
-- **Codeflow tab** *(new in 0.3.18)* — one click in the header asks Claude
-  Code to read the active project and write `codebase.md` + per-feature
-  `flow-*.md` architecture docs into `.claude/codeflow/`. Renders the
-  generated docs inline with tabs and Markdown preview. Re-analyses
-  incrementally — file changes flip the tab to *Out of date* via the
-  existing FileWatcher; *Force* re-runs from scratch.
+- **Codeflow tab** — a live D3 force-directed dependency graph of your
+  project, with a *Files* mode (one node per file, edges = imports) and a
+  *Functions* mode (one node per function/method, edges = cross-file
+  calls). Color by detected layer (UI / API / Service / Util / …) or by
+  parent file. Click any node for blast-radius and a callers/callees
+  side panel.
+- **Augment with Claude** — on top of the static graph, ask Claude to
+  surface SOFT edges name-resolution can't see: callbacks passed as
+  args, plugin/handler registries dispatched by string, interface
+  method dispatch, pub/sub event coupling. Soft edges render as
+  dashed kind-colored overlays so the static spine stays readable.
+- **Generate codeflow** — Claude Code headless writes
+  `.claude/codeflow/codebase.md` (architecture overview) and per-feature
+  `flow-*.md` traces directly into the project. A
+  `codeflow-context` skill auto-installs at
+  `.claude/skills/` so any subsequent `claude` session in the project
+  loads the architecture knowledge automatically.
+- **Multi-language support** — file-level graph parses TS/JS via the
+  TypeScript Compiler API and falls back to regex for Python, Go,
+  Rust, Ruby, PHP, Swift, Kotlin, Scala, Java, C#, Dart, Elixir,
+  Erlang, Haskell, R, Julia, Lua, and shell. Imports resolve through
+  `tsconfig.json` `paths` and `vite.config.*` `resolve.alias`. Walks
+  honor your `.gitignore` via `git ls-files` so `vendor/`, `.next/`,
+  `node_modules/`, generated protobuf, etc. stay out automatically.
+- **Claude Code CLI dock** — first-class panel for `claude`, with
+  persistent tmux-backed sessions per project. Multiple chat tabs per
+  project, history survives quit-and-reopen.
+- **Agent Team mode** — run a multi-agent crew (lead, devs, reviewer,
+  qa) side by side, each in its own pane, color-coded and
+  status-aware. Cycle into Team mode with `⌘⇧T`.
+- **CodeMirror 6 editor** — tabs with split-pane support, multi-language
+  highlighting, diff view, markdown / image / pdf preview, go-to-line
+  (`⌘G`), quick open (`⌘P`), new file (`⌘N`).
+- **Project-aware workspace** — pick a parent folder, DevSpace
+  auto-detects every project inside (git, package.json, go.mod, …).
+- **Integrated git** — branch picker, status panel, staged/unstaged diff
+  right next to your editor. File-tree refreshes in realtime via a
+  chokidar watcher.
+- **Search-in-project** (`⌘⇧F`), command palette, prompt dialog,
+  account settings.
+- **Resilient PTY** — terminal panes are tmux sessions on an isolated
+  socket (`-L devspace`), so `claude` keeps running even if you close
+  the window. Right-click any terminal for Copy / Paste / split / new
+  window / pick session, with hint labels showing your *actual* tmux
+  prefix.
+- **Update checker** — header version pill checks GitHub Releases on
+  boot + on focus, pulses when an update is available, click to read
+  the release notes inline and download the new DMG.
+- **Proper Thai rendering in the terminal** — bundled JetBrains Mono +
+  Sarabun with Unicode 11 width tables, so Thai combining marks stack
+  correctly and leading vowels (เ ไ ใ แ) sit tight to their base
+  consonant.
+
+---
+
+## Codeflow
+
+Click **Codeflow** in the header to open a project-scoped tab.
+
+### File-level graph
+
+Each node is a file, each edge is an `import` / `require` / `from … import`
+relationship. Imports resolve through `tsconfig.json` `paths`,
+`vite.config.*` `resolve.alias`, and language-specific conventions, so
+projects on path aliases come out as a fully-connected web instead of
+scattered dots. The walker honors `.gitignore` via `git ls-files`, so a
+Go monorepo with `vendor/` or a Next.js app with `.next/` stays clean
+without per-project configuration.
+
+![Codeflow · file-level graph](img/screenshot-codeflow-files.png)
+
+### Function-level graph
+
+One node per function / method / arrow-function / class declaration. Edges
+are cross-file call sites. Color by parent file (each file a stable hash
+hue, so functions from the same file naturally cluster) or by the
+detected architectural layer. *Hide orphans* on by default to drop
+helpers with no resolved cross-file calls.
+
+![Codeflow · function-level graph](img/screenshot-codeflow-functions.png)
+
+### Augment with Claude
+
+Static name-based resolution can't see callbacks passed as args, plugins
+registered by string, interface method dispatch, or pub/sub event
+coupling. *Augment with Claude* spawns `claude --print` headless against
+your project, with tools restricted to `Read Glob Grep` so even with
+permission checks bypassed Claude can't shell out or hit the network.
+Returns soft edges classified as `event`, `plugin`, `dynamic`, or
+`inferred` and overlays them as kind-colored dashed lines on top of the
+static spine. Persisted to `.claude/codeflow/{augment,function-augment}.json`
+keyed by graph fingerprint and auto-restored on the next open.
+
+### Generate codeflow
+
+The *Generate codeflow* button runs a separate Claude headless pipeline
+that writes natural-language architecture docs into your project:
+
+- `.claude/codeflow/codebase.md` — overview, stack, layout, key entry
+  points (~150–300 lines).
+- `.claude/codeflow/flow-<slug>.md` — per-feature step-by-step traces
+  with `path:line` references for each step.
+- `.claude/codeflow/function-graph.json` — raw function call graph.
+- `.claude/codeflow/function-map.md` — curated summary: top hubs,
+  cross-subsystem bridges, per-file exported-function index.
+- `.claude/CLAUDE.md` — guarded block pointing Claude Code at the docs.
+- `.claude/skills/codeflow-context/SKILL.md` — skill that activates on
+  architecture / flow questions so the next `claude` session in the
+  project pulls in this knowledge automatically.
+
+---
+
+## Editor
+
+CodeMirror 6 with full TypeScript / JS / Python / Go / Rust / Java / C++ /
+SQL / YAML / Markdown highlighting, plus diff view, markdown / image /
+pdf preview, and a split-pane drag-and-drop layout.
 
 | | |
 |---|---|
-| ![](img/screenshot-multi-agent.png) | ![](img/screenshot-editor-claude.png) |
+| ![Editor split + Claude](img/screenshot-editor-split.png) | ![Editor + Codeflow source](img/screenshot-editor-codeflow-source.png) |
+
+---
+
+## Settings
+
+A unified Settings page browses Claude Code's project + global config
+files (`settings.json`, `settings.local.json`, agents, skills, commands)
+and exposes DevSpace's tmux backend.
+
+### Claude Code config
+
+Browse and edit any file under `~/.claude/` or `.claude/` from inside the
+app, with a syntax-highlighted JSON editor and live validation.
+
+![Settings · Claude account + endpoints](img/screenshot-settings-claude-account.png)
+
+![Settings · Claude config files](img/screenshot-settings-claude-files.png)
+
+### tmux backend
+
+DevSpace runs on an isolated tmux socket so `kill-server` on quit can
+never touch unrelated tmux sessions you have open. Configurable
+binary path, socket name, session prefix, prefix key, mouse mode,
+escape time, history limit, status bar, and "kill sessions on quit"
+toggle.
+
+![Settings · tmux config](img/screenshot-settings-tmux-config.png)
+
+A live session list lets you rename, kill individual sessions, or
+nuke the whole server from one place.
+
+![Settings · tmux sessions](img/screenshot-settings-tmux-sessions.png)
 
 ---
 
 ## Requirements
 
-DevSpace is a thin shell around the Claude Code CLI. Before you launch the
-app, install:
+DevSpace is a thin shell around the Claude Code CLI. Before you launch
+the app, install:
 
 | Tool | Why |
 |---|---|
-| [**Claude Code CLI**](https://docs.anthropic.com/claude-code) | The `claude` binary that powers every agent pane. Without it, panes fall back to a plain shell with a hint. |
+| [**Claude Code CLI**](https://docs.anthropic.com/claude-code) | The `claude` binary that powers every agent pane *and* the Codeflow Augment / Generate pipelines. Without it, panes fall back to a plain shell with a hint and Codeflow's Claude-driven features disable themselves. |
 | [**tmux**](https://github.com/tmux/tmux) | Backs every CLI pane so sessions survive app restarts and Team mode can run multi-pane agent crews. Highly recommended — without tmux you lose persistence. |
+| [**git**](https://git-scm.com/) | Codeflow uses `git ls-files` to honor `.gitignore` when walking the project. Without git the analyzer falls back to a hand-curated skip list (still works, just less precise). |
 
 ### Install on macOS
 
@@ -80,16 +203,17 @@ npm install -g @anthropic-ai/claude-code
 # or
 brew install anthropic/claude/claude
 
-# tmux
-brew install tmux
+# tmux + git (git is usually already installed)
+brew install tmux git
 ```
 
-Verify both are on your `PATH`:
+Verify on your `PATH`:
 
 ```bash
-which claude tmux
+which claude tmux git
 claude --version
 tmux -V
+git --version
 ```
 
 DevSpace also requires **macOS 12+** (Monterey or later).
@@ -101,35 +225,45 @@ DevSpace also requires **macOS 12+** (Monterey or later).
 1. Download the latest **`.dmg`** from
    [Releases](https://github.com/icueth/devspace-ide-for-claude-code/releases/latest).
 2. Open the DMG and drag **DevSpace** into `/Applications`.
-3. The app is **not notarized** (yet). The first time you launch it, macOS may
-   block it — open **System Settings → Privacy & Security** and click
-   **Open Anyway**, or run:
+3. The app is **not notarized** (yet). The first time you launch it,
+   macOS may block it — open **System Settings → Privacy & Security**
+   and click **Open Anyway**, or run:
 
    ```bash
    xattr -dr com.apple.quarantine /Applications/devspace.app
    ```
 
-> Releases ship the **Apple Silicon (`arm64`) DMG only**. Intel Macs are not
-> supported in the current builds.
+> Releases ship the **Apple Silicon (`arm64`) DMG only**. Intel Macs are
+> not supported in the current builds.
+
+The app's header version pill auto-checks for updates against GitHub
+Releases on boot and on focus — when a newer version exists it pulses,
+and clicking it opens release notes inline with a one-click DMG download.
 
 ---
 
 ## Getting started
 
-1. Make sure `claude` and `tmux` are installed (see above).
+1. Make sure `claude`, `tmux`, and `git` are on your `PATH`.
 2. Launch **DevSpace**.
-3. On the welcome screen, click **Open folder…** and pick a parent folder
-   that contains one or more projects.
-4. Pick a project from the sidebar — the editor, terminal, and Claude CLI
-   dock all wire up to that project's directory.
-5. Hit the Claude pane and start chatting. Press **`⌘⇧T`** to cycle into
-   **Team mode** for a multi-agent crew.
+3. On the welcome screen, click **Open folder…** and pick a parent
+   folder that contains one or more projects.
+4. Pick a project from the sidebar — the editor, terminal, and Claude
+   CLI dock all wire up to that project's directory.
+5. Hit the Claude pane and start chatting. Press **`⌘⇧T`** to cycle
+   into **Team mode** for a multi-agent crew.
+6. Click **Codeflow** in the header to see your project's dependency
+   graph. *Generate codeflow* writes architecture docs into
+   `.claude/codeflow/`, then any future `claude` session in the
+   project picks them up automatically through the auto-installed
+   skill.
 
 ### Keyboard shortcuts
 
 | Shortcut | Action |
 |---|---|
 | `⌘P` | Quick open file |
+| `⌘N` | New file (in active project) |
 | `⌘⇧F` | Search in project |
 | `⌘⇧T` | Team mode cycle |
 | `⌘⇧L` | Send selection to Claude |
@@ -159,7 +293,7 @@ pnpm typecheck
 # Build production bundle (no installer)
 pnpm build
 
-# Build a signed-less Apple Silicon DMG into ./release
+# Build a sign-less Apple Silicon DMG into ./release
 pnpm dist:mac:arm64
 ```
 
@@ -167,7 +301,11 @@ pnpm dist:mac:arm64
 
 - **Electron 40** + **electron-vite** + **electron-builder**
 - **React 19** + **TypeScript 5.9** + **TailwindCSS 3** + **Radix UI**
-- **CodeMirror 6** for the editor, **xterm.js** + **node-pty** for terminals
+- **D3 7** for the codeflow force-directed graph
+- **TypeScript Compiler API** for AST-based JS/TS analysis (regex
+  fallback for every other supported language)
+- **CodeMirror 6** for the editor, **xterm.js** + **node-pty** for
+  terminals
 - **simple-git**, **chokidar**, **zustand**
 
 ---
@@ -177,12 +315,16 @@ pnpm dist:mac:arm64
 ```
 src/
 ├── main/          # Electron main process — IPC, services, PTY pool, tmux
-│   ├── ipc/       # Channel handlers (fs, git, pty, tmux, settings, …)
-│   ├── services/  # ClaudeCliLauncher, FileWatcher, GitStatus, Workspace
+│   ├── ipc/       # Channel handlers (fs, git, pty, tmux, codeflow, …)
+│   ├── services/  # ClaudeCliLauncher, FileWatcher, GitStatus, Workspace,
+│   │              # CodeflowService, CodeflowGraphAnalyzer,
+│   │              # CodeflowFunctionAnalyzer, CodeflowGraphAugment,
+│   │              # UpdateService, TmuxConfigService, …
 │   └── utils/     # atomic write, interactive shell env resolution
 ├── preload/       # Context bridge between main + renderer
 ├── renderer/      # React app
-│   ├── components/  # Editor, Sidebar, Bottom, Agents, Dock, Settings, …
+│   ├── components/  # Editor, Sidebar, Bottom, Agents, Dock, Codeflow,
+│   │                # Settings, UpdateBadge, …
 │   ├── state/       # zustand stores
 │   └── lib/         # api wrapper around the IPC bridge
 └── shared/        # Shared types, IPC channel names, logger
