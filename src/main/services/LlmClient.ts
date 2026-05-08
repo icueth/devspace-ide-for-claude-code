@@ -49,6 +49,32 @@ export async function chatComplete(
   }).then((r) => ({ ...r, latencyMs: Date.now() - t0 }));
 }
 
+/**
+ * Strip chain-of-thought wrappers that thinking-mode models (Qwen3,
+ * DeepSeek-R1, Claude with thinking enabled, gpt-oss reasoning mode,
+ * etc.) emit *inside* the content string. Without this:
+ *   - Autocomplete inserts the model's reasoning prose instead of code.
+ *   - Cmd+K's diff view shows `<think>let me analyze the user's…</think>`
+ *     where the replacement should be.
+ *
+ * Servers like vLLM hosting Qwen3 also return reasoning in a separate
+ * `reasoning_content` field (DeepSeek convention). We never read that
+ * field, so it gets dropped automatically — only the inline tag form
+ * needs explicit stripping here.
+ */
+function stripThinkingTags(text: string): string {
+  if (!text) return text;
+  let out = text;
+  // Closed think/thinking blocks anywhere in the text. Multi-line.
+  out = out.replace(/<think(?:ing)?\b[^>]*>[\s\S]*?<\/think(?:ing)?>/gi, '');
+  // Unclosed leading block — happens when max_tokens cuts off mid-reason.
+  // If the entire response is a runaway think block with no answer,
+  // drop everything; the autocomplete path will then surface this as
+  // an empty completion ("model burned its budget on thinking").
+  out = out.replace(/^\s*<think(?:ing)?\b[^>]*>[\s\S]*$/i, '');
+  return out.trim();
+}
+
 async function openaiChat(
   config: LlmConfig,
   messages: ChatMessage[],
@@ -69,6 +95,14 @@ async function openaiChat(
         max_tokens: opts.maxTokens,
         temperature: opts.temperature,
         stream: false,
+        // Qwen-3/Qwen-2.5-Coder vLLM servers honor this to disable
+        // chain-of-thought emission. OpenAI proper, Together, OpenRouter,
+        // Ollama, etc. ignore unknown fields, so it's safe to always
+        // send. Saves output tokens AND avoids the ghost-text pollution
+        // when reasoning tags leak into `content`.
+        enable_thinking: false,
+        // Same idea for `chat_template_kwargs` style servers.
+        chat_template_kwargs: { enable_thinking: false },
       }),
       signal: opts.signal,
     });
@@ -90,10 +124,53 @@ async function openaiChat(
   }
   const d = data as {
     model?: string;
-    choices?: { message?: { content?: string } }[];
+    choices?: {
+      finish_reason?: string;
+      message?: {
+        content?: string;
+        // DeepSeek-R1 / Xiaomi MiMo / some Qwen vLLM servers put chain-
+        // of-thought in this separate field instead of inline in
+        // `content`. We only consume `content`, so reasoning is dropped
+        // automatically — but its presence is the signal we use to
+        // produce a useful diagnostic when content is empty.
+        reasoning_content?: string;
+      };
+    }[];
+    error?: { message?: string; code?: string; type?: string };
   };
-  const text = d.choices?.[0]?.message?.content ?? '';
-  return { text: text.trim(), modelEcho: d.model };
+
+  // Some servers (Xiaomi MiMo's gateway among them) return a JSON
+  // schema-shaped error description on bad routes / model ids with
+  // HTTP 200, so we have to inspect the body rather than rely on
+  // status codes alone.
+  if (d.error?.message) {
+    return { text: '', error: `${d.error.code ?? 'error'}: ${d.error.message}` };
+  }
+  if (!d.choices || d.choices.length === 0) {
+    return {
+      text: '',
+      error: `unexpected response shape — check model id "${config.model}". /v1/models lists the names that work for this server.`,
+    };
+  }
+
+  const choice = d.choices[0]!;
+  const raw = choice.message?.content ?? '';
+  const reasoning = choice.message?.reasoning_content ?? '';
+  const text = stripThinkingTags(raw);
+
+  if (!text && reasoning) {
+    // Reasoning ate the entire token budget. Surface a clear,
+    // actionable error rather than a mystery empty result.
+    const finish = choice.finish_reason ?? '';
+    return {
+      text: '',
+      error:
+        `Model emitted ${reasoning.length}-char reasoning but no answer (${finish}).` +
+        ' Increase Max tokens in Settings → LLM (try 2048+), or use a non-thinking model for fast operations like autocomplete.',
+    };
+  }
+
+  return { text, modelEcho: d.model };
 }
 
 async function anthropicMessages(
@@ -152,9 +229,15 @@ async function anthropicMessages(
     model?: string;
     content?: { type?: string; text?: string }[];
   };
-  const text =
-    d.content?.find((c) => c.type === 'text')?.text ?? '';
-  return { text: text.trim(), modelEcho: d.model };
+  // Anthropic returns thinking as a separate `type: 'thinking'` block
+  // in the content array. We pull only `type: 'text'` blocks, which
+  // implicitly drops thinking. Stripping inline `<think>` tags too in
+  // case the user routed a non-Anthropic model through an Anthropic-
+  // style proxy.
+  const text = stripThinkingTags(
+    d.content?.find((c) => c.type === 'text')?.text ?? '',
+  );
+  return { text, modelEcho: d.model };
 }
 
 function stripTrailingSlash(s: string): string {
@@ -212,8 +295,25 @@ export async function completeForEditor(
   const prefix = req.prefix.slice(-1500);
   const suffix = req.suffix.slice(0, 500);
 
-  const system =
-    'You are a code-completion engine. Given the code BEFORE the cursor and the code AFTER the cursor, output ONLY the code that should be inserted at the cursor. Continue the user\'s style and indentation. Output a SHORT, single useful insertion — usually one line, occasionally a short block. NEVER repeat code that already exists in the prefix or suffix. NEVER output explanations, markdown fences, or commentary. If no useful completion exists, output nothing.';
+  const system = [
+    'You are a code-completion engine inside an IDE. Given the code BEFORE the cursor (`<prefix>`) and the code AFTER the cursor (`<suffix>`), output the code that should be inserted at the cursor.',
+    '',
+    'Hard rules:',
+    '- Output ONLY the raw insertion code. No prose, no commentary, no apology, no introduction.',
+    '- Do NOT wrap output in markdown fences (```), XML tags (<code>, <answer>), or any other delimiters.',
+    '- Do NOT emit `<think>`, `<thinking>`, reasoning, or chain-of-thought. Skip straight to the answer. If you must reason, do it silently — only the final insertion goes in your response.',
+    '- Do NOT repeat code that already exists in the prefix or suffix. The user has already typed the prefix; your output continues from the cursor.',
+    '- Continue the user\'s exact indentation, naming, quote style, and syntax conventions.',
+    '- Prefer SHORT insertions — one line, occasionally a short block. Long completions are rejected by the IDE.',
+    '- If no useful completion exists for this position, output nothing (an empty string).',
+    '',
+    'Good output:',
+    '  prefix: "function add(a, b) {"  → output: "\\n  return a + b;\\n}"',
+    '  prefix: "const items = ["       → output: "1, 2, 3];"',
+    'Bad output (DO NOT DO THIS):',
+    '  "Sure! Here is the completion:\\n```ts\\nreturn a + b;\\n```"',
+    '  "<think>The user wants to add two numbers...</think>return a + b;"',
+  ].join('\n');
 
   const user = [
     `File: ${req.filename}${language ? ` (${language})` : ''}`,
@@ -236,7 +336,13 @@ export async function completeForEditor(
     ],
     {
       signal,
-      maxTokens: 128,
+      // 128 is plenty for the actual code to insert. We bump to whatever
+      // the user configured (default 256), and at least 512 — thinking-
+      // mode models (Xiaomi MiMo, DeepSeek-R1, Qwen3) ALWAYS emit
+      // reasoning regardless of `enable_thinking: false`, and a small
+      // budget gets entirely consumed by their chain-of-thought,
+      // leaving content empty.
+      maxTokens: Math.max(config.maxTokens ?? 256, 512),
       temperature: 0.1,
     },
   );
@@ -279,8 +385,17 @@ export async function editForSelection(
   // 50KB files and we don't want to ship the whole thing each time.
   const context = req.context.slice(0, 6000);
 
-  const system =
-    'You rewrite a snippet of code to satisfy the user\'s instruction. Output ONLY the replacement code — no markdown fences, no commentary, no preamble or trailing text. Preserve the surrounding code\'s style, indentation, and language conventions. The replacement should be a drop-in substitute for the original snippet.';
+  const system = [
+    'You rewrite a snippet of code to satisfy the user\'s instruction. The output is fed directly into a code editor and replaces the original snippet — it must be a clean, drop-in substitute.',
+    '',
+    'Hard rules:',
+    '- Output ONLY the replacement code. No prose, no commentary, no preamble, no trailing explanation.',
+    '- Do NOT wrap output in markdown fences (```), XML tags, or any other delimiters.',
+    '- Do NOT emit `<think>`, `<thinking>`, reasoning, or chain-of-thought. Reason silently if you must — only the final code goes in your response.',
+    '- Preserve the surrounding code\'s style, indentation, naming, and quote conventions.',
+    '- If the instruction asks for a function, return only the function. If it asks for a class method, return only the method.',
+    '- The replacement must be syntactically complete on its own — it slots in where the original lived.',
+  ].join('\n');
 
   const user = [
     `File: ${req.filename}${language ? ` (${language})` : ''}`,
@@ -304,7 +419,16 @@ export async function editForSelection(
       { role: 'system', content: system },
       { role: 'user', content: user },
     ],
-    { signal, maxTokens: 1024, temperature: 0.2 },
+    {
+      signal,
+      // Cmd+K editing is user-triggered and modal-blocking, so we
+      // budget generously: 2048 by default, more if the user has
+      // configured a higher cap. Thinking-mode models need the
+      // headroom — reasoning + a non-trivial replacement easily blows
+      // through 1024.
+      maxTokens: Math.max(config.maxTokens ?? 1024, 2048),
+      temperature: 0.2,
+    },
   );
 
   if (result.error) {

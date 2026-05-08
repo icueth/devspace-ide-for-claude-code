@@ -194,7 +194,10 @@ export function LlmSettings() {
               placeholder="0.2"
             />
           </Field>
-          <Field label="Max tokens" hint="Upper bound on response length per request. 128–256 is plenty for inline completion.">
+          <Field
+            label="Max tokens"
+            hint="Upper bound on response length per request. 256 is plenty for non-thinking models. Thinking-mode models (DeepSeek-R1, Qwen3, Xiaomi MiMo, gpt-oss reasoning, …) emit a long chain-of-thought into a separate reasoning_content field before the answer — they need ≥ 2048 here or autocomplete returns empty because reasoning ate the budget."
+          >
             <Input
               type="number"
               value={String(draft.maxTokens ?? 256)}

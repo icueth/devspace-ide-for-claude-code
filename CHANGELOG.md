@@ -5,6 +5,68 @@ All notable changes to DevSpace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.3.31] — 2026-05-08
+
+### Fixed
+- **Xiaomi MiMo / DeepSeek-R1 / Qwen3 reasoning_content models work
+  now.** These thinking-mode models always emit chain-of-thought into a
+  separate `reasoning_content` field regardless of `enable_thinking:
+  false`, and their reasoning is long enough to consume the entire
+  token budget on small `max_tokens` values. The previous client read
+  only `content` (correct) but didn't notice when content came back
+  empty *because reasoning ate the budget*, so the editor saw empty
+  responses with no explanation.
+  Three changes:
+  1. **Detect reasoning_content presence + empty content**, surface as
+     a clear actionable error: "Model emitted N-char reasoning but no
+     answer (length). Increase Max tokens to 2048+ or use a non-
+     thinking model for autocomplete."
+  2. **Floor max_tokens for autocomplete to 512** and **for ⌘K to
+     2048**, regardless of the user's setting. Thinking models need
+     the headroom; non-thinking models won't ever fill it.
+  3. **Detect server-shaped error responses returned with HTTP 200**
+     (Xiaomi MiMo's gateway does this when the model id is wrong) and
+     surface them as `unexpected response shape — check model id "X".
+     /v1/models lists the names that work for this server.`
+- The model-id check above also catches the more common gotcha:
+  Xiaomi MiMo's `/v1/models` endpoint lists ids in **lowercase**
+  (`mimo-v2.5-pro`), but their docs / website show CamelCase
+  (`MiMo-V2.5-Pro`). Pasted as shown, requests would silently route
+  to the API's "schema" page and the editor saw zero completions.
+
+### Changed
+- LLM Settings → Max tokens hint mentions the thinking-model trap
+  explicitly so users hitting it can self-diagnose.
+
+## [0.3.30] — 2026-05-08
+
+### Fixed
+- **Thinking-mode models work for autocomplete + ⌘K now.** Qwen3,
+  DeepSeek-R1, gpt-oss reasoning, and Claude with extended-thinking all
+  emit chain-of-thought wrapped in `<think>…</think>` (or as a
+  `type: 'thinking'` block on Anthropic) before the actual answer. The
+  previous client passed the entire content through, so autocomplete
+  inserted the model's reasoning prose instead of code, and ⌘K's diff
+  view showed the think block where the replacement should be.
+  Three changes:
+  1. Strip `<think>` and `<thinking>` blocks from the response on both
+     the OpenAI and Anthropic paths, including unclosed blocks where
+     `max_tokens` cut the model off mid-reason.
+  2. Send `enable_thinking: false` (and `chat_template_kwargs`
+     equivalent) on every OpenAI-compatible request. Qwen / DeepSeek
+     vLLM servers honor this to skip CoT entirely; OpenAI / Together /
+     OpenRouter / Ollama ignore unknown fields, so it's safe to always
+     send.
+  3. Bump autocomplete's `max_tokens` from 128 → 256 so a model that
+     ignores both of the above still has headroom to emit the answer
+     after its thinking trace.
+
+### Changed
+- Strengthened the autocomplete + ⌘K system prompts. Explicitly forbid
+  `<think>`, markdown fences, XML tags, prose, and chain-of-thought.
+  Inline good-vs-bad examples for the FIM autocomplete prompt so a
+  small model has a concrete shape to match.
+
 ## [0.3.29] — 2026-05-08
 
 ### Added
@@ -411,6 +473,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   project, persistent tmux-backed CLI panes, multi-agent Team mode, and
   Claude Code account/files settings.
 
+[0.3.31]: https://github.com/icueth/devspace-ide-for-claude-code/releases/tag/v0.3.31
+[0.3.30]: https://github.com/icueth/devspace-ide-for-claude-code/releases/tag/v0.3.30
 [0.3.29]: https://github.com/icueth/devspace-ide-for-claude-code/releases/tag/v0.3.29
 [0.3.28]: https://github.com/icueth/devspace-ide-for-claude-code/releases/tag/v0.3.28
 [0.3.27]: https://github.com/icueth/devspace-ide-for-claude-code/releases/tag/v0.3.27
