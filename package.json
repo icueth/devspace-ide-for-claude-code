@@ -1,7 +1,7 @@
 {
   "name": "devspace",
   "type": "module",
-  "version": "0.3.28",
+  "version": "0.3.29",
   "description": "One-window MacBook dev workspace with Claude Code CLI at the core",
   "license": "MIT",
   "author": {

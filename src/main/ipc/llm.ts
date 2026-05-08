@@ -10,11 +10,14 @@ import {
   testLlm,
 } from '@main/services/LlmClient';
 import { IPC } from '@shared/ipc-channels';
+import { createLogger } from '@shared/logger';
 import type {
   LlmCompleteRequest,
   LlmConfig,
   LlmEditRequest,
 } from '@shared/types';
+
+const logger = createLogger('IPC:llm');
 
 export function registerLlmIpc(): void {
   ipcMain.handle(IPC.LLM_GET_CONFIG, () => loadLlmConfig());
@@ -34,13 +37,23 @@ export function registerLlmIpc(): void {
     IPC.LLM_COMPLETE,
     async (_e, req: LlmCompleteRequest) => {
       const config = await loadLlmConfig();
-      // Editor-side gates this too, but defense in depth: the autocomplete
-      // path should be a strict no-op when the master switch is off so a
-      // stale renderer can't accidentally burn tokens.
-      if (!config.autocompleteEnabled || !config.apiKey) {
-        return { text: '', latencyMs: 0 };
+      if (!config.autocompleteEnabled) {
+        logger.warn(
+          'autocomplete request received but master switch is OFF — open Settings → LLM and toggle "Editor inline autocomplete"',
+        );
+        return { text: '', latencyMs: 0, error: 'autocomplete disabled' };
       }
-      return completeForEditor(config, req);
+      if (!config.apiKey) {
+        logger.warn(
+          'autocomplete request received but no API key configured — fill it in Settings → LLM',
+        );
+        return { text: '', latencyMs: 0, error: 'no api key' };
+      }
+      const res = await completeForEditor(config, req);
+      logger.info(
+        `complete: model=${config.model} prefix=${req.prefix.length}b reply=${res.text.length}b latency=${res.latencyMs}ms${res.error ? ` error=${res.error}` : ''}`,
+      );
+      return res;
     },
   );
 

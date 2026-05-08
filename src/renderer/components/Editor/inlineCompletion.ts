@@ -140,46 +140,81 @@ const completionFetchPlugin = (opts: FetchPluginOpts) =>
         // Only schedule a new fetch on user-driven changes, not on our
         // own setSuggestion dispatches.
         if (!update.docChanged && !update.selectionSet) return;
-        if (!opts.isEnabled()) return;
+        if (!opts.isEnabled()) {
+          // Log once per disabled-update so the user can confirm via
+          // DevTools that the master switch isn't reaching the editor.
+          // Cheap — only fires on doc changes, not every render frame.
+          console.debug('[devspace.autocomplete] skipped: master switch off');
+          return;
+        }
         if (this.timer) clearTimeout(this.timer);
-        this.timer = setTimeout(() => this.fetchCompletion(), opts.getDebounceMs());
+        const debounce = opts.getDebounceMs();
+        console.debug(
+          `[devspace.autocomplete] keystroke — debounce ${debounce}ms`,
+        );
+        this.timer = setTimeout(() => this.fetchCompletion(), debounce);
       }
       async fetchCompletion() {
         if (!opts.isEnabled()) return;
         const view = this.view;
         const state = view.state;
         const cursor = state.selection.main.head;
-        // Grab generous context around the cursor; the main process
-        // truncates further before sending to the LLM.
         const prefix = state.doc.sliceString(Math.max(0, cursor - 4000), cursor);
         const suffix = state.doc.sliceString(
           cursor,
           Math.min(state.doc.length, cursor + 1000),
         );
-        // Heuristic: only fire when there's some context to predict
-        // from — avoids spending tokens on a brand-new empty file.
-        if (prefix.length < 4) return;
+        if (prefix.length < 4) {
+          console.debug(
+            `[devspace.autocomplete] skipped: prefix too short (${prefix.length} chars)`,
+          );
+          return;
+        }
 
         const myId = ++this.seq;
+        console.debug(
+          `[devspace.autocomplete] request #${myId} prefix=${prefix.length}b suffix=${suffix.length}b`,
+        );
         try {
+          const t0 = Date.now();
           const res = await api.llm.complete({
             prefix,
             suffix,
             filename: opts.getFilename(),
           });
-          // Drop stale responses: another keystroke kicked off a newer
-          // request, OR the cursor has since moved.
-          if (myId !== this.seq) return;
-          if (view.state.selection.main.head !== cursor) return;
+          const elapsed = Date.now() - t0;
+          if (myId !== this.seq) {
+            console.debug(
+              `[devspace.autocomplete] dropped stale response #${myId} (now #${this.seq}) after ${elapsed}ms`,
+            );
+            return;
+          }
+          if (view.state.selection.main.head !== cursor) {
+            console.debug(
+              `[devspace.autocomplete] dropped — cursor moved during request #${myId}`,
+            );
+            return;
+          }
           if (!res.text) {
+            // Surface the upstream error reason from the main process
+            // (e.g. "autocomplete disabled", "no api key", "HTTP 429:
+            // rate limit") so DevTools console reads as a clear cause
+            // instead of a mystery empty response.
+            const why = res.error ? ` reason="${res.error}"` : '';
+            console.debug(
+              `[devspace.autocomplete] empty response #${myId} after ${elapsed}ms${why}`,
+            );
             view.dispatch({ effects: setSuggestion.of(null) });
             return;
           }
+          console.debug(
+            `[devspace.autocomplete] suggestion #${myId} (${res.text.length} chars) after ${elapsed}ms: ${JSON.stringify(res.text.slice(0, 80))}`,
+          );
           view.dispatch({
             effects: setSuggestion.of({ text: res.text, anchor: cursor }),
           });
-        } catch {
-          // swallow — autocomplete is best-effort
+        } catch (err) {
+          console.error('[devspace.autocomplete] fetch error', err);
         }
       }
       destroy() {
