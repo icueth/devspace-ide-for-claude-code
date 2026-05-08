@@ -6,6 +6,12 @@ import type {
   CodeflowGraphEdge,
   CodeflowStatus,
   DirEntry,
+  LlmCompleteRequest,
+  LlmCompleteResponse,
+  LlmConfig,
+  LlmEditRequest,
+  LlmEditResponse,
+  LlmTestResult,
   UpdateInfo,
   GitBranches,
   GitDiff,
@@ -97,6 +103,13 @@ export interface DevspaceApi {
     list: (projectPath: string | null) => Promise<SettingsCategory[]>;
     read: (filePath: string) => Promise<string>;
     write: (filePath: string, content: string) => Promise<void>;
+  };
+  llm: {
+    getConfig: () => Promise<LlmConfig>;
+    setConfig: (cfg: LlmConfig) => Promise<LlmConfig>;
+    test: (cfg: LlmConfig) => Promise<LlmTestResult>;
+    complete: (req: LlmCompleteRequest) => Promise<LlmCompleteResponse>;
+    edit: (req: LlmEditRequest) => Promise<LlmEditResponse>;
   };
   codeflow: {
     getStatus: (projectPath: string) => Promise<CodeflowStatus>;
@@ -218,6 +231,13 @@ function makeStubApi(): DevspaceApi {
       list: () => Promise.resolve([]),
       read: notWired('settings.read'),
       write: notWired('settings.write'),
+    },
+    llm: {
+      getConfig: notWired('llm.getConfig'),
+      setConfig: notWired('llm.setConfig'),
+      test: notWired('llm.test'),
+      complete: () => Promise.resolve({ text: '', latencyMs: 0 }),
+      edit: () => Promise.resolve({ text: '', latencyMs: 0 }),
     },
     codeflow: {
       getStatus: notWired('codeflow.getStatus'),

@@ -9,7 +9,7 @@ It uses `tmux` under the hood so every agent and shell pane survives app
 restarts, panel remounts, and accidental Cmd+Q.
 
 <p align="center">
-  <a href="https://github.com/icueth/devspace-ide-for-claude-code/releases/latest/download/devspace-0.3.27-arm64.dmg">
+  <a href="https://github.com/icueth/devspace-ide-for-claude-code/releases/latest/download/devspace-0.3.28-arm64.dmg">
     <img alt="Download for macOS — Apple Silicon" src="https://img.shields.io/badge/Download%20for%20macOS-Apple%20Silicon%20(M1%2FM2%2FM3%2FM4)-000?style=for-the-badge&logo=apple&logoColor=white" />
   </a>
   &nbsp;
@@ -264,6 +264,8 @@ and clicking it opens release notes inline with a one-click DMG download.
 |---|---|
 | `⌘P` | Quick open file |
 | `⌘N` | New file (in active project) |
+| `⌘K` | Edit selection with AI (uses LLM from Settings) |
+| `Tab` | Accept inline autocomplete (when ghost text shown) |
 | `⌘⇧F` | Search in project |
 | `⌘⇧T` | Team mode cycle |
 | `⌘⇧L` | Send selection to Claude |

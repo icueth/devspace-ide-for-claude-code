@@ -1,3 +1,89 @@
+// ─── LLM config ─────────────────────────────────────────────────────────────
+//
+// Generic LLM settings used by features outside the Claude Code CLI dock —
+// editor inline-autocomplete is the first consumer, but the same config
+// will back future Cmd+K refactor, commit-message generation, and
+// anything else that wants a chat-completion endpoint. Two protocols:
+//
+//   - openai     — POST {baseUrl}/chat/completions with Authorization:
+//                  Bearer ... header. Compatible with OpenAI proper, plus
+//                  the dozens of OpenAI-API-compatible servers (Azure
+//                  OpenAI, OpenRouter, LM Studio, Ollama with the
+//                  /v1 endpoint, vLLM, llama.cpp server, Together.ai, …).
+//   - anthropic  — POST {baseUrl}/v1/messages with x-api-key + an
+//                  anthropic-version header.
+//
+// `apiKey` is stored on disk in plaintext under ~/.devspace/llm-config.json
+// — same security posture as tmux-config and the Claude Code CLI's own
+// settings.json. We don't pretend to do secret management.
+export type LlmProvider = 'openai' | 'anthropic';
+
+export interface LlmConfig {
+  provider: LlmProvider;
+  baseUrl: string;       // e.g. "https://api.openai.com/v1" or "https://api.anthropic.com"
+  apiKey: string;        // pasted by user; empty string = unconfigured
+  model: string;         // e.g. "gpt-4o-mini", "claude-haiku-4-5"
+  // Optional knobs — undefined = use sane defaults at the call site.
+  temperature?: number;
+  maxTokens?: number;
+  // Master switch for the editor's inline ghost-text autocomplete.
+  // Off by default so users opt in and aren't surprised by latency or
+  // token spend.
+  autocompleteEnabled: boolean;
+  // Debounce window before triggering an autocomplete request after the
+  // last keystroke. Lower = more responsive, more LLM calls.
+  autocompleteDebounceMs: number;
+}
+
+export interface LlmTestResult {
+  ok: boolean;
+  latencyMs?: number;
+  // Echoed model name from the response when the API surfaces it — lets
+  // the user catch typos (asked for `gpt-4o`, server returned `gpt-3.5`).
+  modelEcho?: string;
+  // First few tokens of the response so the user sees a real answer
+  // came back, not just a 200.
+  sample?: string;
+  error?: string;
+}
+
+export interface LlmCompleteRequest {
+  // Code before the cursor (truncated to last ~N chars on the renderer).
+  prefix: string;
+  // Code after the cursor.
+  suffix: string;
+  // Filename to give Claude/GPT context about the language.
+  filename: string;
+}
+
+export interface LlmCompleteResponse {
+  // Empty string when the model returned no usable completion.
+  text: string;
+  latencyMs: number;
+  error?: string;
+}
+
+// Cmd+K-style "edit this selection" round trip. Sends the user's
+// selection plus an instruction; expects a drop-in replacement back.
+export interface LlmEditRequest {
+  selection: string;
+  instruction: string;
+  // The whole file's code as context — helps the model match style /
+  // imports / surrounding patterns. Truncated on the renderer to ~6KB.
+  context: string;
+  filename: string;
+  // Where the selection sits in the file (line range), purely for
+  // surfacing in the diff header — model doesn't see this.
+  startLine: number;
+  endLine: number;
+}
+
+export interface LlmEditResponse {
+  text: string;
+  latencyMs: number;
+  error?: string;
+}
+
 export interface UpdateInfo {
   // Currently-running app version (no leading "v").
   current: string;

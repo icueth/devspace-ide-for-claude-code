@@ -76,6 +76,14 @@ export const IPC = {
   SETTINGS_READ: 'settings:read',
   SETTINGS_WRITE: 'settings:write',
 
+  // Generic LLM (separate from Claude Code CLI) — used by editor
+  // autocomplete and any future Cmd+K-style refactor / commit-msg gen.
+  LLM_GET_CONFIG: 'llm:get-config',
+  LLM_SET_CONFIG: 'llm:set-config',
+  LLM_TEST: 'llm:test',
+  LLM_COMPLETE: 'llm:complete',
+  LLM_EDIT: 'llm:edit',
+
   // Codeflow — codebase visualization + Claude-generated architecture docs
   CODEFLOW_GET_STATUS: 'codeflow:get-status',
   CODEFLOW_ANALYZE: 'codeflow:analyze',

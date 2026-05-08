@@ -112,6 +112,13 @@ const api = {
     write: (filePath: string, content: string) =>
       ipcRenderer.invoke(IPC.SETTINGS_WRITE, filePath, content),
   },
+  llm: {
+    getConfig: () => ipcRenderer.invoke(IPC.LLM_GET_CONFIG),
+    setConfig: (cfg: unknown) => ipcRenderer.invoke(IPC.LLM_SET_CONFIG, cfg),
+    test: (cfg: unknown) => ipcRenderer.invoke(IPC.LLM_TEST, cfg),
+    complete: (req: unknown) => ipcRenderer.invoke(IPC.LLM_COMPLETE, req),
+    edit: (req: unknown) => ipcRenderer.invoke(IPC.LLM_EDIT, req),
+  },
   codeflow: {
     getStatus: (projectPath: string) =>
       ipcRenderer.invoke(IPC.CODEFLOW_GET_STATUS, projectPath),

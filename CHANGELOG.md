@@ -5,6 +5,39 @@ All notable changes to DevSpace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.3.28] — 2026-05-08
+
+### Added
+- **Generic LLM connection in Settings.** New *LLM* tab under
+  Settings configures a non-Claude language-model endpoint used by
+  features outside the Claude Code CLI dock. Picks a protocol
+  (OpenAI-compatible or Anthropic), URL, API key, model, temperature,
+  max tokens. **Test connection** button does a 1-token round-trip
+  against the configured endpoint and shows latency + the server's
+  echoed model id + a snippet of the actual response, so typos
+  ("asked for `gpt-4o`, server returned `gpt-3.5`") catch immediately.
+  Persisted to `~/.devspace/llm-config.json`. Compatible servers
+  include OpenAI proper, Azure OpenAI, OpenRouter, Together.ai,
+  Ollama (`/v1`), LM Studio, vLLM, and llama.cpp server.
+- **Editor inline ghost-text autocomplete.** Cursor-IDE-style
+  completion in the CodeMirror editor: pause typing, the editor
+  debounces, sends prefix + suffix + filename to the configured LLM,
+  and renders the suggestion as faded italic ghost text after the
+  cursor. **Tab** accepts; **Esc** dismisses; any other keystroke
+  invalidates the suggestion. Off by default; flip the master switch
+  in the LLM settings tab to opt in. Adjustable debounce window so
+  users on a slow remote endpoint can tune the tradeoff.
+- **`⌘K` — edit selection with AI.** Select code, press ⌘K, and a
+  dialog opens with a prompt input. Type an instruction ("convert to
+  async/await", "extract a helper", "fix the bug") and submit; the
+  configured LLM receives the selection plus ~6KB of surrounding file
+  context as a style hint and returns a drop-in replacement, which the
+  dialog renders as a side-by-side diff. **Enter** accepts the
+  replacement, **Esc** cancels. Always available regardless of the
+  inline-autocomplete master switch — ⌘K is explicitly user-triggered.
+- New IPC channels `llm:get-config`, `llm:set-config`, `llm:test`,
+  `llm:complete`, `llm:edit` and matching preload bridge entries.
+
 ## [0.3.27] — 2026-05-04
 
 ### Added
@@ -366,6 +399,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   project, persistent tmux-backed CLI panes, multi-agent Team mode, and
   Claude Code account/files settings.
 
+[0.3.28]: https://github.com/icueth/devspace-ide-for-claude-code/releases/tag/v0.3.28
 [0.3.27]: https://github.com/icueth/devspace-ide-for-claude-code/releases/tag/v0.3.27
 [0.3.26]: https://github.com/icueth/devspace-ide-for-claude-code/releases/tag/v0.3.26
 [0.3.25]: https://github.com/icueth/devspace-ide-for-claude-code/releases/tag/v0.3.25

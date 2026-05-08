@@ -35,6 +35,12 @@ import * as ContextMenu from '@radix-ui/react-context-menu';
 import { Clipboard, Copy, Scissors, Trash2 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 
+import { inlineCompletion } from '@renderer/components/Editor/inlineCompletion';
+import {
+  SelectionEditDialog,
+  type SelectionEditRequest,
+} from '@renderer/components/Editor/SelectionEditDialog';
+import { api } from '@renderer/lib/api';
 import { cn } from '@renderer/lib/utils';
 import {
   getAsyncLanguageDesc,
@@ -68,9 +74,25 @@ export function CodeMirrorPane({
   const languageCompartmentRef = useRef<Compartment | null>(null);
   const fontCompartmentRef = useRef<Compartment | null>(null);
   const wrapCompartmentRef = useRef<Compartment | null>(null);
+  // Latest persisted LLM config — read by the inline-completion extension
+  // on every keystroke. Refreshed on mount + on a window event the
+  // Settings tab dispatches after a successful save so a flipped toggle
+  // takes effect without remounting the editor.
+  const llmConfigRef = useRef<{
+    autocompleteEnabled: boolean;
+    autocompleteDebounceMs: number;
+  } | null>(null);
 
   const fontSize = useLayoutStore((s) => s.editorFontSize);
   const wordWrap = useLayoutStore((s) => s.wordWrap);
+
+  // ⌘K → "edit this selection with AI" dialog. The keymap dispatcher
+  // lives inside the CodeMirror extension list; we keep the request
+  // payload (selection + line range + file context) in React state so
+  // the dialog can render outside the editor without prop drilling.
+  const [editRequest, setEditRequest] = useState<SelectionEditRequest | null>(
+    null,
+  );
 
   // React to font size / word-wrap changes without rebuilding the editor.
   useEffect(() => {
@@ -104,6 +126,33 @@ export function CodeMirrorPane({
     onSaveRef.current = onSave;
   }, [onSave]);
 
+  // Keep the LLM-config ref hot. Hydrate on mount and refresh whenever
+  // the Settings tab announces a save via the `devspace:llm-config-saved`
+  // event so a toggle flip takes effect immediately, no remount needed.
+  useEffect(() => {
+    let cancelled = false;
+    const refresh = async () => {
+      try {
+        const cfg = await api.llm.getConfig();
+        if (!cancelled) {
+          llmConfigRef.current = {
+            autocompleteEnabled: cfg.autocompleteEnabled,
+            autocompleteDebounceMs: cfg.autocompleteDebounceMs,
+          };
+        }
+      } catch {
+        /* leave ref null — autocomplete just stays off */
+      }
+    };
+    void refresh();
+    const handler = () => void refresh();
+    window.addEventListener('devspace:llm-config-saved', handler);
+    return () => {
+      cancelled = true;
+      window.removeEventListener('devspace:llm-config-saved', handler);
+    };
+  }, []);
+
   // Create editor once per tab (path change = new tab).
   useEffect(() => {
     if (!hostRef.current) return;
@@ -114,6 +163,38 @@ export function CodeMirrorPane({
         preventDefault: true,
         run() {
           onSaveRef.current?.();
+          return true;
+        },
+      },
+    ]);
+
+    // ⌘K — pop the AI selection-edit dialog. Bound via CodeMirror's own
+    // keymap so it wins over OS-level shortcuts when the editor has
+    // focus. No-ops without a selection; otherwise grabs ~6KB of file
+    // context around the selection for the model.
+    const editSelectionKey = keymap.of([
+      {
+        key: 'Mod-k',
+        preventDefault: true,
+        run(view) {
+          const sel = view.state.selection.main;
+          if (sel.empty) return false;
+          const selection = view.state.sliceDoc(sel.from, sel.to);
+          // Symmetric ~3KB context around the selection — keeps the
+          // payload bounded on huge files but still gives the model
+          // enough surrounding code to match style and pick up imports.
+          const docText = view.state.doc.toString();
+          const ctxStart = Math.max(0, sel.from - 3000);
+          const ctxEnd = Math.min(docText.length, sel.to + 3000);
+          const startLine = view.state.doc.lineAt(sel.from).number;
+          const endLine = view.state.doc.lineAt(sel.to).number;
+          setEditRequest({
+            selection,
+            context: docText.slice(ctxStart, ctxEnd),
+            filename: path,
+            startLine,
+            endLine,
+          });
           return true;
         },
       },
@@ -147,6 +228,18 @@ export function CodeMirrorPane({
           bracketMatching(),
           closeBrackets(),
           autocompletion(),
+          // LLM-driven inline ghost-text autocomplete. The extension
+          // polls the latest persisted config on every keystroke (cheap
+          // — it's a synchronous lookup of the cached config the main
+          // process pushed at boot via preloadLlmConfig). Toggling the
+          // setting takes effect mid-session without reloading the
+          // editor.
+          inlineCompletion({
+            getFilename: () => path,
+            getEnabled: () => llmConfigRef.current?.autocompleteEnabled ?? false,
+            getDebounceMs: () =>
+              llmConfigRef.current?.autocompleteDebounceMs ?? 500,
+          }),
           highlightSelectionMatches(),
           search({ top: true }),
           syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
@@ -163,6 +256,7 @@ export function CodeMirrorPane({
             indentWithTab,
           ]),
           saveKey,
+          editSelectionKey,
           languageCompartment.of(syncLang ?? []),
           fontCompartment.of(fontThemeFor(initialFont)),
           wrapCompartment.of(initialWrap ? EditorView.lineWrapping : []),
@@ -315,10 +409,33 @@ export function CodeMirrorPane({
     v.focus();
   };
 
+  const acceptEdit = (newText: string) => {
+    const view = viewRef.current;
+    if (!view) return;
+    const sel = view.state.selection.main;
+    // The selection range may have shifted slightly during the round
+    // trip if the user typed elsewhere; the safer move would be to
+    // remember the original from/to and reuse those, but in practice
+    // ⌘K is modal-blocking so the selection is still where it was.
+    view.dispatch({
+      changes: { from: sel.from, to: sel.to, insert: newText },
+      selection: { anchor: sel.from + newText.length },
+    });
+    setEditRequest(null);
+    view.focus();
+  };
+
   // `absolute inset-0` forces the CodeMirror container to track the parent's
   // real dimensions, which is what .cm-scroller needs to enable wheel scroll.
   // A plain `h-full` loses its height when a grandparent has shrinking flex.
   return (
+    <>
+    <SelectionEditDialog
+      open={editRequest !== null}
+      request={editRequest}
+      onCancel={() => setEditRequest(null)}
+      onAccept={acceptEdit}
+    />
     <ContextMenu.Root
       onOpenChange={(open) => {
         if (open) refreshSelection();
@@ -371,6 +488,7 @@ export function CodeMirrorPane({
         </ContextMenu.Content>
       </ContextMenu.Portal>
     </ContextMenu.Root>
+    </>
   );
 }
 

@@ -21,6 +21,7 @@ import { closeBrackets, closeBracketsKeymap } from '@codemirror/autocomplete';
 import { searchKeymap, search } from '@codemirror/search';
 import {
   ArrowLeft,
+  Brain,
   ChevronDown,
   ChevronRight,
   FileText,
@@ -32,6 +33,7 @@ import {
 import { useEffect, useRef, useState } from 'react';
 
 import { AccountSettings } from '@renderer/components/Settings/AccountSettings';
+import { LlmSettings } from '@renderer/components/Settings/LlmSettings';
 import { TmuxSection } from '@renderer/components/Settings/TmuxSection';
 import { api } from '@renderer/lib/api';
 import { cn } from '@renderer/lib/utils';
@@ -39,7 +41,7 @@ import { baseEditorTheme } from '@renderer/utils/codemirrorTheme';
 import { useWorkspaceStore } from '@renderer/state/workspace';
 import type { SettingsCategory, SettingsFile } from '@shared/types';
 
-type Tab = 'account' | 'files' | 'tmux';
+type Tab = 'account' | 'files' | 'tmux' | 'llm';
 
 interface SettingsPageProps {
   onClose: () => void;
@@ -97,6 +99,7 @@ export function SettingsPage({ onClose, initialTab = 'account' }: SettingsPagePr
         {tab === 'account' && <AccountSettings />}
         {tab === 'files' && <FilesSettings />}
         {tab === 'tmux' && <TmuxSection />}
+        {tab === 'llm' && <LlmSettings />}
       </div>
     </section>
   );
@@ -107,6 +110,7 @@ function TabSwitch({ tab, onChange }: { tab: Tab; onChange: (t: Tab) => void }) 
     { id: 'account', label: 'Account', icon: <KeyRound size={11} /> },
     { id: 'files', label: 'Files', icon: <FileText size={11} /> },
     { id: 'tmux', label: 'tmux', icon: <Server size={11} /> },
+    { id: 'llm', label: 'LLM', icon: <Brain size={11} /> },
   ];
   return (
     <div className="flex items-center gap-0.5 rounded-[7px] border border-border bg-surface-2 p-[2px]">
