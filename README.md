@@ -61,6 +61,28 @@ restarts, panel remounts, and accidental Cmd+Q.
 - **CodeMirror 6 editor** — tabs with split-pane support, multi-language
   highlighting, diff view, markdown / image / pdf preview, go-to-line
   (`⌘G`), quick open (`⌘P`), new file (`⌘N`).
+- **AI inline autocomplete** — Cursor-style ghost-text suggestions while
+  you type. Pause on a line, the editor sends prefix + suffix +
+  filename to your configured LLM and renders the reply as faded
+  italic ghost text after the cursor. **Tab** accepts; **Esc**
+  dismisses; any other keystroke invalidates. Off by default; opt in
+  via Settings → LLM. Race-safe via a sequence counter, debounce
+  configurable per-endpoint.
+- **`⌘K` — edit selection with AI** — select code, press ⌘K, type an
+  instruction (*"convert to async/await"*, *"extract a helper"*,
+  *"add error handling"*). The LLM gets your selection plus ~6KB of
+  surrounding file context as a style hint and returns a drop-in
+  replacement, rendered as a side-by-side diff. **Enter** accepts,
+  **Esc** cancels.
+- **Generic LLM connection** — separate from the Claude Code CLI
+  dock. Settings → LLM tab configures any **OpenAI-compatible**
+  endpoint (OpenAI proper, Azure, OpenRouter, Together.ai, Ollama
+  `/v1`, LM Studio, vLLM, llama.cpp, Xiaomi MiMo, …) or **Anthropic**'s
+  `/v1/messages`. Test button does a 1-token round-trip with latency +
+  model-echo + response sample. Auto-strips `<think>` /
+  `<thinking>` blocks and handles `reasoning_content` from
+  thinking-mode models (Qwen3, DeepSeek-R1, MiMo, gpt-oss reasoning,
+  Claude with extended thinking).
 - **Project-aware workspace** — pick a parent folder, DevSpace
   auto-detects every project inside (git, package.json, go.mod, …).
 - **Integrated git** — branch picker, status panel, staged/unstaged diff
@@ -149,6 +171,68 @@ pdf preview, and a split-pane drag-and-drop layout.
 | | |
 |---|---|
 | ![Editor split + Claude](img/screenshot-editor-split.png) | ![Editor + Codeflow source](img/screenshot-editor-codeflow-source.png) |
+
+---
+
+## AI in the editor
+
+Two new surfaces backed by the **generic LLM connection** configured under
+*Settings → LLM* — separate from the Claude Code CLI dock so they can run
+against a fast/cheap model while your interactive Claude pane stays on
+Sonnet/Opus.
+
+### Inline ghost-text autocomplete
+
+Cursor-style fill-in-the-middle. Pause typing for the configured debounce
+window (default 500 ms) and the editor sends prefix + suffix + filename to
+the LLM, then renders the reply as faded italic ghost text after the
+cursor.
+
+- **`Tab`** — accept the suggestion
+- **`Esc`** — dismiss
+- Any other keystroke invalidates the suggestion
+
+Race-safe: stale responses from earlier requests are dropped via a
+sequence counter so the latest typing always wins. Off by default —
+opt in by toggling *Editor inline autocomplete* in *Settings → LLM*.
+
+### `⌘K` — edit selection with AI
+
+Select code, press **`⌘K`**, type a one-line instruction:
+
+- *"convert to async/await"*
+- *"extract a helper"*
+- *"add error handling"*
+- *"explain this in a JSDoc"*
+
+The LLM receives the selection plus ~6 KB of surrounding file context as a
+style hint and returns a drop-in replacement, rendered as a side-by-side
+diff (lazy-loaded `@codemirror/merge`). **`Enter`** accepts, **`Esc`**
+cancels. Always available regardless of the autocomplete master switch.
+
+### Provider compatibility
+
+The Settings → LLM tab supports two protocols out of the box:
+
+- **OpenAI-compatible** — OpenAI proper, Azure OpenAI, OpenRouter,
+  Together.ai, Ollama (`/v1` endpoint), LM Studio, vLLM, llama.cpp
+  server, Xiaomi MiMo, and any other server speaking
+  `/chat/completions`.
+- **Anthropic** — `/v1/messages` directly, separate from your Claude
+  Code CLI subscription.
+
+Both paths handle **thinking-mode models** transparently — chain-of-
+thought emitted as inline `<think>` / `<thinking>` blocks gets stripped,
+and reasoning routed to a separate `reasoning_content` field is
+discarded automatically. When a model burns its entire token budget on
+reasoning before producing an answer, the editor surfaces a clear
+*"increase Max tokens or use a non-thinking model"* hint instead of a
+silent empty result.
+
+Diagnostic logs in DevTools console (prefix `[devspace.autocomplete]`)
+trace every keystroke → request → response on the renderer side, with
+matching main-process logs for headless audit. When ghost text isn't
+appearing, the trail says exactly why.
 
 ---
 
