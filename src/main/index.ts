@@ -24,12 +24,16 @@ app.commandLine.appendSwitch(
   'Translate,MediaRouter,HardwareMediaKeyHandling,GlobalMediaControls',
 );
 
+import { registerAgentsIpc } from '@main/ipc/agents';
 import { registerAppIpc } from '@main/ipc/app';
 import { registerChatIpc } from '@main/ipc/chat';
 import { registerCodeflowIpc } from '@main/ipc/codeflow';
 import { registerFsIpc } from '@main/ipc/fs';
 import { registerGitIpc } from '@main/ipc/git';
 import { registerLlmIpc } from '@main/ipc/llm';
+import { registerMcpIpc } from '@main/ipc/mcp';
+import { registerSkillsIpc } from '@main/ipc/skills';
+import { registerTeamsIpc } from '@main/ipc/teams';
 import { registerPtyIpc } from '@main/ipc/pty';
 import { registerSearchIpc } from '@main/ipc/search';
 import { registerSettingsIpc } from '@main/ipc/settings';
@@ -240,6 +244,10 @@ app.whenReady().then(async () => {
   registerCodeflowIpc();
   registerLlmIpc();
   registerChatIpc();
+  registerAgentsIpc();
+  registerMcpIpc();
+  registerSkillsIpc();
+  registerTeamsIpc();
 
   await createWindow();
 

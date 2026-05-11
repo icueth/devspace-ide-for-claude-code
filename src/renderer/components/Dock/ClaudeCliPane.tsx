@@ -46,11 +46,12 @@ export function ClaudeCliPane({
   );
   const [pid, setPid] = useState<number | null>(null);
   const [exitMsg, setExitMsg] = useState<string | null>(null);
-  // Per-tab toggle between the PTY-backed terminal (default, retains
-  // interactive tool approvals) and the beta chat UI (renders parsed
-  // stream-json, auto-approves tools). Tab-local rather than persisted
-  // because the chat surface is still beta.
-  const [mode, setMode] = useState<CliPaneMode>('terminal');
+  // Per-tab toggle between the chat UI (default — parsed stream-json,
+  // auto-approves tools, prettier output) and the PTY-backed terminal
+  // (alternative — interactive tool approvals, raw output). Tab-local
+  // rather than persisted; users who want their old terminal default
+  // can flip per tab.
+  const [mode, setMode] = useState<CliPaneMode>('chat');
 
   const gitSnapshot = useGitStore((s) => s.byProject[projectId]);
   const branch = gitSnapshot?.branch;
@@ -191,23 +192,20 @@ function ModeToggle({
   return (
     <div className="inline-flex h-[22px] items-stretch rounded-[6px] border border-border-subtle bg-surface-3 text-[10.5px]">
       <ToggleBtn
+        active={mode === 'chat'}
+        onClick={() => onChange('chat')}
+        title="Chat UI — parsed events, auto-approves tools (default)"
+      >
+        <MessageSquare size={10} />
+        <span>Chat</span>
+      </ToggleBtn>
+      <ToggleBtn
         active={mode === 'terminal'}
         onClick={() => onChange('terminal')}
         title="Interactive TTY — per-tool approval, raw output"
       >
         <TerminalIcon size={10} />
         <span>Terminal</span>
-      </ToggleBtn>
-      <ToggleBtn
-        active={mode === 'chat'}
-        onClick={() => onChange('chat')}
-        title="Beta chat UI — parsed events, auto-approves tools"
-      >
-        <MessageSquare size={10} />
-        <span>Chat</span>
-        <span className="ml-0.5 rounded-full bg-accent/20 px-1 text-[9px] text-accent">
-          beta
-        </span>
       </ToggleBtn>
     </div>
   );

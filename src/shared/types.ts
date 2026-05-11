@@ -106,7 +106,15 @@ export type ChatEventKind =
   | 'status'          // 'system:init', 'queued', 'running', etc.
   | 'error'           // upstream error or non-zero exit
   | 'usage'           // final usage payload
-  | 'done';           // terminal event closing the stream
+  | 'done'            // terminal event closing the stream
+  // Team-mode lifecycle. Sequential pipelines emit step_start / step_end
+  // around each agent's spawn; text_delta and tool_use events between
+  // them carry a `stepIndex` so the renderer can route them into the
+  // right step block. Orchestrator mode doesn't emit team_step_* — its
+  // sub-agent dispatches show up as ordinary tool_use(name="Task") that
+  // the renderer renders inline.
+  | 'team_step_start'
+  | 'team_step_end';
 
 export interface ChatEvent {
   kind: ChatEventKind;
@@ -124,6 +132,12 @@ export interface ChatEvent {
   // usage
   inputTokens?: number;
   outputTokens?: number;
+  // Team mode — index into ChatMessage.teamRun.steps the event targets.
+  // When undefined, the event targets the message as a whole (normal /
+  // orchestrator modes).
+  stepIndex?: number;
+  // For team_step_start: which agent slug the step is dispatching to.
+  stepAgent?: string;
   // Wall-clock ms at which the event was observed in the main process.
   ts: number;
 }
@@ -135,7 +149,8 @@ export interface ChatMessage {
   id: string;
   role: 'user' | 'assistant';
   // Final flattened text after streaming completed. For assistant, also
-  // includes everything except thinking blocks.
+  // includes everything except thinking blocks. In team mode this stays
+  // empty — per-step content lives in teamRun.steps[].content.
   content: string;
   // Tool use + tool result pairs in order. Renderer renders as collapsible
   // "Reading … (3)" pills.
@@ -153,6 +168,43 @@ export interface ChatMessage {
   // Terminal state for the turn — drives the spinner / retry button.
   status: 'streaming' | 'done' | 'error' | 'cancelled';
   error?: string;
+  // Present when this message was produced by a team run (sequential or
+  // parallel). Orchestrator mode does NOT set this — the entire run is
+  // a single claude turn whose Task tool calls already show up in
+  // toolCalls[].
+  teamRun?: TeamRun;
+}
+
+// Snapshot of a team execution attached to one assistant message. Each
+// step mirrors a regular ChatMessage's content/toolCalls but scoped to
+// the agent that produced it. The renderer treats this as the source of
+// truth and ignores message.content when teamRun is present.
+export interface TeamRun {
+  teamId: string;
+  teamName: string;
+  mode: TeamMode;
+  steps: TeamStep[];
+}
+
+export interface TeamStep {
+  agentSlug: string;
+  // Frozen at run start so the renderer can show the agent name even if
+  // the agent file gets renamed / deleted while the run is in flight.
+  agentName: string;
+  status: 'queued' | 'running' | 'done' | 'error' | 'cancelled';
+  content: string;
+  toolCalls: Array<{
+    id: string;
+    name: string;
+    input: Record<string, unknown>;
+    result?: string;
+    isError?: boolean;
+  }>;
+  thinking?: string;
+  startedAt?: number;
+  finishedAt?: number;
+  error?: string;
+  usage?: { input: number; output: number };
 }
 
 export interface ChatThread {
@@ -162,6 +214,36 @@ export interface ChatThread {
   createdAt: number;
   updatedAt: number;
   messages: ChatMessage[];
+  // Per-thread config override. When unset, the project-level default
+  // from .devspace/chat-config.json is used. Lets the user pin a
+  // different model / system prompt / tool set to a specific thread.
+  config?: ChatConfig;
+}
+
+// Chat-time configuration applied to the claude --print spawn. Every
+// field is optional: undefined / empty means "let claude use its own
+// default" (i.e. the flag isn't passed). Persisted at the project level
+// in `<projectRoot>/.devspace/chat-config.json` and optionally per-thread
+// inside ChatThread.config.
+export interface ChatConfig {
+  // Maps to `--model <id>`. Accepts the alias (`sonnet`, `opus`, `haiku`)
+  // or a fully-qualified model id like `claude-sonnet-4-5`.
+  model?: string;
+  // Maps to `--append-system-prompt "..."`. Preserves Claude's built-in
+  // system prompt and tacks ours on the end (vs. `--system-prompt` which
+  // replaces it wholesale — too disruptive for everyday use).
+  systemPromptAppend?: string;
+  // Maps to `--allowed-tools "Read,Edit,Bash,…"`. Empty / undefined = all
+  // tools allowed. Non-empty list = ONLY these tools are usable.
+  allowedTools?: string[];
+  // Maps to `--disallowed-tools "Bash"`. Subtractive layer on top of the
+  // allow-list. Use to block a specific dangerous tool without re-listing
+  // every other tool in `allowedTools`.
+  disallowedTools?: string[];
+  // Escape hatch for power users — raw CLI tokens appended verbatim at
+  // the end of the args array. Each entry is one shell token, so a flag
+  // and its value are two entries: ['--max-turns', '20'].
+  extraArgs?: string[];
 }
 
 export interface ChatSendRequest {
@@ -174,6 +256,171 @@ export interface ChatSendRequest {
   // always 'claude'; the adapter table is the seam for future codex /
   // gemini / etc. backends.
   agent?: 'claude';
+  // Per-turn config override. Highest precedence: turn > thread > project
+  // default. Mostly unused by the UI today (the gear drawer writes to
+  // project or thread config); reserved for slash-palette commands like
+  // `/model X` that swap a single turn without persisting.
+  config?: ChatConfig;
+  // When set, the turn runs in team mode using this team's config from
+  // <projectRoot>/.devspace/teams.json. Behavior depends on team.mode:
+  //   • orchestrator — single claude turn with system prompt instructing
+  //     claude to dispatch to listed agents via the Task tool
+  //   • sequential   — N claude spawns chained, each step's output
+  //     feeding the next step's prompt as context
+  //   • parallel     — (not implemented in this pass)
+  teamId?: string;
+}
+
+// ─── Teams (multi-agent workflows) ──────────────────────────────────────────
+//
+// A team coordinates multiple sub-agents to handle one user task.
+// Stored at <projectRoot>/.devspace/teams.json so teams are per-project
+// (different repos want different review squads).
+//
+// Three execution modes:
+//   • orchestrator — claude itself decides who to call via the Task tool
+//   • sequential   — DevSpace runs each member in order, piping outputs
+//   • parallel     — DevSpace fans out, then runs an aggregator pass
+//
+// Members reference agent files by slug. The agent's frontmatter
+// (description, model, tools) is read at turn time so renaming an agent
+// or changing its model is picked up automatically.
+
+export type TeamMode = 'orchestrator' | 'sequential' | 'parallel';
+export type TeamScope = 'global' | 'project';
+
+export interface TeamMember {
+  // Matches AgentDef.slug — the basename of <slug>.md in ~/.claude/agents/.
+  agentSlug: string;
+  // Optional per-member model override (otherwise uses the agent's own
+  // frontmatter, otherwise claude's default).
+  modelOverride?: string;
+}
+
+export interface TeamDef {
+  id: string;
+  name: string;
+  mode: TeamMode;
+  members: TeamMember[];
+  // Parallel only — slug of the member that produces the final merged
+  // summary. Falls back to the first member when unset.
+  aggregatorSlug?: string;
+  // Computed at read time from which file the team lives in. NOT
+  // persisted in JSON — set by TeamsService.listTeams so the renderer
+  // can render scope badges without an extra round-trip.
+  //   • 'global'  — ~/.devspace/teams.json (available to every project)
+  //   • 'project' — <projectPath>/.devspace/teams.json (this repo only)
+  scope?: TeamScope;
+}
+
+// ─── MCP servers (Model Context Protocol — claude tool extensibility) ──────
+//
+// Claude Code reads MCP server definitions from a few places:
+//   • ~/.claude.json — global, shared key `mcpServers` inside a much
+//     larger JSON document; we have to surgically read/write that one key
+//     without disturbing anything else.
+//   • <projectRoot>/.mcp.json — per-project, this file is dedicated to
+//     MCP so we own it entirely.
+//
+// Transport types: stdio (CLI child process, args/env) or http/sse
+// (network endpoint with optional headers).
+
+export type McpScope = 'global' | 'project';
+export type McpTransport = 'stdio' | 'http' | 'sse';
+
+export interface McpStdioServer {
+  transport: 'stdio';
+  command: string;
+  args?: string[];
+  env?: Record<string, string>;
+}
+
+export interface McpHttpServer {
+  transport: 'http' | 'sse';
+  url: string;
+  // Headers as `${ENV_VAR}` references are substituted by claude at
+  // request time (see claude 2.1.128 changelog). Stored verbatim.
+  headers?: Record<string, string>;
+}
+
+export type McpServer = McpStdioServer | McpHttpServer;
+
+export interface McpServerEntry {
+  // Dictionary key used in the on-disk `mcpServers` map.
+  name: string;
+  scope: McpScope;
+  // Absolute path to the file this entry lives in (so the user can see
+  // where the change will land before saving).
+  filePath: string;
+  server: McpServer;
+}
+
+// ─── Skills (~/.claude/skills/<name>/SKILL.md, plugin marketplaces) ────────
+//
+// Skills are domain-specific instruction packs Claude loads on demand.
+// On disk: one folder per skill with a SKILL.md file inside.
+//   • ~/.claude/skills/<name>/SKILL.md — user-authored
+//   • <projectRoot>/.claude/skills/<name>/SKILL.md — per-project
+//   • ~/.claude/plugins/marketplaces/<mkt>/skills/<name>/SKILL.md —
+//     plugin-managed (read-only in the UI; deletes belong to the
+//     marketplace tooling, not us).
+//
+// Frontmatter shape is the same as agents except the tools field is
+// `allowed-tools` (hyphenated, claude's published convention) instead
+// of `tools`.
+
+export type SkillScope = 'global' | 'project' | 'plugin';
+
+export interface SkillDef {
+  path: string;          // absolute path to SKILL.md
+  scope: SkillScope;
+  slug: string;          // folder name
+  name: string;
+  description: string;
+  model?: string;
+  allowedTools?: string[];
+  extra: Record<string, unknown>;
+  body: string;
+  // For plugin-scoped skills, which marketplace/plugin owns this skill.
+  pluginSource?: string;
+}
+
+// ─── Agents (~/.claude/agents/*.md and <project>/.claude/agents/*.md) ───────
+//
+// Claude Code dispatches sub-agents via the Task tool; each agent is a
+// markdown file with YAML frontmatter (name, description, tools, model)
+// plus a body that becomes the agent's system prompt. DevSpace exposes a
+// visual editor for these so users don't have to hand-edit YAML.
+//
+// The on-disk format is the canonical source — we re-parse on every list
+// call so external edits (from `claude` CLI's `/agents`, plain editors,
+// or another DevSpace window) show up immediately.
+
+export type AgentScope = 'global' | 'project';
+
+export interface AgentDef {
+  // Absolute path to the markdown file.
+  path: string;
+  // 'global' lives in ~/.claude/agents/; 'project' lives in
+  // <projectRoot>/.claude/agents/. Both are listed and editable.
+  scope: AgentScope;
+  // Filename without `.md` — drives the slug shown when `name` is empty
+  // or unset.
+  slug: string;
+  // YAML frontmatter — parsed. Unknown fields land in `extra` so we can
+  // preserve them on round-trip without overwriting user customizations.
+  name: string;
+  description: string;
+  model?: string;          // 'sonnet' | 'opus' | 'haiku' | full id
+  tools?: string[];        // ['Read', 'Edit', …] — empty/undefined = all
+  color?: string;          // claude convention for sidebar coloring
+  // Pass-through bucket for keys we don't know about (e.g. user-custom
+  // `skills`, `memory`, etc.). Re-serialized verbatim above the known
+  // fields.
+  extra: Record<string, unknown>;
+  // Markdown body — everything after the closing `---` line. Becomes the
+  // agent's system prompt when dispatched.
+  body: string;
 }
 
 export interface UpdateInfo {

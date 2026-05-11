@@ -92,6 +92,36 @@ export const IPC = {
   CHAT_CANCEL: 'chat:cancel',
   CHAT_SUBSCRIBE: 'chat:subscribe',
   CHAT_EVENT: 'chat:event',
+  CHAT_GET_CONFIG: 'chat:get-config',
+  CHAT_SET_CONFIG: 'chat:set-config',
+  CHAT_UPDATE_THREAD_CONFIG: 'chat:update-thread-config',
+
+  // Agents (~/.claude/agents/*.md and <project>/.claude/agents/*.md)
+  AGENTS_LIST: 'agents:list',
+  AGENTS_READ: 'agents:read',
+  AGENTS_SAVE: 'agents:save',
+  AGENTS_CREATE: 'agents:create',
+  AGENTS_DELETE: 'agents:delete',
+
+  // MCP servers (~/.claude.json + <project>/.mcp.json)
+  MCP_LIST: 'mcp:list',
+  MCP_SAVE: 'mcp:save',
+  MCP_RENAME: 'mcp:rename',
+  MCP_DELETE: 'mcp:delete',
+  MCP_CREATE: 'mcp:create',
+
+  // Skills (~/.claude/skills/<name>/SKILL.md + plugin marketplaces)
+  SKILLS_LIST: 'skills:list',
+  SKILLS_READ: 'skills:read',
+  SKILLS_SAVE: 'skills:save',
+  SKILLS_CREATE: 'skills:create',
+  SKILLS_DELETE: 'skills:delete',
+
+  // Teams (.devspace/teams.json)
+  TEAMS_LIST: 'teams:list',
+  TEAMS_GET: 'teams:get',
+  TEAMS_SAVE: 'teams:save',
+  TEAMS_DELETE: 'teams:delete',
 
   // Codeflow — codebase visualization + Claude-generated architecture docs
   CODEFLOW_GET_STATUS: 'codeflow:get-status',

@@ -1,4 +1,7 @@
 import type {
+  AgentDef,
+  AgentScope,
+  ChatConfig,
   ChatEvent,
   ChatSendRequest,
   ChatThread,
@@ -20,12 +23,18 @@ import type {
   GitDiff,
   GitLogEntry,
   GitSnapshot,
+  McpScope,
+  McpServer,
+  McpServerEntry,
   Project,
   PtyCreateOptions,
   PtySession,
   SearchOptions,
   SearchResult,
   SettingsCategory,
+  SkillDef,
+  TeamDef,
+  TeamScope,
   TmuxConfig,
   TmuxPane,
   TmuxSession,
@@ -41,6 +50,13 @@ export interface DevspaceApi {
   };
   appEvents: {
     onCloseTab: (cb: () => void) => () => void;
+  };
+  files: {
+    // Returns the absolute disk path of a File object. Electron 32+
+    // removed `File.path`; this is the supported replacement that
+    // bridges from preload's webUtils. Returns '' when the file has no
+    // path (synthesized File, paste-from-buffer, etc.).
+    getPathForFile: (file: File) => string;
   };
   workspace: {
     list: () => Promise<{ active: Workspace | null; workspaces: Workspace[] }>;
@@ -121,10 +137,80 @@ export interface DevspaceApi {
     send: (req: ChatSendRequest) => Promise<{ messageId: string }>;
     cancel: (projectPath: string) => Promise<void>;
     subscribe: (projectPath: string) => Promise<void>;
+    getConfig: (projectPath: string) => Promise<ChatConfig>;
+    setConfig: (projectPath: string, cfg: ChatConfig) => Promise<ChatConfig>;
+    updateThreadConfig: (
+      projectPath: string,
+      threadId: string,
+      cfg: ChatConfig | null,
+    ) => Promise<ChatThread>;
     onEvent: (
       projectPath: string,
       cb: (threadId: string, event: ChatEvent) => void,
     ) => () => void;
+  };
+  agents: {
+    list: (projectPath: string | null) => Promise<AgentDef[]>;
+    read: (filePath: string) => Promise<AgentDef>;
+    save: (agent: AgentDef) => Promise<AgentDef>;
+    create: (
+      scope: AgentScope,
+      projectPath: string | null,
+      slug: string,
+    ) => Promise<AgentDef>;
+    delete: (filePath: string) => Promise<void>;
+  };
+  teams: {
+    list: (projectPath: string | null) => Promise<TeamDef[]>;
+    get: (
+      projectPath: string | null,
+      teamId: string,
+    ) => Promise<TeamDef | null>;
+    save: (
+      scope: TeamScope,
+      projectPath: string | null,
+      team: TeamDef,
+    ) => Promise<TeamDef>;
+    delete: (
+      scope: TeamScope,
+      projectPath: string | null,
+      teamId: string,
+    ) => Promise<void>;
+  };
+  skills: {
+    list: (
+      projectPath: string | null,
+      includePlugins?: boolean,
+    ) => Promise<SkillDef[]>;
+    read: (filePath: string) => Promise<SkillDef>;
+    save: (skill: SkillDef) => Promise<SkillDef>;
+    create: (
+      scope: 'global' | 'project',
+      projectPath: string | null,
+      slug: string,
+    ) => Promise<SkillDef>;
+    delete: (filePath: string) => Promise<void>;
+  };
+  mcp: {
+    list: (projectPath: string | null) => Promise<McpServerEntry[]>;
+    save: (entry: McpServerEntry) => Promise<McpServerEntry>;
+    rename: (
+      scope: McpScope,
+      filePath: string,
+      oldName: string,
+      newName: string,
+    ) => Promise<void>;
+    delete: (
+      scope: McpScope,
+      filePath: string,
+      name: string,
+    ) => Promise<void>;
+    create: (
+      scope: McpScope,
+      projectPath: string | null,
+      name: string,
+      server: McpServer,
+    ) => Promise<McpServerEntry>;
   };
   codeflow: {
     getStatus: (projectPath: string) => Promise<CodeflowStatus>;
@@ -182,6 +268,7 @@ function makeStubApi(): DevspaceApi {
       openExternal: () => Promise.resolve(false),
     },
     appEvents: { onCloseTab: () => () => undefined },
+    files: { getPathForFile: () => '' },
     workspace: {
       list: notWired('workspace.list'),
       pickFolder: notWired('workspace.pickFolder'),
@@ -261,7 +348,37 @@ function makeStubApi(): DevspaceApi {
       send: notWired('chat.send'),
       cancel: notWired('chat.cancel'),
       subscribe: notWired('chat.subscribe'),
+      getConfig: () => Promise.resolve({}),
+      setConfig: notWired('chat.setConfig'),
+      updateThreadConfig: notWired('chat.updateThreadConfig'),
       onEvent: () => () => undefined,
+    },
+    agents: {
+      list: () => Promise.resolve([]),
+      read: notWired('agents.read'),
+      save: notWired('agents.save'),
+      create: notWired('agents.create'),
+      delete: notWired('agents.delete'),
+    },
+    mcp: {
+      list: () => Promise.resolve([]),
+      save: notWired('mcp.save'),
+      rename: notWired('mcp.rename'),
+      delete: notWired('mcp.delete'),
+      create: notWired('mcp.create'),
+    },
+    skills: {
+      list: () => Promise.resolve([]),
+      read: notWired('skills.read'),
+      save: notWired('skills.save'),
+      create: notWired('skills.create'),
+      delete: notWired('skills.delete'),
+    },
+    teams: {
+      list: () => Promise.resolve([]),
+      get: () => Promise.resolve(null),
+      save: notWired('teams.save'),
+      delete: notWired('teams.delete'),
     },
     codeflow: {
       getStatus: notWired('codeflow.getStatus'),

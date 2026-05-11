@@ -21,19 +21,27 @@ import { closeBrackets, closeBracketsKeymap } from '@codemirror/autocomplete';
 import { searchKeymap, search } from '@codemirror/search';
 import {
   ArrowLeft,
+  Bot,
   Brain,
   ChevronDown,
   ChevronRight,
   FileText,
   KeyRound,
+  Lightbulb,
+  Plug,
   Save,
   Server,
   Settings as SettingsIcon,
+  Users,
 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 
 import { AccountSettings } from '@renderer/components/Settings/AccountSettings';
+import { AgentsSettings } from '@renderer/components/Settings/AgentsSettings';
 import { LlmSettings } from '@renderer/components/Settings/LlmSettings';
+import { McpSettings } from '@renderer/components/Settings/McpSettings';
+import { SkillsSettings } from '@renderer/components/Settings/SkillsSettings';
+import { TeamsSettings } from '@renderer/components/Settings/TeamsSettings';
 import { TmuxSection } from '@renderer/components/Settings/TmuxSection';
 import { api } from '@renderer/lib/api';
 import { cn } from '@renderer/lib/utils';
@@ -41,7 +49,7 @@ import { baseEditorTheme } from '@renderer/utils/codemirrorTheme';
 import { useWorkspaceStore } from '@renderer/state/workspace';
 import type { SettingsCategory, SettingsFile } from '@shared/types';
 
-type Tab = 'account' | 'files' | 'tmux' | 'llm';
+type Tab = 'account' | 'files' | 'tmux' | 'llm' | 'agents' | 'mcp' | 'skills' | 'teams';
 
 interface SettingsPageProps {
   onClose: () => void;
@@ -100,6 +108,10 @@ export function SettingsPage({ onClose, initialTab = 'account' }: SettingsPagePr
         {tab === 'files' && <FilesSettings />}
         {tab === 'tmux' && <TmuxSection />}
         {tab === 'llm' && <LlmSettings />}
+        {tab === 'agents' && <AgentsSettings />}
+        {tab === 'mcp' && <McpSettings />}
+        {tab === 'skills' && <SkillsSettings />}
+        {tab === 'teams' && <TeamsSettings />}
       </div>
     </section>
   );
@@ -108,6 +120,10 @@ export function SettingsPage({ onClose, initialTab = 'account' }: SettingsPagePr
 function TabSwitch({ tab, onChange }: { tab: Tab; onChange: (t: Tab) => void }) {
   const tabs: Array<{ id: Tab; label: string; icon: React.ReactNode }> = [
     { id: 'account', label: 'Account', icon: <KeyRound size={11} /> },
+    { id: 'agents', label: 'Agents', icon: <Bot size={11} /> },
+    { id: 'teams', label: 'Teams', icon: <Users size={11} /> },
+    { id: 'skills', label: 'Skills', icon: <Lightbulb size={11} /> },
+    { id: 'mcp', label: 'MCP', icon: <Plug size={11} /> },
     { id: 'files', label: 'Files', icon: <FileText size={11} /> },
     { id: 'tmux', label: 'tmux', icon: <Server size={11} /> },
     { id: 'llm', label: 'LLM', icon: <Brain size={11} /> },

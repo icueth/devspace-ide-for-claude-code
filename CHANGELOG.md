@@ -5,6 +5,59 @@ All notable changes to DevSpace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.4.0] — 2026-05-11
+
+### Added
+- **Chat mode for the Claude dock.** Every dock tab now toggles between
+  *Chat* (default) and *Terminal* (the classic PTY pane). Chat mode
+  spawns `claude --print` with stream-json output and renders:
+  - markdown with GFM + `rehype-highlight` code highlighting,
+  - per-tool-call cards (tool name, args summary, result snippet),
+  - file attachments via drag-and-drop or paperclip — paths are
+    inserted as `@<path>` so claude reads them on the next turn,
+  - multi-thread sidebar with per-project persistence to
+    `.devspace/chat/<thread>.json`,
+  - a **Stop** button that kills the in-flight child mid-stream.
+- **Slash palette** in the chat textarea — type `/` to open. Commands:
+  `/new`, `/clear`, `/settings`, `/model <id>`, `/system <text>`,
+  `/team <name>`. These are client-side UI actions; `claude --print`
+  itself doesn't parse slashes.
+- **Chat settings drawer.** Inline popover from the pane header (or
+  `/settings`) for model picker (Sonnet / Opus / Haiku chips or
+  free-form id), system-prompt append, and built-in tool allow-list
+  (Read / Edit / Write / Bash / Glob / Grep / WebFetch / WebSearch /
+  Task / TodoWrite / NotebookEdit). Scope toggle: *Project* default
+  (applies to every new thread) or *Thread* override.
+- **Settings → Agents.** First-class editor for Claude Code
+  sub-agents. Lists every `.md` under `~/.claude/agents/` and
+  `<project>/.claude/agents/`, parses frontmatter into form fields
+  (name, description, model, tools, color) with a markdown body
+  editor. Hand-rolled YAML round-trip preserves unknown keys so
+  external metadata (`skills:`, custom fields) survives a save.
+- **Settings → MCP.** Manage MCP servers across `~/.claude.json`
+  (global) and `<project>/.mcp.json` (project) with both stdio
+  (`command`/`args`/`env`) and HTTP/SSE (`url`/`headers`/`transport`)
+  transports. Global file is read-modify-write with atomic
+  stage-and-rename so a crash mid-save can't corrupt the file claude
+  shares with every other tool.
+- **Settings → Skills.** Manage `SKILL.md`-shaped skills across three
+  scopes — *global* (`~/.claude/skills/<slug>/`), *project*
+  (`<project>/.claude/skills/<slug>/`), and read-only *plugin*
+  (`~/.claude/plugins/marketplaces/`). Frontmatter form
+  (`name`, `description`, `model`, `allowed-tools`) + markdown body.
+  Delete removes the whole skill folder so sibling helpers don't
+  orphan.
+- **Settings → Teams.** Define multi-agent crews invocable from chat
+  with `/team <name>`. Per-team mode (`sequence` or `parallel`),
+  member list with per-member `modelOverride`, optional aggregator
+  agent. Stored as JSON under `~/.devspace/teams.json` or
+  `<project>/.devspace/teams.json` with atomic writes.
+
+### Changed
+- The Claude CLI pane defaults to Chat mode for new tabs. Existing
+  terminal users can flip back per-tab — the toggle is local to the
+  pane, not persisted globally.
+
 ## [0.3.31] — 2026-05-08
 
 ### Fixed

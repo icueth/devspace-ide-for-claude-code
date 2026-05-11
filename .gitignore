@@ -8,6 +8,7 @@ release
 .eslintcache
 .playwright-mcp
 .claude
+.devspace
 
 # Local tooling — mempalace mining, scratch mockups
 mempalace.yaml

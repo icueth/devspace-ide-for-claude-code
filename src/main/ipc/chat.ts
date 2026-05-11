@@ -4,12 +4,15 @@ import {
   cancelActive,
   createThread,
   deleteThread,
+  getProjectConfig,
   listThreads,
   sendMessage,
+  setProjectConfig,
   subscribe,
+  updateThreadConfig,
 } from '@main/services/ChatService';
 import { IPC } from '@shared/ipc-channels';
-import type { ChatSendRequest } from '@shared/types';
+import type { ChatConfig, ChatSendRequest } from '@shared/types';
 
 export function registerChatIpc(): void {
   ipcMain.handle(IPC.CHAT_LIST_THREADS, (event, projectPath: string) => {
@@ -45,4 +48,22 @@ export function registerChatIpc(): void {
   ipcMain.handle(IPC.CHAT_SUBSCRIBE, (event, projectPath: string) => {
     subscribe(projectPath, event.sender);
   });
+
+  ipcMain.handle(IPC.CHAT_GET_CONFIG, (_event, projectPath: string) => {
+    return getProjectConfig(projectPath);
+  });
+
+  ipcMain.handle(
+    IPC.CHAT_SET_CONFIG,
+    (_event, projectPath: string, cfg: ChatConfig) => {
+      return setProjectConfig(projectPath, cfg);
+    },
+  );
+
+  ipcMain.handle(
+    IPC.CHAT_UPDATE_THREAD_CONFIG,
+    (_event, projectPath: string, threadId: string, cfg: ChatConfig | null) => {
+      return updateThreadConfig(projectPath, threadId, cfg);
+    },
+  );
 }
