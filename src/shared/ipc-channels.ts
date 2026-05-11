@@ -84,6 +84,15 @@ export const IPC = {
   LLM_COMPLETE: 'llm:complete',
   LLM_EDIT: 'llm:edit',
 
+  // Chat (CLI-agent rendered as conversation, alternative to PTY dock)
+  CHAT_LIST_THREADS: 'chat:list-threads',
+  CHAT_CREATE_THREAD: 'chat:create-thread',
+  CHAT_DELETE_THREAD: 'chat:delete-thread',
+  CHAT_SEND: 'chat:send',
+  CHAT_CANCEL: 'chat:cancel',
+  CHAT_SUBSCRIBE: 'chat:subscribe',
+  CHAT_EVENT: 'chat:event',
+
   // Codeflow — codebase visualization + Claude-generated architecture docs
   CODEFLOW_GET_STATUS: 'codeflow:get-status',
   CODEFLOW_ANALYZE: 'codeflow:analyze',

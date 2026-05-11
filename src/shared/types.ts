@@ -84,6 +84,98 @@ export interface LlmEditResponse {
   error?: string;
 }
 
+// ─── Chat (CLI agents rendered as conversation, not terminal) ───────────────
+//
+// Spawns `claude --print --output-format stream-json --verbose` per turn,
+// parses the JSONL event stream, and emits a normalized event union the
+// renderer turns into chat bubbles + tool-use pills. Same infrastructure as
+// CodeflowService's runClaude, surfaced through a different IPC channel
+// targeted at long-lived per-project chat threads instead of one-shot doc
+// generation.
+//
+// This is a TEST surface in 0.3.32-beta.x — coexists with the existing
+// PTY-backed Claude CLI dock so users can pick per-tab: TTY (interactive,
+// per-tool approval) or chat (bypass-permissions Yolo, prettier output).
+
+// Lifecycle of a single backend → renderer event during a chat turn.
+export type ChatEventKind =
+  | 'text_delta'      // streaming assistant text
+  | 'thinking_delta'  // claude with thinking enabled (rendered collapsed)
+  | 'tool_use'        // start of a tool call
+  | 'tool_result'     // matching result by toolUseId
+  | 'status'          // 'system:init', 'queued', 'running', etc.
+  | 'error'           // upstream error or non-zero exit
+  | 'usage'           // final usage payload
+  | 'done';           // terminal event closing the stream
+
+export interface ChatEvent {
+  kind: ChatEventKind;
+  // text_delta / thinking_delta carry incremental text
+  text?: string;
+  // tool_use
+  toolName?: string;
+  toolUseId?: string;
+  toolInput?: Record<string, unknown>;
+  // tool_result
+  toolResult?: string;
+  toolIsError?: boolean;
+  // status / error
+  message?: string;
+  // usage
+  inputTokens?: number;
+  outputTokens?: number;
+  // Wall-clock ms at which the event was observed in the main process.
+  ts: number;
+}
+
+// Persisted message. The renderer also keeps an in-memory `streaming`
+// shape that mirrors this but with partial text; once the turn completes,
+// the streaming view is committed into the chat thread.
+export interface ChatMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  // Final flattened text after streaming completed. For assistant, also
+  // includes everything except thinking blocks.
+  content: string;
+  // Tool use + tool result pairs in order. Renderer renders as collapsible
+  // "Reading … (3)" pills.
+  toolCalls: Array<{
+    id: string;
+    name: string;
+    input: Record<string, unknown>;
+    result?: string;
+    isError?: boolean;
+  }>;
+  thinking?: string;
+  createdAt: number;
+  // Token usage if the upstream model reported it.
+  usage?: { input: number; output: number };
+  // Terminal state for the turn — drives the spinner / retry button.
+  status: 'streaming' | 'done' | 'error' | 'cancelled';
+  error?: string;
+}
+
+export interface ChatThread {
+  id: string;
+  projectId: string;
+  title: string;       // first user-message prefix or user-chosen
+  createdAt: number;
+  updatedAt: number;
+  messages: ChatMessage[];
+}
+
+export interface ChatSendRequest {
+  projectId: string;
+  threadId: string;
+  // Just the new user text — backend appends history from the persisted
+  // thread before spawning the agent.
+  text: string;
+  // Optional override of which agent to use for this turn — for now
+  // always 'claude'; the adapter table is the seam for future codex /
+  // gemini / etc. backends.
+  agent?: 'claude';
+}
+
 export interface UpdateInfo {
   // Currently-running app version (no leading "v").
   current: string;

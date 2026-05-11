@@ -119,6 +119,36 @@ const api = {
     complete: (req: unknown) => ipcRenderer.invoke(IPC.LLM_COMPLETE, req),
     edit: (req: unknown) => ipcRenderer.invoke(IPC.LLM_EDIT, req),
   },
+  chat: {
+    listThreads: (projectPath: string) =>
+      ipcRenderer.invoke(IPC.CHAT_LIST_THREADS, projectPath),
+    createThread: (projectPath: string, title?: string) =>
+      ipcRenderer.invoke(IPC.CHAT_CREATE_THREAD, projectPath, title),
+    deleteThread: (projectPath: string, threadId: string) =>
+      ipcRenderer.invoke(IPC.CHAT_DELETE_THREAD, projectPath, threadId),
+    send: (req: unknown) => ipcRenderer.invoke(IPC.CHAT_SEND, req),
+    cancel: (projectPath: string) =>
+      ipcRenderer.invoke(IPC.CHAT_CANCEL, projectPath),
+    subscribe: (projectPath: string) =>
+      ipcRenderer.invoke(IPC.CHAT_SUBSCRIBE, projectPath),
+    onEvent: (
+      projectPath: string,
+      cb: (threadId: string, event: import('@shared/types').ChatEvent) => void,
+    ) => {
+      const listener = (
+        _e: unknown,
+        ev: {
+          projectPath: string;
+          threadId: string;
+          event: import('@shared/types').ChatEvent;
+        },
+      ) => {
+        if (ev.projectPath === projectPath) cb(ev.threadId, ev.event);
+      };
+      ipcRenderer.on(IPC.CHAT_EVENT, listener);
+      return () => ipcRenderer.off(IPC.CHAT_EVENT, listener);
+    },
+  },
   codeflow: {
     getStatus: (projectPath: string) =>
       ipcRenderer.invoke(IPC.CODEFLOW_GET_STATUS, projectPath),

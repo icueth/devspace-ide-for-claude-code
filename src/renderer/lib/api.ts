@@ -1,4 +1,7 @@
 import type {
+  ChatEvent,
+  ChatSendRequest,
+  ChatThread,
   CodeflowDoc,
   CodeflowFunctionEdge,
   CodeflowFunctionGraph,
@@ -110,6 +113,18 @@ export interface DevspaceApi {
     test: (cfg: LlmConfig) => Promise<LlmTestResult>;
     complete: (req: LlmCompleteRequest) => Promise<LlmCompleteResponse>;
     edit: (req: LlmEditRequest) => Promise<LlmEditResponse>;
+  };
+  chat: {
+    listThreads: (projectPath: string) => Promise<ChatThread[]>;
+    createThread: (projectPath: string, title?: string) => Promise<ChatThread>;
+    deleteThread: (projectPath: string, threadId: string) => Promise<void>;
+    send: (req: ChatSendRequest) => Promise<{ messageId: string }>;
+    cancel: (projectPath: string) => Promise<void>;
+    subscribe: (projectPath: string) => Promise<void>;
+    onEvent: (
+      projectPath: string,
+      cb: (threadId: string, event: ChatEvent) => void,
+    ) => () => void;
   };
   codeflow: {
     getStatus: (projectPath: string) => Promise<CodeflowStatus>;
@@ -238,6 +253,15 @@ function makeStubApi(): DevspaceApi {
       test: notWired('llm.test'),
       complete: () => Promise.resolve({ text: '', latencyMs: 0 }),
       edit: () => Promise.resolve({ text: '', latencyMs: 0 }),
+    },
+    chat: {
+      listThreads: () => Promise.resolve([]),
+      createThread: notWired('chat.createThread'),
+      deleteThread: notWired('chat.deleteThread'),
+      send: notWired('chat.send'),
+      cancel: notWired('chat.cancel'),
+      subscribe: notWired('chat.subscribe'),
+      onEvent: () => () => undefined,
     },
     codeflow: {
       getStatus: notWired('codeflow.getStatus'),

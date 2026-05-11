@@ -1,3 +1,4 @@
+import { MessageSquare, Terminal as TerminalIcon } from 'lucide-react';
 import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 
 import { api } from '@renderer/lib/api';
@@ -11,6 +12,16 @@ const RawTerminalView = lazy(() =>
     default: m.RawTerminalView,
   })),
 );
+// New beta chat surface — parsed claude --print stream-json instead of
+// PTY passthrough. Loaded on demand so users who never flip to chat
+// mode don't pay its bundle cost.
+const ChatPanel = lazy(() =>
+  import('@renderer/components/Dock/ChatPanel').then((m) => ({
+    default: m.ChatPanel,
+  })),
+);
+
+type CliPaneMode = 'terminal' | 'chat';
 
 interface ClaudeCliPaneProps {
   projectId: string;
@@ -35,6 +46,11 @@ export function ClaudeCliPane({
   );
   const [pid, setPid] = useState<number | null>(null);
   const [exitMsg, setExitMsg] = useState<string | null>(null);
+  // Per-tab toggle between the PTY-backed terminal (default, retains
+  // interactive tool approvals) and the beta chat UI (renders parsed
+  // stream-json, auto-approves tools). Tab-local rather than persisted
+  // because the chat surface is still beta.
+  const [mode, setMode] = useState<CliPaneMode>('terminal');
 
   const gitSnapshot = useGitStore((s) => s.byProject[projectId]);
   const branch = gitSnapshot?.branch;
@@ -140,17 +156,87 @@ export function ClaudeCliPane({
           )}
         </div>
         <div className="flex-1" />
+        <ModeToggle mode={mode} onChange={setMode} />
       </div>
       <ContextChips shortCwd={shortCwd} branch={branch} ahead={ahead} dirty={dirty} />
       <div className="relative min-h-0 flex-1 overflow-hidden bg-surface">
-        {status !== 'starting' && (
+        {mode === 'chat' ? (
           <Suspense fallback={null}>
-            <RawTerminalView sessionId={sessionId} isActive={isActive ?? false} />
+            <ChatPanel projectPath={projectPath} />
           </Suspense>
+        ) : (
+          status !== 'starting' && (
+            <Suspense fallback={null}>
+              <RawTerminalView sessionId={sessionId} isActive={isActive ?? false} />
+            </Suspense>
+          )
         )}
       </div>
-      <QuickActions onSend={sendSlash} disabled={status !== 'running'} />
+      {/* Slash actions only make sense in TTY mode — chat surface sends
+          messages as natural language and processes one turn at a time. */}
+      {mode === 'terminal' && (
+        <QuickActions onSend={sendSlash} disabled={status !== 'running'} />
+      )}
     </div>
+  );
+}
+
+function ModeToggle({
+  mode,
+  onChange,
+}: {
+  mode: CliPaneMode;
+  onChange: (m: CliPaneMode) => void;
+}) {
+  return (
+    <div className="inline-flex h-[22px] items-stretch rounded-[6px] border border-border-subtle bg-surface-3 text-[10.5px]">
+      <ToggleBtn
+        active={mode === 'terminal'}
+        onClick={() => onChange('terminal')}
+        title="Interactive TTY — per-tool approval, raw output"
+      >
+        <TerminalIcon size={10} />
+        <span>Terminal</span>
+      </ToggleBtn>
+      <ToggleBtn
+        active={mode === 'chat'}
+        onClick={() => onChange('chat')}
+        title="Beta chat UI — parsed events, auto-approves tools"
+      >
+        <MessageSquare size={10} />
+        <span>Chat</span>
+        <span className="ml-0.5 rounded-full bg-accent/20 px-1 text-[9px] text-accent">
+          beta
+        </span>
+      </ToggleBtn>
+    </div>
+  );
+}
+
+function ToggleBtn({
+  active,
+  onClick,
+  title,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  title: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      title={title}
+      className={cn(
+        'inline-flex items-center gap-1 px-2 transition first:rounded-l-[6px] last:rounded-r-[6px]',
+        active
+          ? 'bg-surface-4 text-text'
+          : 'text-text-secondary hover:bg-surface-4 hover:text-text',
+      )}
+    >
+      {children}
+    </button>
   );
 }
 
