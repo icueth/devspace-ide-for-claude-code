@@ -9,7 +9,7 @@ It uses `tmux` under the hood so every agent and shell pane survives app
 restarts, panel remounts, and accidental Cmd+Q.
 
 <p align="center">
-  <a href="https://github.com/icueth/devspace-ide-for-claude-code/releases/latest/download/devspace-0.3.31-arm64.dmg">
+  <a href="https://github.com/icueth/devspace-ide-for-claude-code/releases/latest/download/devspace-0.4.0-arm64.dmg">
     <img alt="Download for macOS — Apple Silicon" src="https://img.shields.io/badge/Download%20for%20macOS-Apple%20Silicon%20(M1%2FM2%2FM3%2FM4)-000?style=for-the-badge&logo=apple&logoColor=white" />
   </a>
   &nbsp;
@@ -55,9 +55,39 @@ restarts, panel remounts, and accidental Cmd+Q.
 - **Claude Code CLI dock** — first-class panel for `claude`, with
   persistent tmux-backed sessions per project. Multiple chat tabs per
   project, history survives quit-and-reopen.
+- **Chat mode (new)** — every dock tab now ships with a *Chat* surface
+  alongside the classic terminal. Parsed `claude --print` stream-json
+  with markdown rendering, code highlighting, tool-call cards, file
+  attachments via drag-drop or paperclip, per-thread persistence in
+  `.devspace/chat/`, multi-thread sidebar, slash palette
+  (`/new`, `/clear`, `/model`, `/system`, `/settings`, …), and an
+  inline settings drawer for model / system prompt / tool allow-list —
+  scoped *project* or *thread*. Stop button cancels mid-stream. Toggle
+  per-tab with the **Chat ↔ Terminal** switch.
 - **Agent Team mode** — run a multi-agent crew (lead, devs, reviewer,
   qa) side by side, each in its own pane, color-coded and
   status-aware. Cycle into Team mode with `⌘⇧T`.
+- **Settings: Agents / MCP / Skills / Teams (new)** — first-class
+  editors for every Claude Code primitive that used to live in raw
+  markdown / JSON files:
+  - **Agents** — list, create, edit, delete sub-agents from
+    `~/.claude/agents/` (global) and `<project>/.claude/agents/`
+    (project) with frontmatter form fields (name, description, model,
+    tools, color) and a markdown body editor.
+  - **MCP** — manage MCP servers in `~/.claude.json` (global) and
+    `<project>/.mcp.json` (project). Stdio + HTTP/SSE transports, env
+    vars, headers, atomic JSON writes so the global file never
+    corrupts mid-save.
+  - **Skills** — manage Claude skills in
+    `~/.claude/skills/<slug>/SKILL.md` and the project equivalent,
+    plus read-only view of plugin-installed skills from
+    `~/.claude/plugins/marketplaces/`. Frontmatter editor +
+    `allowed-tools` allow-list + markdown body.
+  - **Teams** — define multi-agent crews with sequence or parallel
+    modes, per-member model overrides, and an optional aggregator
+    agent. Stored in `~/.devspace/teams.json` (global) or
+    `<project>/.devspace/teams.json` (project), runnable from chat
+    via `/team <name>`.
 - **CodeMirror 6 editor** — tabs with split-pane support, multi-language
   highlighting, diff view, markdown / image / pdf preview, go-to-line
   (`⌘G`), quick open (`⌘P`), new file (`⌘N`).
@@ -236,11 +266,123 @@ appearing, the trail says exactly why.
 
 ---
 
+## Chat dock
+
+Every dock tab ships with two modes — **Chat** (default, new in 0.4)
+and **Terminal** (the classic PTY pane). Switch per-tab with the
+Chat ↔ Terminal toggle in the pane header.
+
+Chat mode parses the `claude --print` stream-json output rather than
+piping a TTY, so it can render:
+
+- **Markdown + code highlighting** for every assistant turn (GFM,
+  tables, `rehype-highlight`).
+- **Tool-call cards** — each tool invocation appears as a folded card
+  with the tool name, args summary, and result snippet. Click to expand.
+- **File attachments** — drop a file onto the textarea or click the
+  paperclip; the absolute path is inserted as `@<path>` so Claude reads
+  it on the next turn.
+- **Multi-thread sidebar** — every project keeps its own thread list in
+  `.devspace/chat/`. Threads survive quit-and-reopen.
+- **Stop button** — cancels the in-flight turn mid-stream by killing
+  the child claude process.
+
+### Slash commands
+
+Type `/` as the first character of the input to open the slash palette.
+These are client-side UI actions (`claude --print` itself doesn't parse
+slashes):
+
+| Command | Action |
+|---|---|
+| `/new` | Start a fresh thread |
+| `/clear` | Delete this thread and start over |
+| `/settings` | Open the chat settings drawer |
+| `/model <id>` | Open settings focused on model picker (`sonnet`, `opus`, `haiku`, or full id) |
+| `/system <text>` | Open settings focused on system-prompt appender |
+| `/team <name>` | Run a saved Teams pipeline against the current message |
+
+### Chat settings drawer
+
+Click the cog in the pane header (or use `/settings`) for an inline
+drawer that edits:
+
+- **Model** — Sonnet / Opus / Haiku chip, or free-form id
+- **System prompt append** — text added to every turn in this thread
+- **Allowed tools** — checkboxes for `Read`, `Edit`, `Write`, `Bash`,
+  `Glob`, `Grep`, `WebFetch`, `WebSearch`, `Task`, `TodoWrite`,
+  `NotebookEdit`. Empty = let claude decide.
+- **Scope** — *Project* (default for new threads) or *Thread* (override
+  just this thread)
+
+---
+
 ## Settings
 
 A unified Settings page browses Claude Code's project + global config
 files (`settings.json`, `settings.local.json`, agents, skills, commands)
 and exposes DevSpace's tmux backend.
+
+### Agents
+
+First-class editor for Claude Code sub-agents. Lists every `.md` file
+under `~/.claude/agents/` (global) and `<project>/.claude/agents/`
+(project) with frontmatter parsed into form fields:
+
+- `name`, `description`, `model`, `color` — typed inputs / chips
+- `tools` — multi-select checkboxes
+- markdown body — system prompt editor
+
+Hand-rolled YAML round-trip preserves unknown frontmatter keys (e.g.
+`skills:`, custom metadata) so external tools that add fields don't
+get clobbered. Save is in-place; create generates a slug-cased file
+in the right scope; delete removes the single `.md` file.
+
+### MCP
+
+Manage MCP servers across the two locations Claude consults:
+
+- **Global** — `~/.claude.json`'s `mcpServers` block. The app does a
+  read-modify-write that preserves the rest of the (often 100KB+) file
+  via atomic stage-and-rename so a crash mid-write can't corrupt your
+  claude install.
+- **Project** — `<project>/.mcp.json`, the standard checked-in form.
+
+Both transports surface: **stdio** (`command`, `args`, `env`) and
+**HTTP / SSE** (`url`, optional `headers`, `transport: sse` opt-in).
+Create, rename, edit, delete from a single panel.
+
+### Skills
+
+Manage Claude skills (`SKILL.md` in a per-skill folder) across three
+scopes:
+
+- **Global** — `~/.claude/skills/<slug>/SKILL.md`
+- **Project** — `<project>/.claude/skills/<slug>/SKILL.md`
+- **Plugin** — read-only listing of skills installed under
+  `~/.claude/plugins/marketplaces/`. The panel refuses to overwrite or
+  delete these — duplicate to user scope first.
+
+Edits the frontmatter (`name`, `description`, `model`,
+`allowed-tools`) plus the markdown body. Folder lifecycle is managed
+automatically: `Delete` removes the whole `<slug>/` directory so
+sibling assets (helpers, templates) don't get orphaned.
+
+### Teams
+
+Define multi-agent crews that can be invoked from chat via
+`/team <name>`. Each team has:
+
+- **Mode** — `sequence` (members run one after another, each turn sees
+  the previous member's output) or `parallel` (all members run on the
+  same prompt, results collated)
+- **Members** — a list of agent slugs (resolved against Agents
+  settings) with optional per-member `modelOverride`
+- **Aggregator** *(optional)* — a final agent that receives every
+  member's output and writes a synthesized reply
+
+Stored in `~/.devspace/teams.json` (global) or
+`<project>/.devspace/teams.json` (project) with atomic JSON writes.
 
 ### Claude Code config
 
@@ -401,16 +543,21 @@ pnpm dist:mac:arm64
 ```
 src/
 ├── main/          # Electron main process — IPC, services, PTY pool, tmux
-│   ├── ipc/       # Channel handlers (fs, git, pty, tmux, codeflow, …)
+│   ├── ipc/       # Channel handlers (fs, git, pty, tmux, codeflow,
+│   │              # chat, agents, mcp, skills, teams, …)
 │   ├── services/  # ClaudeCliLauncher, FileWatcher, GitStatus, Workspace,
 │   │              # CodeflowService, CodeflowGraphAnalyzer,
 │   │              # CodeflowFunctionAnalyzer, CodeflowGraphAugment,
+│   │              # ChatService, AgentsService, McpService,
+│   │              # SkillsService, TeamsService,
 │   │              # UpdateService, TmuxConfigService, …
 │   └── utils/     # atomic write, interactive shell env resolution
 ├── preload/       # Context bridge between main + renderer
 ├── renderer/      # React app
-│   ├── components/  # Editor, Sidebar, Bottom, Agents, Dock, Codeflow,
-│   │                # Settings, UpdateBadge, …
+│   ├── components/  # Editor, Sidebar, Bottom, Agents, Dock (ChatPanel,
+│   │                # ChatSettingsDrawer, SlashPalette, ClaudeCliPane),
+│   │                # Codeflow, Settings (Agents/Mcp/Skills/Teams),
+│   │                # UpdateBadge, …
 │   ├── state/       # zustand stores
 │   └── lib/         # api wrapper around the IPC bridge
 └── shared/        # Shared types, IPC channel names, logger

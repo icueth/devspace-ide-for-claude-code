@@ -2,7 +2,6 @@ import {
   Eye,
   EyeOff,
   GitBranch,
-  Layers,
   Maximize2,
   Minimize2,
   Terminal as TerminalIcon,
@@ -20,7 +19,6 @@ import { ClaudeCliDock } from '@renderer/components/Dock/ClaudeCliDock';
 import { EditorArea } from '@renderer/components/Editor/EditorArea';
 import { Resizer } from '@renderer/components/Layout/Resizer';
 import { SettingsPage } from '@renderer/components/Settings/SettingsPage';
-import { CreateTeamDialog } from '@renderer/components/Team/CreateTeamDialog';
 import { FileTree } from '@renderer/components/Sidebar/FileTree';
 import { ProjectList } from '@renderer/components/Sidebar/ProjectList';
 import { SidebarFooter } from '@renderer/components/Sidebar/SidebarFooter';
@@ -55,15 +53,26 @@ export default function App() {
   );
   const [quickOpen, setQuickOpen] = useState(false);
   const [goToLine, setGoToLine] = useState(false);
-  const [createTeamOpen, setCreateTeamOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsInitialTab, setSettingsInitialTab] = useState<
-    'account' | 'files' | 'tmux'
+    'account' | 'files' | 'tmux' | 'llm' | 'agents' | 'mcp' | 'skills' | 'teams'
   >('account');
 
   useEffect(() => {
     const handler = (e: Event) => {
-      const detail = (e as CustomEvent<{ tab?: 'account' | 'files' | 'tmux' }>).detail;
+      const detail = (
+        e as CustomEvent<{
+          tab?:
+            | 'account'
+            | 'files'
+            | 'tmux'
+            | 'llm'
+            | 'agents'
+            | 'mcp'
+            | 'skills'
+            | 'teams';
+        }>
+      ).detail;
       if (detail?.tab) setSettingsInitialTab(detail.tab);
       setSettingsOpen(true);
     };
@@ -78,7 +87,6 @@ export default function App() {
   const toggleBottom = useLayoutStore((s) => s.toggleBottom);
   const persistLayout = useLayoutStore((s) => s.persist);
   const teamMode = useLayoutStore((s) => s.teamMode);
-  const cycleTeamMode = useLayoutStore((s) => s.cycleTeamMode);
 
   useEffect(() => {
     api.app
@@ -199,12 +207,6 @@ export default function App() {
         useLayoutStore.getState().persist();
         return;
       }
-      // Team mode cycle: Cmd+Shift+T (off → team → focus → off)
-      if (e.shiftKey && !e.altKey && k === 't') {
-        e.preventDefault();
-        useLayoutStore.getState().cycleTeamMode();
-        return;
-      }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -263,7 +265,13 @@ export default function App() {
             <span>Codeflow</span>
           </button>
           <button
-            onClick={() => setCreateTeamOpen(true)}
+            onClick={() => {
+              // Teams now live in the new chat-based system at
+              // Settings → Teams. Jump there directly so this button
+              // doubles as both "create a team" and "manage teams".
+              setSettingsInitialTab('teams');
+              setSettingsOpen(true);
+            }}
             disabled={!activeProject}
             className={cn(
               'inline-flex h-[26px] items-center gap-1.5 rounded-[7px] px-3 text-[11.5px] font-medium text-white transition',
@@ -275,31 +283,11 @@ export default function App() {
               background: 'linear-gradient(135deg, var(--color-accent), var(--color-accent-3))',
               boxShadow: '0 2px 8px var(--color-accent-glow)',
             }}
-            title="Create Claude agent team"
+            title="Manage teams — Settings → Teams"
           >
             <Users size={11.5} strokeWidth={2.2} />
             <span>Create team</span>
           </button>
-          {dockVisible && (
-            <button
-              onClick={() => cycleTeamMode()}
-              className={cn(
-                'inline-flex h-[26px] items-center gap-1.5 rounded-[7px] border px-2.5 text-[11px] transition',
-                teamMode !== 'off'
-                  ? 'border-[#a855f7] bg-surface-4 text-text'
-                  : 'border-border-subtle bg-surface-3 text-text-secondary hover:border-border-hi hover:bg-surface-4 hover:text-text',
-              )}
-              title={`Team mode: ${teamMode} · ⌘⇧T to cycle (off → team → focus)`}
-              style={
-                teamMode !== 'off'
-                  ? { boxShadow: '0 0 0 1px rgba(168,85,247,0.25), 0 2px 8px rgba(168,85,247,0.18)' }
-                  : undefined
-              }
-            >
-              <Layers size={11} />
-              <span>{teamMode === 'off' ? 'Team' : teamMode === 'team' ? 'Team' : 'Focus'}</span>
-            </button>
-          )}
           {dockVisible && (
             <button
               onClick={() => {
@@ -493,11 +481,6 @@ export default function App() {
       />
       <GoToLineDialog open={goToLine} onOpenChange={setGoToLine} />
       <PromptHost />
-      <CreateTeamDialog
-        open={createTeamOpen}
-        onOpenChange={setCreateTeamOpen}
-        projectId={activeProject?.id ?? null}
-      />
     </div>
   );
 }

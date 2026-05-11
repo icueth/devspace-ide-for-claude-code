@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron';
+import { contextBridge, ipcRenderer, webUtils } from 'electron';
 
 import { IPC } from '@shared/ipc-channels';
 
@@ -17,6 +17,21 @@ const api = {
     open: (path: string) => ipcRenderer.invoke(IPC.WORKSPACE_OPEN, path),
     scan: (id: string, path: string) => ipcRenderer.invoke(IPC.WORKSPACE_SCAN, id, path),
     setActive: (id: string) => ipcRenderer.invoke(IPC.WORKSPACE_SET_ACTIVE, id),
+  },
+  // Electron 32+ removed the non-standard `File.path` property from
+  // renderer-side File objects when contextIsolation is on. The
+  // replacement is `webUtils.getPathForFile()` which is only available
+  // in the preload/main process. Expose it via the contextBridge so the
+  // renderer can resolve drag-dropped / picked files back to absolute
+  // paths for `@<path>` attachment tokens.
+  files: {
+    getPathForFile: (file: File): string => {
+      try {
+        return webUtils.getPathForFile(file);
+      } catch {
+        return '';
+      }
+    },
   },
   fs: {
     readDir: (path: string) => ipcRenderer.invoke(IPC.FS_READ_DIR, path),
@@ -118,6 +133,117 @@ const api = {
     test: (cfg: unknown) => ipcRenderer.invoke(IPC.LLM_TEST, cfg),
     complete: (req: unknown) => ipcRenderer.invoke(IPC.LLM_COMPLETE, req),
     edit: (req: unknown) => ipcRenderer.invoke(IPC.LLM_EDIT, req),
+  },
+  chat: {
+    listThreads: (projectPath: string) =>
+      ipcRenderer.invoke(IPC.CHAT_LIST_THREADS, projectPath),
+    createThread: (projectPath: string, title?: string) =>
+      ipcRenderer.invoke(IPC.CHAT_CREATE_THREAD, projectPath, title),
+    deleteThread: (projectPath: string, threadId: string) =>
+      ipcRenderer.invoke(IPC.CHAT_DELETE_THREAD, projectPath, threadId),
+    send: (req: unknown) => ipcRenderer.invoke(IPC.CHAT_SEND, req),
+    cancel: (projectPath: string) =>
+      ipcRenderer.invoke(IPC.CHAT_CANCEL, projectPath),
+    subscribe: (projectPath: string) =>
+      ipcRenderer.invoke(IPC.CHAT_SUBSCRIBE, projectPath),
+    getConfig: (projectPath: string) =>
+      ipcRenderer.invoke(IPC.CHAT_GET_CONFIG, projectPath),
+    setConfig: (projectPath: string, cfg: unknown) =>
+      ipcRenderer.invoke(IPC.CHAT_SET_CONFIG, projectPath, cfg),
+    updateThreadConfig: (
+      projectPath: string,
+      threadId: string,
+      cfg: unknown,
+    ) =>
+      ipcRenderer.invoke(
+        IPC.CHAT_UPDATE_THREAD_CONFIG,
+        projectPath,
+        threadId,
+        cfg,
+      ),
+    onEvent: (
+      projectPath: string,
+      cb: (threadId: string, event: import('@shared/types').ChatEvent) => void,
+    ) => {
+      const listener = (
+        _e: unknown,
+        ev: {
+          projectPath: string;
+          threadId: string;
+          event: import('@shared/types').ChatEvent;
+        },
+      ) => {
+        if (ev.projectPath === projectPath) cb(ev.threadId, ev.event);
+      };
+      ipcRenderer.on(IPC.CHAT_EVENT, listener);
+      return () => ipcRenderer.off(IPC.CHAT_EVENT, listener);
+    },
+  },
+  agents: {
+    list: (projectPath: string | null) =>
+      ipcRenderer.invoke(IPC.AGENTS_LIST, projectPath),
+    read: (filePath: string) => ipcRenderer.invoke(IPC.AGENTS_READ, filePath),
+    save: (agent: unknown) => ipcRenderer.invoke(IPC.AGENTS_SAVE, agent),
+    create: (
+      scope: 'global' | 'project',
+      projectPath: string | null,
+      slug: string,
+    ) => ipcRenderer.invoke(IPC.AGENTS_CREATE, scope, projectPath, slug),
+    delete: (filePath: string) =>
+      ipcRenderer.invoke(IPC.AGENTS_DELETE, filePath),
+  },
+  teams: {
+    list: (projectPath: string | null) =>
+      ipcRenderer.invoke(IPC.TEAMS_LIST, projectPath),
+    get: (projectPath: string | null, teamId: string) =>
+      ipcRenderer.invoke(IPC.TEAMS_GET, projectPath, teamId),
+    save: (
+      scope: 'global' | 'project',
+      projectPath: string | null,
+      team: unknown,
+    ) => ipcRenderer.invoke(IPC.TEAMS_SAVE, scope, projectPath, team),
+    delete: (
+      scope: 'global' | 'project',
+      projectPath: string | null,
+      teamId: string,
+    ) => ipcRenderer.invoke(IPC.TEAMS_DELETE, scope, projectPath, teamId),
+  },
+  skills: {
+    list: (projectPath: string | null, includePlugins?: boolean) =>
+      ipcRenderer.invoke(IPC.SKILLS_LIST, projectPath, includePlugins),
+    read: (filePath: string) => ipcRenderer.invoke(IPC.SKILLS_READ, filePath),
+    save: (skill: unknown) => ipcRenderer.invoke(IPC.SKILLS_SAVE, skill),
+    create: (
+      scope: 'global' | 'project',
+      projectPath: string | null,
+      slug: string,
+    ) => ipcRenderer.invoke(IPC.SKILLS_CREATE, scope, projectPath, slug),
+    delete: (filePath: string) =>
+      ipcRenderer.invoke(IPC.SKILLS_DELETE, filePath),
+  },
+  mcp: {
+    list: (projectPath: string | null) =>
+      ipcRenderer.invoke(IPC.MCP_LIST, projectPath),
+    save: (entry: unknown) => ipcRenderer.invoke(IPC.MCP_SAVE, entry),
+    rename: (
+      scope: 'global' | 'project',
+      filePath: string,
+      oldName: string,
+      newName: string,
+    ) =>
+      ipcRenderer.invoke(IPC.MCP_RENAME, scope, filePath, oldName, newName),
+    delete: (
+      scope: 'global' | 'project',
+      filePath: string,
+      name: string,
+    ) => ipcRenderer.invoke(IPC.MCP_DELETE, scope, filePath, name),
+    create: (
+      scope: 'global' | 'project',
+      projectPath: string | null,
+      name: string,
+      server: unknown,
+    ) =>
+      ipcRenderer.invoke(IPC.MCP_CREATE, scope, projectPath, name, server),
   },
   codeflow: {
     getStatus: (projectPath: string) =>
