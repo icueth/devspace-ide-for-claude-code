@@ -55,18 +55,30 @@ restarts, panel remounts, and accidental Cmd+Q.
 - **Claude Code CLI dock** — first-class panel for `claude`, with
   persistent tmux-backed sessions per project. Multiple chat tabs per
   project, history survives quit-and-reopen.
-- **Chat mode (new)** — every dock tab now ships with a *Chat* surface
-  alongside the classic terminal. Parsed `claude --print` stream-json
-  with markdown rendering, code highlighting, tool-call cards, file
-  attachments via drag-drop or paperclip, per-thread persistence in
-  `.devspace/chat/`, multi-thread sidebar, slash palette
-  (`/new`, `/clear`, `/model`, `/system`, `/settings`, …), and an
+- **Chat mode (default)** — every dock tab opens in *Chat* by default,
+  with a one-click switch to the classic *Terminal* (the tmux-backed
+  PTY pane). Parsed `claude --print` stream-json with markdown
+  rendering, code highlighting, tool-call cards, file attachments via
+  drag-drop or paperclip (Electron-32+ safe via `webUtils`), per-thread
+  persistence in `.devspace/chat/`, multi-thread sidebar, slash palette
+  (`/new`, `/clear`, `/model`, `/system`, `/settings`, `/help`), and an
   inline settings drawer for model / system prompt / tool allow-list —
-  scoped *project* or *thread*. Stop button cancels mid-stream. Toggle
-  per-tab with the **Chat ↔ Terminal** switch.
-- **Agent Team mode** — run a multi-agent crew (lead, devs, reviewer,
-  qa) side by side, each in its own pane, color-coded and
-  status-aware. Cycle into Team mode with `⌘⇧T`.
+  scoped *project* or *thread*. Stop button cancels mid-stream.
+- **Multi-agent teams (new)** — pick a team from the dropdown at the
+  top of any Chat panel to dispatch the next turn to a crew instead
+  of a solo claude:
+  - **Orchestrator** — one `claude` turn with a system-prompt
+    addendum that lists the team roster + nudges claude to dispatch
+    via the `Task` tool, in parallel when independent. Claude may
+    expand the roster by 1–2 if the task needs angles the team
+    doesn't cover, and will announce any expansion.
+  - **Sequential pipeline** — DevSpace chains N spawns, one per
+    member, piping outputs forward as context. Renders as a step-
+    list card + per-step collapsibles with full markdown + tool-call
+    visibility.
+  Teams live globally (`~/.devspace/teams.json`) or per-project
+  (`<project>/.devspace/teams.json`). Scope shown with 🌐 / 📁 in the
+  picker. Optional *Start in new thread* toggle isolates a team run.
 - **Settings: Agents / MCP / Skills / Teams (new)** — first-class
   editors for every Claude Code primitive that used to live in raw
   markdown / JSON files:
@@ -83,11 +95,11 @@ restarts, panel remounts, and accidental Cmd+Q.
     plus read-only view of plugin-installed skills from
     `~/.claude/plugins/marketplaces/`. Frontmatter editor +
     `allowed-tools` allow-list + markdown body.
-  - **Teams** — define multi-agent crews with sequence or parallel
-    modes, per-member model overrides, and an optional aggregator
-    agent. Stored in `~/.devspace/teams.json` (global) or
-    `<project>/.devspace/teams.json` (project), runnable from chat
-    via `/team <name>`.
+  - **Teams** — define multi-agent crews with orchestrator or
+    sequential modes (parallel coming next), per-member model
+    overrides. Stored in `~/.devspace/teams.json` (global) or
+    `<project>/.devspace/teams.json` (project), picked from the team
+    dropdown at the top of any Chat panel.
 - **CodeMirror 6 editor** — tabs with split-pane support, multi-language
   highlighting, diff view, markdown / image / pdf preview, go-to-line
   (`⌘G`), quick open (`⌘P`), new file (`⌘N`).
@@ -370,19 +382,31 @@ sibling assets (helpers, templates) don't get orphaned.
 
 ### Teams
 
-Define multi-agent crews that can be invoked from chat via
-`/team <name>`. Each team has:
+Define multi-agent crews picked from the **Team** dropdown at the top
+of every Chat panel. Each team has:
 
-- **Mode** — `sequence` (members run one after another, each turn sees
-  the previous member's output) or `parallel` (all members run on the
-  same prompt, results collated)
+- **Mode** — one of:
+  - `orchestrator` *(recommended)* — one `claude` turn with a
+    system-prompt addendum that lists the team and tells claude to
+    dispatch via the `Task` tool (in parallel when independent).
+    Claude may expand the roster by 1–2 if the task needs angles the
+    team doesn't cover, and announces any expansion in the reply.
+  - `sequential` — DevSpace chains N spawns, one per member. Each
+    step's output is piped into the next step's prompt with the team
+    roadmap + role description so each agent knows where it sits.
+    Renders as a step-list card with per-step collapsibles.
+  - `parallel` — fan-out + aggregator. **Not yet implemented** in
+    0.4.0; UI saves the config but runs fall back to solo with a
+    status note.
 - **Members** — a list of agent slugs (resolved against Agents
   settings) with optional per-member `modelOverride`
-- **Aggregator** *(optional)* — a final agent that receives every
+- **Aggregator** *(parallel only)* — agent that receives every
   member's output and writes a synthesized reply
 
-Stored in `~/.devspace/teams.json` (global) or
-`<project>/.devspace/teams.json` (project) with atomic JSON writes.
+Teams persist atomically in `~/.devspace/teams.json` (global,
+available across every project) or `<project>/.devspace/teams.json`
+(project). Scope shows as 🌐 / 📁 in the chat picker. The dropdown
+also has a *Start in new thread* toggle for clean-context team runs.
 
 ### Claude Code config
 
@@ -476,8 +500,10 @@ and clicking it opens release notes inline with a one-click DMG download.
    folder that contains one or more projects.
 4. Pick a project from the sidebar — the editor, terminal, and Claude
    CLI dock all wire up to that project's directory.
-5. Hit the Claude pane and start chatting. Press **`⌘⇧T`** to cycle
-   into **Team mode** for a multi-agent crew.
+5. Hit the Claude pane and start chatting. Click **Create team** in
+   the top bar to define a multi-agent crew in *Settings → Teams*,
+   then pick it from the team dropdown at the top of the Chat panel
+   to run.
 6. Click **Codeflow** in the header to see your project's dependency
    graph. *Generate codeflow* writes architecture docs into
    `.claude/codeflow/`, then any future `claude` session in the
@@ -493,7 +519,6 @@ and clicking it opens release notes inline with a one-click DMG download.
 | `⌘K` | Edit selection with AI (uses LLM from Settings) |
 | `Tab` | Accept inline autocomplete (when ghost text shown) |
 | `⌘⇧F` | Search in project |
-| `⌘⇧T` | Team mode cycle |
 | `⌘⇧L` | Send selection to Claude |
 | `⌘S` | Save file |
 | `⌘W` | Close tab |

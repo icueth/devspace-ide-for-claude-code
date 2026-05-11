@@ -20,8 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   - a **Stop** button that kills the in-flight child mid-stream.
 - **Slash palette** in the chat textarea — type `/` to open. Commands:
   `/new`, `/clear`, `/settings`, `/model <id>`, `/system <text>`,
-  `/team <name>`. These are client-side UI actions; `claude --print`
-  itself doesn't parse slashes.
+  `/help`. These are client-side UI actions; `claude --print` itself
+  doesn't parse slashes.
 - **Chat settings drawer.** Inline popover from the pane header (or
   `/settings`) for model picker (Sonnet / Opus / Haiku chips or
   free-form id), system-prompt append, and built-in tool allow-list
@@ -47,16 +47,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   (`name`, `description`, `model`, `allowed-tools`) + markdown body.
   Delete removes the whole skill folder so sibling helpers don't
   orphan.
-- **Settings → Teams.** Define multi-agent crews invocable from chat
-  with `/team <name>`. Per-team mode (`sequence` or `parallel`),
-  member list with per-member `modelOverride`, optional aggregator
-  agent. Stored as JSON under `~/.devspace/teams.json` or
-  `<project>/.devspace/teams.json` with atomic writes.
+- **Settings → Teams.** Define multi-agent crews picked from a
+  dropdown at the top of every Chat panel. Two execution modes ship:
+  - **Orchestrator** — a single `claude` turn with a system-prompt
+    addendum that lists the team roster and instructs claude to
+    dispatch to those agents via the `Task` tool (in parallel when
+    independent). Claude may add 1–2 agents beyond the roster if the
+    task clearly needs it, but must announce any expansion so users
+    can update their team config.
+  - **Sequential pipeline** — DevSpace chains N `claude --print`
+    spawns, one per member. Each step's output is piped into the next
+    step's prompt as context, with the team roadmap + role description
+    so each agent knows where it sits. Renders as a step-list card +
+    collapsible per-step blocks with markdown + tool-call cards.
+  Teams persist as JSON in `~/.devspace/teams.json` (global, available
+  across every project) or `<project>/.devspace/teams.json` (project)
+  with atomic writes. Picker badges show 🌐 / 📁 scope. Optional
+  *Start in new thread* toggle for clean-context team runs.
+- **`webUtils.getPathForFile()` bridge** — file attachments via
+  drag-drop or paperclip now resolve to absolute paths on Electron
+  32+, which removed the non-standard `File.path` property from
+  renderer-side File objects. Preload exposes the supported
+  replacement to the renderer.
 
 ### Changed
 - The Claude CLI pane defaults to Chat mode for new tabs. Existing
   terminal users can flip back per-tab — the toggle is local to the
   pane, not persisted globally.
+- The **Create team** button in the top bar now opens *Settings →
+  Teams* directly instead of the legacy tmux-based "Create team
+  dialog". The legacy *Team / Focus* mode-cycle button (and its
+  `⌘⇧T` shortcut) is removed — Chat-mode teams handle this surface
+  in a richer way.
 
 ## [0.3.31] — 2026-05-08
 
