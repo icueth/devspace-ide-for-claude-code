@@ -1,31 +1,29 @@
+import 'highlight.js/styles/github-dark.css';
+
 import {
   CircleSlash,
   Loader2,
   MessageSquarePlus,
+  Paperclip,
   Send,
   Trash2,
   User,
   Wrench,
 } from 'lucide-react';
 import {
-  lazy,
-  Suspense,
   useCallback,
   useEffect,
   useMemo,
   useRef,
   useState,
 } from 'react';
+import ReactMarkdown from 'react-markdown';
+import rehypeHighlight from 'rehype-highlight';
+import remarkGfm from 'remark-gfm';
 
 import { api } from '@renderer/lib/api';
 import { cn } from '@renderer/lib/utils';
 import type { ChatEvent, ChatMessage, ChatThread } from '@shared/types';
-
-const MarkdownPreview = lazy(() =>
-  import('@renderer/components/Editor/MarkdownPreview').then((m) => ({
-    default: m.MarkdownPreview,
-  })),
-);
 
 interface ChatPanelProps {
   projectPath: string;
@@ -44,6 +42,46 @@ export function ChatPanel({ projectPath }: ChatPanelProps) {
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Append an `@<relative-path>` token into the input. Claude Code parses
+  // `@path` references in the prompt as file attachments (resolves the
+  // path, reads the file, and includes its content as a tool result).
+  // For images it does the equivalent — pulls the bytes in for vision.
+  // This is the same UX as the CLI's native `@` syntax, just driven
+  // from a button + file picker instead of typing the path manually.
+  const insertAttachment = useCallback((absPath: string) => {
+    const norm = absPath.replace(/^\/+/, '/');
+    const rel = norm.startsWith(`${projectPath}/`)
+      ? norm.slice(projectPath.length + 1)
+      : norm;
+    setInput((prev) => {
+      const sep = prev && !prev.endsWith(' ') && !prev.endsWith('\n') ? ' ' : '';
+      return `${prev}${sep}@${rel} `;
+    });
+  }, [projectPath]);
+
+  const onAttachClick = useCallback(() => {
+    fileInputRef.current?.click();
+  }, []);
+
+  const onFilePicked = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      const files = e.target.files;
+      if (!files) return;
+      for (const f of Array.from(files)) {
+        // Electron adds a non-standard `path` property to File so the
+        // renderer can resolve picked files to absolute paths. This
+        // would not work in a regular browser.
+        const p = (f as File & { path?: string }).path;
+        if (p) insertAttachment(p);
+      }
+      // Reset so picking the same file twice in a row still fires
+      // onChange the second time.
+      e.target.value = '';
+    },
+    [insertAttachment],
+  );
 
   // Initial load + subscribe for streaming events. The hook also creates
   // a first thread automatically so the panel never opens to an empty
@@ -189,6 +227,22 @@ export function ChatPanel({ projectPath }: ChatPanelProps) {
 
       <div className="shrink-0 border-t border-border bg-surface-2 px-3 py-2">
         <div className="flex items-end gap-2">
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            // accept everything — claude figures out by extension whether
+            // it should pull bytes for a vision pass or read as text.
+            className="hidden"
+            onChange={onFilePicked}
+          />
+          <button
+            onClick={onAttachClick}
+            title="Attach files or images — pasted as @<path> references"
+            className="inline-flex h-[34px] w-[34px] shrink-0 items-center justify-center rounded-[7px] border border-border-subtle bg-surface-3 text-text-muted transition hover:border-border-hi hover:bg-surface-4 hover:text-text"
+          >
+            <Paperclip size={13} />
+          </button>
           <textarea
             value={input}
             onChange={(e) => setInput(e.target.value)}
@@ -198,8 +252,26 @@ export function ChatPanel({ projectPath }: ChatPanelProps) {
                 void onSend();
               }
             }}
+            // Drag-and-drop files onto the textarea — drops `@<path>`
+            // tokens into the input the same way the paperclip button
+            // does. Lets the user drop multiple files at once from
+            // Finder.
+            onDragOver={(e) => {
+              if (e.dataTransfer.types.includes('Files')) {
+                e.preventDefault();
+                e.dataTransfer.dropEffect = 'copy';
+              }
+            }}
+            onDrop={(e) => {
+              if (!e.dataTransfer.files?.length) return;
+              e.preventDefault();
+              for (const f of Array.from(e.dataTransfer.files)) {
+                const p = (f as File & { path?: string }).path;
+                if (p) insertAttachment(p);
+              }
+            }}
             rows={2}
-            placeholder="Ask claude…  (Enter to send, Shift+Enter for newline)"
+            placeholder="Ask claude…  (Enter to send, Shift+Enter for newline; @path or drag files to attach)"
             className="min-h-0 flex-1 resize-none rounded-[7px] border border-border-subtle bg-surface-3 px-3 py-2 text-[12.5px] text-text placeholder:text-text-dim focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/40"
           />
           {isStreaming ? (
@@ -268,14 +340,21 @@ function MessageBubble({ message }: { message: ChatMessage }) {
           <ToolCallList calls={message.toolCalls} />
         )}
         {message.content ? (
-          <div className="prose prose-invert max-w-none text-[12.5px] leading-relaxed prose-headings:mt-3 prose-headings:mb-1.5 prose-p:my-1.5 prose-pre:my-2 prose-pre:rounded-md prose-pre:bg-surface-3 prose-pre:p-2.5 prose-pre:text-[11.5px] prose-code:rounded prose-code:bg-surface-3 prose-code:px-1 prose-code:py-0.5 prose-code:text-[11.5px] prose-code:before:content-none prose-code:after:content-none prose-a:text-accent">
-            <Suspense
-              fallback={
-                <div className="text-[12px] text-text-muted">Rendering…</div>
-              }
+          // Render ReactMarkdown directly inline — DO NOT use the editor's
+          // <MarkdownPreview> wrapper here. That component anchors content
+          // via `position: absolute; inset: 0` for the split-pane case,
+          // which collapses to zero height inside a natural-flow chat
+          // bubble (the bubble itself has no fixed size, so `h-full` on
+          // the wrapper means 100% of 0 = 0). Replies came back fine from
+          // the model but visually clipped to a single line. Same fix we
+          // applied to the Update dialog.
+          <div className="prose prose-invert max-w-none break-words text-[12.5px] leading-relaxed prose-headings:mt-3 prose-headings:mb-1.5 prose-p:my-1.5 prose-ul:my-1.5 prose-ol:my-1.5 prose-li:my-0.5 prose-pre:my-2 prose-pre:overflow-x-auto prose-pre:rounded-md prose-pre:bg-surface-3 prose-pre:p-2.5 prose-pre:text-[11.5px] prose-code:rounded prose-code:bg-surface-3 prose-code:px-1 prose-code:py-0.5 prose-code:text-[11.5px] prose-code:before:content-none prose-code:after:content-none prose-a:text-accent prose-a:no-underline hover:prose-a:underline">
+            <ReactMarkdown
+              remarkPlugins={[remarkGfm]}
+              rehypePlugins={[[rehypeHighlight, { detect: true }]]}
             >
-              <MarkdownPreview markdown={message.content} />
-            </Suspense>
+              {message.content}
+            </ReactMarkdown>
           </div>
         ) : message.status === 'streaming' ? (
           <div className="flex items-center gap-1.5 text-[11.5px] text-text-muted">
@@ -406,8 +485,14 @@ function applyEvent(
     last.status = 'error';
     last.error = event.message;
   } else if (event.kind === 'done') {
-    // Backend already determined the terminal state and persisted it.
-    // We don't override here; subsequent listThreads refreshes will sync.
+    // Backend already persisted the terminal state to disk. We mirror it
+    // here so the renderer's Stop / Send button reflects reality without
+    // waiting for the next listThreads refresh. If an earlier `error`
+    // event already flipped status to 'error', leave it; otherwise the
+    // turn ended cleanly.
+    if (last.status === 'streaming') {
+      last.status = 'done';
+    }
   }
 
   return { ...thread, messages };
