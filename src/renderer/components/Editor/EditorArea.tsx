@@ -5,6 +5,7 @@ import { CodeMirrorPane } from '@renderer/components/Editor/CodeMirrorPane';
 import { EditorTabs } from '@renderer/components/Editor/EditorTabs';
 import { ImagePreview } from '@renderer/components/Editor/ImagePreview';
 import { Resizer } from '@renderer/components/Layout/Resizer';
+import { RouteErrorBoundary } from '@renderer/components/Layout/RouteErrorBoundary';
 
 // Heavy view types — loaded on demand so the initial boot bundle stays lean.
 // `@codemirror/merge` (DiffView), `react-markdown`+`highlight.js` (MarkdownPreview),
@@ -222,13 +223,17 @@ function EditorBody({ tab, onChange, onSave, onNavDone, mdMode }: EditorBodyProp
   return (
     <div className="min-h-0 flex-1">
       {tab.kind === 'codeflow' ? (
-        <Suspense fallback={<LazyFallback label="Loading codeflow…" />}>
-          <CodeflowView projectPath={tab.codeflowProjectPath ?? ''} />
-        </Suspense>
+        <RouteErrorBoundary label="Codeflow">
+          <Suspense fallback={<LazyFallback label="Loading codeflow…" />}>
+            <CodeflowView projectPath={tab.codeflowProjectPath ?? ''} />
+          </Suspense>
+        </RouteErrorBoundary>
       ) : tab.kind === 'design' ? (
-        <Suspense fallback={<LazyFallback label="Loading design studio…" />}>
-          <DesignView projectPath={tab.designProjectPath ?? ''} />
-        </Suspense>
+        <RouteErrorBoundary label="Design Studio">
+          <Suspense fallback={<LazyFallback label="Loading design studio…" />}>
+            <DesignView projectPath={tab.designProjectPath ?? ''} />
+          </Suspense>
+        </RouteErrorBoundary>
       ) : tab.kind === 'image' ? (
         <ImagePreview tab={tab} />
       ) : tab.kind === 'pdf' ? (

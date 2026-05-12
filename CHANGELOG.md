@@ -5,6 +5,16 @@ All notable changes to DevSpace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.6.1] — 2026-05-12
+
+### Fixed
+- **Black-screen crash when opening Design / Codeflow tabs.** A render
+  error inside a lazy-loaded view (DesignView, CodeflowView, etc.) used
+  to bubble past `Suspense` with no error boundary and blank the entire
+  app. Each lazy editor route now sits behind a `RouteErrorBoundary`
+  that catches render + chunk-load failures, shows the error stack,
+  and exposes a Retry button — the rest of the app stays interactive.
+
 ## [0.6.0] — 2026-05-12
 
 ### Added — Design Studio Phase B
