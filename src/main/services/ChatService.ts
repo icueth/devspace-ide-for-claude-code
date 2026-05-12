@@ -1,10 +1,34 @@
-import { randomUUID } from 'node:crypto';
+// ChatService — orchestration layer for chat turns. Owns the
+// claude-binary spawn lifecycle (solo + team-sequential), the
+// configuration merge logic, and the resume-on-boot handler that
+// re-attaches to tmux runs left in flight by a prior app session.
+//
+// Storage / state / thread CRUD lives in ChatTranscript.
+// JSONL parsing + line mutation lives in ChatLineHandler.
+// Tmux process management lives in TmuxChatRunner.
+//
+// IPC surface (registerChatIpc) imports its 9 handler functions from
+// here, so this module re-exports thread CRUD from ChatTranscript to
+// keep the import path stable across the refactor.
+
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import type { WebContents } from 'electron';
+import { randomUUID } from 'node:crypto';
 
 import { listAgents } from '@main/services/AgentsService';
 import { resolveClaudeBinary } from '@main/services/ClaudeCliLauncher';
+import {
+  makeSoloLineHandler,
+  makeStepLineHandler,
+} from '@main/services/ChatLineHandler';
+import {
+  type ProjectState,
+  broadcast,
+  getState,
+  lookupState,
+  persistThread,
+  registerPostHydrate,
+} from '@main/services/ChatTranscript';
 import { getTeam } from '@main/services/TeamsService';
 import {
   type ChatRunHandle,
@@ -16,9 +40,7 @@ import { resolveInteractiveShellEnv } from '@main/utils/shellEnv';
 import { createLogger } from '@shared/logger';
 import type {
   AgentDef,
-  ChatActiveRun,
   ChatConfig,
-  ChatEvent,
   ChatMessage,
   ChatSendRequest,
   ChatThread,
@@ -28,16 +50,15 @@ import type {
 
 const logger = createLogger('Chat');
 
-// One persisted JSON file per thread. Lives alongside codeflow + augment
-// in .devspace/ so codeflow's `.claude/` doesn't accidentally swallow chat
-// state (Claude's harness blocks writes there).
-function threadsDir(projectPath: string): string {
-  return path.join(projectPath, '.devspace', 'chat');
-}
-
-function threadFile(projectPath: string, threadId: string): string {
-  return path.join(threadsDir(projectPath), `${threadId}.json`);
-}
+// Re-export thread CRUD / config-IPC surface from the storage layer so
+// the IPC registration file (main/ipc/chat.ts) imports stay stable.
+export {
+  createThread,
+  deleteThread,
+  listThreads,
+  subscribe,
+  updateThreadConfig,
+} from '@main/services/ChatTranscript';
 
 // Project-level default chat config — applied to every new thread unless
 // the thread itself sets a config override. One file per project so
@@ -45,80 +66,6 @@ function threadFile(projectPath: string, threadId: string): string {
 // model / system prompt across projects.
 function chatConfigFile(projectPath: string): string {
   return path.join(projectPath, '.devspace', 'chat-config.json');
-}
-
-interface ProjectState {
-  projectPath: string;
-  threads: Map<string, ChatThread>; // by threadId
-  // Live tmux-backed run handle for any in-flight turn. One at a time
-  // per project — same model as Claude Code CLI; queuing is the user's
-  // problem if they want multiple turns at once. The handle is what
-  // cancelActive() reaches for to kill-session the tmux backend.
-  activeRunHandle: ChatRunHandle | null;
-  activeThreadId: string | null;
-  subscribers: Set<WebContents>;
-  // Promise that resolves once the initial disk → memory hydration
-  // finishes. listThreads() awaits this so the renderer never receives
-  // an empty list while threads are still being read from disk — the
-  // previous setImmediate yield wasn't enough for an async chain
-  // (readdir + readFile per thread file) and caused the panel to
-  // auto-create a "New chat" while existing threads were still loading.
-  hydrationPromise: Promise<void>;
-}
-
-const states = new Map<string, ProjectState>();
-
-function getState(projectPath: string): ProjectState {
-  const key = path.resolve(projectPath);
-  let state = states.get(key);
-  if (!state) {
-    state = {
-      projectPath: key,
-      threads: new Map(),
-      activeRunHandle: null,
-      activeThreadId: null,
-      subscribers: new Set(),
-      hydrationPromise: Promise.resolve(),
-    };
-    states.set(key, state);
-    state.hydrationPromise = hydrateFromDisk(state)
-      .then(() => resumeActiveRuns(state!))
-      .catch((err) => {
-        logger.warn(`hydrate failed for ${key}: ${(err as Error).message}`);
-      });
-  }
-  return state;
-}
-
-async function hydrateFromDisk(state: ProjectState): Promise<void> {
-  const dir = threadsDir(state.projectPath);
-  let files: fs.Dirent[];
-  try {
-    files = await fs.promises.readdir(dir, { withFileTypes: true });
-  } catch {
-    return;
-  }
-  for (const f of files) {
-    if (!f.isFile() || !f.name.endsWith('.json')) continue;
-    try {
-      const raw = await fs.promises.readFile(path.join(dir, f.name), 'utf8');
-      const thread = JSON.parse(raw) as ChatThread;
-      if (thread.id && Array.isArray(thread.messages)) {
-        state.threads.set(thread.id, thread);
-      }
-    } catch {
-      /* skip corrupt thread */
-    }
-  }
-}
-
-async function persistThread(
-  projectPath: string,
-  thread: ChatThread,
-): Promise<void> {
-  const file = threadFile(projectPath, thread.id);
-  await fs.promises.mkdir(path.dirname(file), { recursive: true });
-  await fs.promises.writeFile(file, JSON.stringify(thread, null, 2));
 }
 
 // Resolve the config that should govern a turn. Precedence:
@@ -172,7 +119,7 @@ function buildClaudeArgs(cfg: ChatConfig): string[] {
   return args;
 }
 
-// ─── public API ─────────────────────────────────────────────────────────────
+// ─── public API: config IO ──────────────────────────────────────────────────
 
 // Read the project-level chat config. Missing file = empty config (claude
 // uses its own defaults for everything). Corrupt JSON = also empty
@@ -204,70 +151,8 @@ export async function setProjectConfig(
   return cfg;
 }
 
-export async function updateThreadConfig(
-  projectPath: string,
-  threadId: string,
-  cfg: ChatConfig | null,
-): Promise<ChatThread> {
-  const s = getState(projectPath);
-  await s.hydrationPromise;
-  const thread = s.threads.get(threadId);
-  if (!thread) throw new Error(`thread not found: ${threadId}`);
-  if (cfg === null) {
-    delete thread.config;
-  } else {
-    thread.config = cfg;
-  }
-  thread.updatedAt = Date.now();
-  await persistThread(s.projectPath, thread);
-  return thread;
-}
-
-export function subscribe(projectPath: string, wc: WebContents): void {
-  const s = getState(projectPath);
-  s.subscribers.add(wc);
-  wc.once('destroyed', () => s.subscribers.delete(wc));
-}
-
-export async function listThreads(projectPath: string): Promise<ChatThread[]> {
-  const s = getState(projectPath);
-  await s.hydrationPromise;
-  return [...s.threads.values()].sort((a, b) => b.updatedAt - a.updatedAt);
-}
-
-export async function createThread(
-  projectPath: string,
-  title?: string,
-): Promise<ChatThread> {
-  const s = getState(projectPath);
-  const thread: ChatThread = {
-    id: randomUUID(),
-    projectId: path.basename(s.projectPath),
-    title: title?.trim() || 'New chat',
-    createdAt: Date.now(),
-    updatedAt: Date.now(),
-    messages: [],
-  };
-  s.threads.set(thread.id, thread);
-  await persistThread(s.projectPath, thread);
-  return thread;
-}
-
-export async function deleteThread(
-  projectPath: string,
-  threadId: string,
-): Promise<void> {
-  const s = getState(projectPath);
-  s.threads.delete(threadId);
-  try {
-    await fs.promises.unlink(threadFile(s.projectPath, threadId));
-  } catch {
-    /* already gone */
-  }
-}
-
 export function cancelActive(projectPath: string): void {
-  const s = states.get(path.resolve(projectPath));
+  const s = lookupState(projectPath);
   if (!s || !s.activeRunHandle) return;
   // kill() awaits tmux kill-session which we don't need to block on —
   // the tail loop notices the session disappear and resolves with
@@ -280,241 +165,14 @@ export function cancelActive(projectPath: string): void {
 
 // ─── turn execution ─────────────────────────────────────────────────────────
 
-function broadcast(state: ProjectState, threadId: string, event: ChatEvent): void {
-  for (const wc of state.subscribers) {
-    if (!wc.isDestroyed()) {
-      wc.send('chat:event', { projectPath: state.projectPath, threadId, event });
-    }
-  }
-}
-
-// Shape of one JSONL event emitted by `claude --output-format stream-json`.
-// Hoisted so both line-handler factories share the same type.
-interface ClaudeStreamEvent {
-  type?: string;
-  subtype?: string;
-  message?: {
-    content?: Array<
-      | { type: 'text'; text?: string }
-      | { type: 'thinking'; thinking?: string }
-      | {
-          type: 'tool_use';
-          id?: string;
-          name?: string;
-          input?: Record<string, unknown>;
-        }
-      | {
-          type: 'tool_result';
-          tool_use_id?: string;
-          content?: string | { type?: string; text?: string }[];
-          is_error?: boolean;
-        }
-    >;
-  };
-  result?: string;
-  usage?: { input_tokens?: number; output_tokens?: number };
-}
-
-function parseStreamLine(raw: string): ClaudeStreamEvent | null {
-  try {
-    return JSON.parse(raw) as ClaudeStreamEvent;
-  } catch {
-    return null;
-  }
-}
-
-// Build a line-handler that mutates the given assistant message + emits
-// solo-turn events (no stepIndex). Hoisted so the same parser drives
-// both fresh spawns and resume-on-boot.
-function makeSoloLineHandler(
-  state: ProjectState,
-  thread: ChatThread,
-  assistant: ChatMessage,
-): (raw: string) => void {
-  return (raw) => {
-    const e = parseStreamLine(raw);
-    if (!e) return;
-    if (e.type === 'assistant' && e.message?.content) {
-      for (const block of e.message.content) {
-        if (block.type === 'text' && block.text) {
-          assistant.content += block.text;
-          broadcast(state, thread.id, {
-            kind: 'text_delta',
-            text: block.text,
-            ts: Date.now(),
-          });
-        } else if (block.type === 'thinking' && block.thinking) {
-          assistant.thinking = (assistant.thinking ?? '') + block.thinking;
-          broadcast(state, thread.id, {
-            kind: 'thinking_delta',
-            text: block.thinking,
-            ts: Date.now(),
-          });
-        } else if (block.type === 'tool_use') {
-          const id = block.id ?? randomUUID();
-          assistant.toolCalls.push({
-            id,
-            name: block.name ?? 'tool',
-            input: block.input ?? {},
-          });
-          broadcast(state, thread.id, {
-            kind: 'tool_use',
-            toolUseId: id,
-            toolName: block.name,
-            toolInput: block.input,
-            ts: Date.now(),
-          });
-        }
-      }
-    } else if (e.type === 'user' && e.message?.content) {
-      for (const block of e.message.content) {
-        if (block.type === 'tool_result') {
-          const text =
-            typeof block.content === 'string'
-              ? block.content
-              : Array.isArray(block.content)
-                ? block.content
-                    .map((c) =>
-                      typeof c === 'object' && c?.type === 'text'
-                        ? (c.text ?? '')
-                        : '',
-                    )
-                    .join('')
-                : '';
-          const tu = assistant.toolCalls.find(
-            (c) => c.id === block.tool_use_id,
-          );
-          if (tu) {
-            tu.result = text;
-            tu.isError = !!block.is_error;
-          }
-          broadcast(state, thread.id, {
-            kind: 'tool_result',
-            toolUseId: block.tool_use_id,
-            toolResult: text,
-            toolIsError: !!block.is_error,
-            ts: Date.now(),
-          });
-        }
-      }
-    } else if (e.type === 'result' && e.usage) {
-      assistant.usage = {
-        input: e.usage.input_tokens ?? 0,
-        output: e.usage.output_tokens ?? 0,
-      };
-      broadcast(state, thread.id, {
-        kind: 'usage',
-        inputTokens: e.usage.input_tokens,
-        outputTokens: e.usage.output_tokens,
-        ts: Date.now(),
-      });
-    }
-  };
-}
-
-// Same shape as the solo handler but writes into a team step + tags
-// every broadcast event with the step index so the renderer can route
-// it into the right step bubble.
-function makeStepLineHandler(
-  state: ProjectState,
-  thread: ChatThread,
-  stepTarget: TeamStep,
-  stepIndex: number,
-): (raw: string) => void {
-  return (raw) => {
-    const e = parseStreamLine(raw);
-    if (!e) return;
-    if (e.type === 'assistant' && e.message?.content) {
-      for (const block of e.message.content) {
-        if (block.type === 'text' && block.text) {
-          stepTarget.content += block.text;
-          broadcast(state, thread.id, {
-            kind: 'text_delta',
-            text: block.text,
-            stepIndex,
-            ts: Date.now(),
-          });
-        } else if (block.type === 'thinking' && block.thinking) {
-          stepTarget.thinking = (stepTarget.thinking ?? '') + block.thinking;
-          broadcast(state, thread.id, {
-            kind: 'thinking_delta',
-            text: block.thinking,
-            stepIndex,
-            ts: Date.now(),
-          });
-        } else if (block.type === 'tool_use') {
-          const id = block.id ?? randomUUID();
-          stepTarget.toolCalls.push({
-            id,
-            name: block.name ?? 'tool',
-            input: block.input ?? {},
-          });
-          broadcast(state, thread.id, {
-            kind: 'tool_use',
-            toolUseId: id,
-            toolName: block.name,
-            toolInput: block.input,
-            stepIndex,
-            ts: Date.now(),
-          });
-        }
-      }
-    } else if (e.type === 'user' && e.message?.content) {
-      for (const block of e.message.content) {
-        if (block.type === 'tool_result') {
-          const text =
-            typeof block.content === 'string'
-              ? block.content
-              : Array.isArray(block.content)
-                ? block.content
-                    .map((c) =>
-                      typeof c === 'object' && c?.type === 'text'
-                        ? (c.text ?? '')
-                        : '',
-                    )
-                    .join('')
-                : '';
-          const tu = stepTarget.toolCalls.find(
-            (c) => c.id === block.tool_use_id,
-          );
-          if (tu) {
-            tu.result = text;
-            tu.isError = !!block.is_error;
-          }
-          broadcast(state, thread.id, {
-            kind: 'tool_result',
-            toolUseId: block.tool_use_id,
-            toolResult: text,
-            toolIsError: !!block.is_error,
-            stepIndex,
-            ts: Date.now(),
-          });
-        }
-      }
-    } else if (e.type === 'result' && e.usage) {
-      stepTarget.usage = {
-        input: e.usage.input_tokens ?? 0,
-        output: e.usage.output_tokens ?? 0,
-      };
-      broadcast(state, thread.id, {
-        kind: 'usage',
-        inputTokens: e.usage.input_tokens,
-        outputTokens: e.usage.output_tokens,
-        stepIndex,
-        ts: Date.now(),
-      });
-    }
-  };
-}
-
 /**
  * Send a user message, spawn claude-headless with the full history as
  * stdin, parse its stream-json output into normalized ChatEvent objects,
  * and stream them to every subscribed WebContents. Persists the final
  * message pair to disk when the turn completes.
  *
- * One concurrent turn per project. Calls during an active turn return the
- * existing in-progress assistant message id without spawning a duplicate.
+ * One concurrent turn per project. Calls during an active turn throw so
+ * the caller can show a "stop the current run first" notice.
  */
 export async function sendMessage(req: ChatSendRequest): Promise<{ messageId: string }> {
   const s = getState(req.projectId);
@@ -1237,3 +895,9 @@ async function finalizeResumedTeamStep(
   broadcast(state, thread.id, { kind: 'done', ts: Date.now() });
   await persistThread(state.projectPath, thread);
 }
+
+// Wire resume-on-hydrate into the transcript layer. This runs once per
+// project, the first time anything touches getState() — typically the
+// renderer's listThreads IPC on chat panel mount. Tying it to module
+// load (instead of e.g. main.ts boot) keeps the dependency wiring local.
+registerPostHydrate(resumeActiveRuns);
