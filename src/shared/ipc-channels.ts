@@ -16,6 +16,7 @@ export const IPC = {
   WORKSPACE_PICK: 'workspace:pick-folder',
   WORKSPACE_SCAN: 'workspace:scan',
   WORKSPACE_SET_ACTIVE: 'workspace:set-active',
+  WORKSPACE_CLOSE: 'workspace:close',
 
   // Filesystem
   FS_READ_DIR: 'fs:read-dir',

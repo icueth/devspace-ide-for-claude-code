@@ -196,6 +196,31 @@ function hardenGeneratedHtml(raw: string): string {
     /\b(href|src)\s*=\s*(["'])\s*javascript:[^"']*\2/gi,
     '$1="#"',
   );
+  // 3a. Also neutralize SVG `xlink:href="javascript:..."`.
+  out = out.replace(
+    /\b(xlink:href)\s*=\s*(["'])\s*javascript:[^"']*\2/gi,
+    '$1="#"',
+  );
+
+  // 3b. Strip every on*-event handler attribute. These are the bridge-forgery
+  // vector the inline-script defense alone doesn't cover — an `<img onerror
+  // ="window.parent.postMessage(...)">` runs in the sandboxed iframe and can
+  // forge snapshot replies before the renderer correlates request IDs.
+  // Quoted, single-quoted, and bare-value forms all covered.
+  out = out.replace(
+    /\s+on[a-z]+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi,
+    '',
+  );
+
+  // 3c. Drop `<style>` bodies that contain `expression(` (legacy IE vector
+  // that some scanners still ding us on) or `behavior:url(...)`.
+  out = out.replace(
+    /<style\b[^>]*>([\s\S]*?)<\/style\s*>/gi,
+    (_m, css: string) =>
+      /expression\s*\(|behavior\s*:\s*url\s*\(/i.test(css)
+        ? '<style></style>'
+        : `<style>${css}</style>`,
+  );
 
   // 4. Inject a strict CSP `<meta>` tag right after <head> if absent.
   // The policy mirrors the prompt's "no external scripts, Google Fonts
@@ -972,6 +997,10 @@ export async function readSystemBody(
   const found = systems.find((s) => s.slug === slug);
   if (!found) return null;
   try {
+    const lst = await fs.promises.lstat(found.path);
+    if (!lst.isFile()) {
+      throw new Error(`refusing non-regular system body: ${found.path}`);
+    }
     const raw = await fs.promises.readFile(found.path, 'utf8');
     return { system: found, body: raw };
   } catch (err) {

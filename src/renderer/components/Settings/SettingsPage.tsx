@@ -37,6 +37,7 @@ import {
 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 
+import { RouteErrorBoundary } from '@renderer/components/Layout/RouteErrorBoundary';
 import { AccountSettings } from '@renderer/components/Settings/AccountSettings';
 import { AgentsSettings } from '@renderer/components/Settings/AgentsSettings';
 import { DesignSettings } from '@renderer/components/Settings/DesignSettings';
@@ -115,15 +116,17 @@ export function SettingsPage({ onClose, initialTab = 'account' }: SettingsPagePr
       </div>
 
       <div className="min-h-0 flex-1 overflow-hidden">
-        {tab === 'account' && <AccountSettings />}
-        {tab === 'files' && <FilesSettings />}
-        {tab === 'tmux' && <TmuxSection />}
-        {tab === 'llm' && <LlmSettings />}
-        {tab === 'agents' && <AgentsSettings />}
-        {tab === 'mcp' && <McpSettings />}
-        {tab === 'skills' && <SkillsSettings />}
-        {tab === 'teams' && <TeamsSettings />}
-        {tab === 'design' && <DesignSettings />}
+        <RouteErrorBoundary key={tab} label={`Settings · ${tab}`}>
+          {tab === 'account' && <AccountSettings />}
+          {tab === 'files' && <FilesSettings />}
+          {tab === 'tmux' && <TmuxSection />}
+          {tab === 'llm' && <LlmSettings />}
+          {tab === 'agents' && <AgentsSettings />}
+          {tab === 'mcp' && <McpSettings />}
+          {tab === 'skills' && <SkillsSettings />}
+          {tab === 'teams' && <TeamsSettings />}
+          {tab === 'design' && <DesignSettings />}
+        </RouteErrorBoundary>
       </div>
     </section>
   );

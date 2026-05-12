@@ -37,6 +37,12 @@ interface Entry {
 
 const watchers = new Map<string, Entry>();
 
+// Single-shot destroy hook per WebContents — avoids the previous behavior
+// where every subscribeWatch call attached a fresh `wc.once('destroyed')`,
+// stacking N listeners and (worse) firing cleanup() N times so the SECOND
+// invocation could tear down a watcher another window still needed.
+const wcDestroyHooks = new WeakSet<WebContents>();
+
 function keyFor(root: string): string {
   return path.resolve(root);
 }
@@ -109,8 +115,35 @@ export function subscribeWatch(root: string, wc: WebContents): void {
   }
 
   entry.subscribers.add(wc);
-  const cleanup = () => unsubscribeWatch(root, wc);
-  wc.once('destroyed', cleanup);
+  if (!wcDestroyHooks.has(wc)) {
+    wcDestroyHooks.add(wc);
+    wc.once('destroyed', () => {
+      // Iterate a snapshot — unsubscribeWatch can delete entries from the map.
+      for (const [k, e] of Array.from(watchers)) {
+        if (e.subscribers.has(wc)) {
+          e.subscribers.delete(wc);
+          if (e.subscribers.size === 0) {
+            if (e.flushTimer) clearTimeout(e.flushTimer);
+            void e.watcher.close().catch(() => undefined);
+            watchers.delete(k);
+            logger.info(`stopped watching ${k}`);
+          }
+        }
+      }
+    });
+  }
+}
+
+/** Tear down every watcher subscribed by a particular root, regardless of
+ *  which WebContents subscribed. Called from workspace-close cleanup. */
+export function closeWatchersForRoot(root: string): void {
+  const key = keyFor(root);
+  const entry = watchers.get(key);
+  if (!entry) return;
+  if (entry.flushTimer) clearTimeout(entry.flushTimer);
+  void entry.watcher.close().catch(() => undefined);
+  watchers.delete(key);
+  logger.info(`force-stopped watching ${key}`);
 }
 
 export function unsubscribeWatch(root: string, wc: WebContents): void {

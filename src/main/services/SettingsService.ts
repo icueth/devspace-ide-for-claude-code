@@ -2,6 +2,8 @@ import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
+import { atomicWriteAsync } from '@main/utils/atomicWrite';
+import { assertRegularFile } from '@main/utils/pathScope';
 import { createLogger } from '@shared/logger';
 
 const logger = createLogger('SettingsService');
@@ -203,15 +205,14 @@ export async function listSettings(
  *  yet, so the editor can present a blank canvas the user fills + saves. */
 export async function readSettingsFile(filePath: string): Promise<string> {
   if (!(await exists(filePath))) return '';
+  await assertRegularFile(filePath);
   return fs.readFile(filePath, 'utf8');
 }
 
-/** Write a settings file, creating any missing parent directories. */
+/** Write a settings file atomically, creating any missing parent directories. */
 export async function writeSettingsFile(
   filePath: string,
   content: string,
 ): Promise<void> {
-  const dir = path.dirname(filePath);
-  await fs.mkdir(dir, { recursive: true });
-  await fs.writeFile(filePath, content, 'utf8');
+  await atomicWriteAsync(filePath, content);
 }

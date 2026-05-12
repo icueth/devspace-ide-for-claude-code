@@ -17,6 +17,8 @@ const api = {
     open: (path: string) => ipcRenderer.invoke(IPC.WORKSPACE_OPEN, path),
     scan: (id: string, path: string) => ipcRenderer.invoke(IPC.WORKSPACE_SCAN, id, path),
     setActive: (id: string) => ipcRenderer.invoke(IPC.WORKSPACE_SET_ACTIVE, id),
+    close: (id: string, path: string) =>
+      ipcRenderer.invoke(IPC.WORKSPACE_CLOSE, id, path),
   },
   // Electron 32+ removed the non-standard `File.path` property from
   // renderer-side File objects when contextIsolation is on. The

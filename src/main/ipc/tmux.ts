@@ -18,6 +18,44 @@ import type { TmuxConfig, TmuxPane, TmuxSession } from '@shared/types';
 
 const logger = createLogger('IPC:tmux');
 
+// tmux pane / session identifiers tightly constrained so the renderer can't
+// inject argv that gets interpreted as a flag by tmux itself. Pane IDs are
+// `%<digits>`; session IDs are `$<digits>`; session names from our prefix are
+// `<alnum>(-<alnum>)*`. Reject anything that starts with `-` (flag injection).
+const TMUX_PANE_RE = /^%\d{1,10}$/;
+const TMUX_SESSION_RE = /^[A-Za-z0-9_./-]{1,128}$/;
+
+function assertPaneId(p: unknown): string {
+  if (typeof p !== 'string' || !TMUX_PANE_RE.test(p)) {
+    throw new Error(`invalid tmux pane id: ${String(p)}`);
+  }
+  return p;
+}
+
+function assertSessionName(n: unknown): string {
+  if (typeof n !== 'string' || !TMUX_SESSION_RE.test(n) || n.startsWith('-')) {
+    throw new Error(`invalid tmux session name: ${String(n)}`);
+  }
+  return n;
+}
+
+// Block control characters in send-keys text — they break terminal state, can
+// trigger paste-bracketing escapes, and have no legitimate use in normal chat
+// input. Tab/newline/carriage-return are allowed since users may paste code.
+function assertSendKeysText(t: unknown): string {
+  if (typeof t !== 'string') {
+    throw new Error('send-keys text must be a string');
+  }
+  if (t.length > 32 * 1024) {
+    throw new Error(`send-keys text too long: ${t.length} bytes`);
+  }
+  // Allow \t (0x09), \n (0x0a), \r (0x0d); reject other C0 + DEL.
+  if (/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(t)) {
+    throw new Error('send-keys text contains control characters');
+  }
+  return t;
+}
+
 // Run a tmux command on DevSpace's dedicated socket. Always prefixes `-L
 // <socketName>` so we never touch the user's default tmux server.
 async function runTmux(args: string[]): Promise<string> {
@@ -81,6 +119,7 @@ export function registerTmuxIpc(): void {
   ipcMain.handle(
     IPC.TMUX_LIST_PANES,
     async (_e, sessionName?: string): Promise<TmuxPane[]> => {
+      if (sessionName !== undefined) assertSessionName(sessionName);
       const args = sessionName
         ? ['list-panes', '-s', '-t', sessionName, '-F', LIST_FMT]
         : ['list-panes', '-a', '-F', LIST_FMT];
@@ -105,7 +144,9 @@ export function registerTmuxIpc(): void {
     IPC.TMUX_CAPTURE_PANE,
     async (_e, paneId: string, lines = 3): Promise<string> => {
       try {
-        const raw = await runTmux(['capture-pane', '-p', '-t', paneId, '-S', `-${lines}`]);
+        assertPaneId(paneId);
+        const n = Math.max(1, Math.min(10_000, Math.floor(Number(lines) || 3)));
+        const raw = await runTmux(['capture-pane', '-p', '-t', paneId, '-S', `-${n}`]);
         return raw.trimEnd();
       } catch (err) {
         logger.warn(`capture-pane ${paneId} failed:`, (err as Error).message);
@@ -116,6 +157,7 @@ export function registerTmuxIpc(): void {
 
   ipcMain.handle(IPC.TMUX_SELECT_PANE, async (_e, paneId: string): Promise<boolean> => {
     try {
+      assertPaneId(paneId);
       await runTmux(['select-pane', '-t', paneId]);
       return true;
     } catch (err) {
@@ -128,6 +170,8 @@ export function registerTmuxIpc(): void {
     IPC.TMUX_SEND_KEYS,
     async (_e, paneId: string, text: string, submit = true): Promise<boolean> => {
       try {
+        assertPaneId(paneId);
+        assertSendKeysText(text);
         const args = ['send-keys', '-t', paneId, text];
         if (submit) args.push('Enter');
         await runTmux(args);
@@ -152,8 +196,8 @@ export function registerTmuxIpc(): void {
   });
 
   ipcMain.handle(IPC.TMUX_KILL_SESSION, async (_e, name: string): Promise<boolean> => {
-    if (!name) return false;
     try {
+      assertSessionName(name);
       await runTmux(['kill-session', '-t', name]);
       logger.info(`killed session ${name}`);
       return true;
@@ -166,8 +210,9 @@ export function registerTmuxIpc(): void {
   ipcMain.handle(
     IPC.TMUX_RENAME_SESSION,
     async (_e, oldName: string, newName: string): Promise<boolean> => {
-      if (!oldName || !newName) return false;
       try {
+        assertSessionName(oldName);
+        assertSessionName(newName);
         await runTmux(['rename-session', '-t', oldName, newName]);
         logger.info(`renamed session ${oldName} → ${newName}`);
         return true;

@@ -82,6 +82,7 @@ export interface DevspaceApi {
     open: (path: string) => Promise<Workspace>;
     scan: (id: string, path: string) => Promise<Project[]>;
     setActive: (id: string) => Promise<Workspace | null>;
+    close: (id: string, path: string) => Promise<void>;
   };
   fs: {
     readDir: (path: string) => Promise<DirEntry[]>;
@@ -387,6 +388,7 @@ function makeStubApi(): DevspaceApi {
       open: notWired('workspace.open'),
       scan: notWired('workspace.scan'),
       setActive: notWired('workspace.setActive'),
+      close: notWired('workspace.close'),
     },
     fs: {
       readDir: notWired('fs.readDir'),

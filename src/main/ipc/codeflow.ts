@@ -1,5 +1,7 @@
 import { ipcMain, shell } from 'electron';
+import * as path from 'node:path';
 
+import { assertInWorkspace } from '@main/utils/pathScope';
 import { buildFunctionGraph } from '@main/services/CodeflowFunctionAnalyzer';
 import { buildGraph } from '@main/services/CodeflowGraphAnalyzer';
 import {
@@ -61,7 +63,15 @@ export function registerCodeflowIpc(): void {
   });
 
   ipcMain.handle(IPC.CODEFLOW_READ_DOC, async (_event, absPath: string) => {
-    return readDoc(absPath);
+    const safe = await assertInWorkspace(absPath);
+    // Codeflow docs only ever live under <project>/.claude/codeflow/.
+    // Reject anything else even if it's inside the workspace, to keep this
+    // channel from being a generic file-read primitive.
+    const parts = safe.split(path.sep);
+    if (!parts.includes('.claude') || !parts.includes('codeflow')) {
+      throw new Error('CODEFLOW_READ_DOC: path outside .claude/codeflow/');
+    }
+    return readDoc(safe);
   });
 
   ipcMain.handle(IPC.CODEFLOW_LIST_DOCS, async (_event, projectPath: string) => {

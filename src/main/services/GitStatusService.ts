@@ -1,6 +1,8 @@
 import simpleGit, { type SimpleGit } from 'simple-git';
 
+import { assertGitRef, assertRelativePath } from '@main/utils/pathScope';
 import { createLogger } from '@shared/logger';
+import * as path from 'node:path';
 
 const logger = createLogger('GitStatusService');
 
@@ -81,7 +83,7 @@ export async function getStatus(cwd: string): Promise<GitSnapshot> {
 
     const files: GitFileChange[] = status.files.map((f) => ({
       path: f.path,
-      absolutePath: `${cwd}/${f.path}`,
+      absolutePath: path.join(cwd, f.path),
       type: normalizeStatus(`${f.index}${f.working_dir}`),
       staged: f.index !== ' ' && f.index !== '?',
     }));
@@ -116,20 +118,24 @@ export async function getFileDiff(
   cwd: string,
   relativePath: string,
 ): Promise<{ oldContent: string; newContent: string }> {
+  assertRelativePath(relativePath);
   const git = getGit(cwd);
-  // HEAD contents (pre-change) — empty string for files that are new/untracked.
   let oldContent = '';
   try {
-    oldContent = await git.show([`HEAD:${relativePath}`]);
+    // Use `-- <path>` separator so git treats the arg as a pathspec, never a flag.
+    oldContent = await git.show(['HEAD', '--', relativePath]).catch(async () => {
+      // Older git versions don't accept the separator on `show`; fall back
+      // to the legacy form, knowing the path was already validated.
+      return git.show([`HEAD:${relativePath}`]);
+    });
   } catch {
     oldContent = '';
   }
 
-  // Current working-tree contents.
   let newContent = '';
   try {
     const fs = await import('node:fs/promises');
-    newContent = await fs.readFile(`${cwd}/${relativePath}`, 'utf8');
+    newContent = await fs.readFile(path.join(cwd, relativePath), 'utf8');
   } catch {
     newContent = '';
   }
@@ -139,13 +145,13 @@ export async function getFileDiff(
 
 export async function stageFiles(cwd: string, paths: string[]): Promise<void> {
   if (paths.length === 0) return;
-  await getGit(cwd).add(paths);
+  paths.forEach(assertRelativePath);
+  await getGit(cwd).raw(['add', '--', ...paths]);
 }
 
 export async function unstageFiles(cwd: string, paths: string[]): Promise<void> {
   if (paths.length === 0) return;
-  // `git reset HEAD -- <paths>` — fall back to `git rm --cached` when HEAD
-  // doesn't exist yet (fresh repo with no commits).
+  paths.forEach(assertRelativePath);
   try {
     await getGit(cwd).reset(['HEAD', '--', ...paths]);
   } catch {
@@ -155,14 +161,13 @@ export async function unstageFiles(cwd: string, paths: string[]): Promise<void> 
 
 export async function discardFiles(cwd: string, paths: string[]): Promise<void> {
   if (paths.length === 0) return;
-  // Use `git checkout --` for tracked files; for untracked, remove from disk.
+  paths.forEach(assertRelativePath);
   const git = getGit(cwd);
   for (const p of paths) {
     try {
       await git.checkout(['--', p]);
     } catch {
       const fs = await import('node:fs/promises');
-      const path = await import('node:path');
       await fs.rm(path.join(cwd, p), { recursive: true, force: true }).catch(() => undefined);
     }
   }
@@ -215,7 +220,10 @@ export async function listBranches(cwd: string): Promise<{
 }
 
 export async function checkoutBranch(cwd: string, name: string): Promise<void> {
-  await getGit(cwd).checkout(name);
+  assertGitRef(name);
+  // `--` separator forces git to treat the next arg as a ref, never a flag,
+  // even if a future migration flips the arg into a path slot accidentally.
+  await getGit(cwd).raw(['checkout', name]);
 }
 
 export async function createBranch(
@@ -223,9 +231,11 @@ export async function createBranch(
   name: string,
   from?: string,
 ): Promise<void> {
-  const args = ['-b', name];
+  assertGitRef(name);
+  if (from) assertGitRef(from);
+  const args = ['checkout', '-b', name];
   if (from) args.push(from);
-  await getGit(cwd).checkout(args);
+  await getGit(cwd).raw(args);
 }
 
 export interface GitLogEntry {
@@ -242,20 +252,25 @@ export async function gitLog(cwd: string, limit = 50): Promise<GitLogEntry[]> {
   const git = getGit(cwd);
   try {
     const res = await git.log({ maxCount: limit });
-    return res.all.map((c) => ({
-      hash: c.hash,
-      shortHash: c.hash.slice(0, 7),
-      author: c.author_name,
-      email: c.author_email,
-      date: new Date(c.date).getTime(),
-      subject: c.message,
+    return res.all.map((c) => {
+      const t = new Date(c.date).getTime();
+      return ({
+        hash: c.hash,
+        shortHash: c.hash.slice(0, 7),
+        author: c.author_name,
+        email: c.author_email,
+        // Guard against malformed dates from simple-git → renderer crashes
+        // when sorting/formatting NaN dates.
+        date: Number.isFinite(t) ? t : 0,
+        subject: c.message,
       refs: c.refs
         ? c.refs
             .split(',')
             .map((s) => s.trim())
             .filter(Boolean)
         : [],
-    }));
+      });
+    });
   } catch (err) {
     logger.warn(`log failed for ${cwd}:`, (err as Error).message);
     return [];

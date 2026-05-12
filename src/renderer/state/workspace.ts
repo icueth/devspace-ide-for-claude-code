@@ -2,6 +2,7 @@ import { create } from 'zustand';
 
 import { api } from '@renderer/lib/api';
 import { useCliTabsStore } from '@renderer/state/cliTabs';
+import { useEditorStore } from '@renderer/state/editor';
 import type { Project, Workspace } from '@shared/types';
 
 const LS_KEY = 'devspace:workspace:v1';
@@ -214,6 +215,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   },
 
   closeProject(id) {
+    const root = get().projects.find((p) => p.id === id)?.path ?? null;
     set((s) => {
       const next = s.openedProjectIds.filter((x) => x !== id);
       const nextActive =
@@ -221,6 +223,30 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       return { openedProjectIds: next, activeProjectId: nextActive };
     });
     killProjectPtys(id);
+    // Close any editor tabs anchored to this project so they don't keep
+    // firing IPC subscriptions against a workspace the user said goodbye to.
+    if (root) {
+      try {
+        const editor = useEditorStore.getState();
+        const all = [...editor.tabs, ...editor.splitTabs];
+        for (const t of all) {
+          const owned =
+            t.path === root ||
+            t.path.startsWith(`${root}/`) ||
+            t.path.endsWith(`:${root}`); // design:<root>, codeflow:<root>, etc.
+          if (owned) {
+            editor.close(t.path, 'left');
+            editor.close(t.path, 'right');
+          }
+        }
+      } catch {
+        /* editor store unavailable in tests */
+      }
+    }
+    // Tell main to release PTYs / dev-server / file watcher for this project.
+    if (root) {
+      void window.devspace?.workspace?.close?.(id, root).catch(() => undefined);
+    }
     persistSnapshot(get());
   },
 

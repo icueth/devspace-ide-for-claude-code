@@ -84,7 +84,10 @@ function isInBuiltinAgentsDir(filePath: string): boolean {
 }
 
 async function readAgentFile(filePath: string): Promise<string> {
-  const st = await fs.promises.stat(filePath);
+  const st = await fs.promises.lstat(filePath);
+  if (!st.isFile()) {
+    throw new Error(`refusing non-regular agent file: ${filePath}`);
+  }
   if (st.size > MAX_AGENT_FILE_BYTES) {
     throw new Error(`agent file too large (${st.size} bytes)`);
   }

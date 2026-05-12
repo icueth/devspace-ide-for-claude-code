@@ -248,18 +248,22 @@ function EditorBody({ tab, onChange, onSave, onNavDone, mdMode }: EditorBodyProp
       ) : tab.kind === 'image' ? (
         <ImagePreview tab={tab} />
       ) : tab.kind === 'pdf' ? (
-        <Suspense fallback={<LazyFallback label="Loading PDF viewer…" />}>
-          <PdfPreview tab={tab} />
-        </Suspense>
+        <RouteErrorBoundary label="PDF Preview">
+          <Suspense fallback={<LazyFallback label="Loading PDF viewer…" />}>
+            <PdfPreview tab={tab} />
+          </Suspense>
+        </RouteErrorBoundary>
       ) : tab.kind === 'diff' ? (
-        <Suspense fallback={<LazyFallback label="Loading diff view…" />}>
-          <DiffView
-            key={tab.path}
-            fileName={tab.diffRelPath ?? tab.name}
-            oldContent={tab.diffOld ?? ''}
-            newContent={tab.diffNew ?? ''}
-          />
-        </Suspense>
+        <RouteErrorBoundary label="Diff View">
+          <Suspense fallback={<LazyFallback label="Loading diff view…" />}>
+            <DiffView
+              key={tab.path}
+              fileName={tab.diffRelPath ?? tab.name}
+              oldContent={tab.diffOld ?? ''}
+              newContent={tab.diffNew ?? ''}
+            />
+          </Suspense>
+        </RouteErrorBoundary>
       ) : isMarkdown ? (
         <div className="flex h-full min-h-0">
           {mdMode !== 'preview' && (
@@ -282,9 +286,11 @@ function EditorBody({ tab, onChange, onSave, onNavDone, mdMode }: EditorBodyProp
           )}
           {mdMode !== 'code' && (
             <div className="min-h-0 min-w-0 flex-1">
-              <Suspense fallback={<LazyFallback label="Loading preview…" />}>
-                <MarkdownPreview markdown={tab.content} />
-              </Suspense>
+              <RouteErrorBoundary label="Markdown Preview">
+                <Suspense fallback={<LazyFallback label="Loading preview…" />}>
+                  <MarkdownPreview markdown={tab.content} />
+                </Suspense>
+              </RouteErrorBoundary>
             </div>
           )}
         </div>

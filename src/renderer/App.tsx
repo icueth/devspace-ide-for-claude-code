@@ -14,6 +14,7 @@ import { useEffect, useMemo, useState } from 'react';
 
 import { AgentsRail } from '@renderer/components/Agents/AgentsRail';
 import { BottomPanel } from '@renderer/components/Bottom/BottomPanel';
+import { RouteErrorBoundary } from '@renderer/components/Layout/RouteErrorBoundary';
 import { GoToLineDialog } from '@renderer/components/CommandPalette/GoToLineDialog';
 import { PromptDialog } from '@renderer/components/CommandPalette/PromptDialog';
 import { QuickOpenDialog } from '@renderer/components/CommandPalette/QuickOpenDialog';
@@ -38,6 +39,14 @@ import { usePromptStore } from '@renderer/state/prompt';
 import { useWorkspaceStore } from '@renderer/state/workspace';
 
 export default function App() {
+  return (
+    <RouteErrorBoundary label="DevSpace">
+      <AppInner />
+    </RouteErrorBoundary>
+  );
+}
+
+function AppInner() {
   const [version, setVersion] = useState<string>('');
   const load = useWorkspaceStore((s) => s.load);
   const projects = useWorkspaceStore((s) => s.projects);

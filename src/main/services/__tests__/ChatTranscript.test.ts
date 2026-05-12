@@ -46,14 +46,16 @@ describe('ChatTranscript thread CRUD', () => {
   });
 
   it('listThreads hydrates from disk and sorts newest first', async () => {
-    // Drop two thread JSON files directly so we exercise the hydration
-    // path rather than the in-memory cache.
+    // UUIDs are required — non-UUID filenames are rejected at hydrate time
+    // as a defense against hostile project drops (see B5 in v0.11.2 audit).
+    const idA = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
+    const idB = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb';
     const dir = path.join(tmpRoot, '.devspace', 'chat');
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(
-      path.join(dir, 'a.json'),
+      path.join(dir, `${idA}.json`),
       JSON.stringify({
-        id: 'a',
+        id: idA,
         projectId: 'proj',
         title: 'older',
         createdAt: 1,
@@ -62,9 +64,9 @@ describe('ChatTranscript thread CRUD', () => {
       }),
     );
     fs.writeFileSync(
-      path.join(dir, 'b.json'),
+      path.join(dir, `${idB}.json`),
       JSON.stringify({
-        id: 'b',
+        id: idB,
         projectId: 'proj',
         title: 'newer',
         createdAt: 2,
@@ -74,24 +76,62 @@ describe('ChatTranscript thread CRUD', () => {
     );
 
     const threads = await listThreads(tmpRoot);
-    expect(threads.map((t) => t.id)).toEqual(['b', 'a']);
+    expect(threads.map((t) => t.id)).toEqual([idB, idA]);
   });
 
-  it('skips corrupt thread JSON during hydration without throwing', async () => {
+  it('quarantines corrupt thread JSON during hydration without throwing', async () => {
+    const goodId = '11111111-1111-1111-1111-111111111111';
+    const brokenId = '22222222-2222-2222-2222-222222222222';
     const dir = path.join(tmpRoot, '.devspace', 'chat');
     fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(path.join(dir, 'good.json'), JSON.stringify({
-      id: 'good',
+    fs.writeFileSync(path.join(dir, `${goodId}.json`), JSON.stringify({
+      id: goodId,
       projectId: 'proj',
       title: 'ok',
       createdAt: 1,
       updatedAt: 1,
       messages: [],
     }));
-    fs.writeFileSync(path.join(dir, 'broken.json'), 'not json {');
+    fs.writeFileSync(path.join(dir, `${brokenId}.json`), 'not json {');
 
     const threads = await listThreads(tmpRoot);
-    expect(threads.map((t) => t.id)).toEqual(['good']);
+    expect(threads.map((t) => t.id)).toEqual([goodId]);
+    // The broken file is renamed instead of silently dropped so the user
+    // can recover and we get visibility next time they ask about it.
+    const remaining = fs.readdirSync(dir).filter((f) => f.endsWith('.json'));
+    expect(remaining).toEqual([`${goodId}.json`]);
+    const quarantined = fs
+      .readdirSync(dir)
+      .filter((f) => f.startsWith(brokenId) && f.includes('.corrupt-'));
+    expect(quarantined.length).toBe(1);
+  });
+
+  it('rejects non-UUID filenames and quarantines id-mismatch threads', async () => {
+    const fakeId = '33333333-3333-3333-3333-333333333333';
+    const dir = path.join(tmpRoot, '.devspace', 'chat');
+    fs.mkdirSync(dir, { recursive: true });
+    // Filename is a UUID but the body claims a different id — hostile.
+    fs.writeFileSync(
+      path.join(dir, `${fakeId}.json`),
+      JSON.stringify({
+        id: '../../../etc/passwd',
+        projectId: 'proj',
+        title: 'pwn',
+        createdAt: 1,
+        updatedAt: 1,
+        messages: [],
+      }),
+    );
+    // Filename is not a UUID — should be skipped entirely.
+    fs.writeFileSync(path.join(dir, 'evil.json'), JSON.stringify({
+      id: 'evil',
+      projectId: 'proj',
+      title: 'x',
+      messages: [],
+    }));
+
+    const threads = await listThreads(tmpRoot);
+    expect(threads).toEqual([]);
   });
 
   it('updateThreadConfig writes the config and bumps updatedAt', async () => {

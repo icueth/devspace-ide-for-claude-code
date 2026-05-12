@@ -7,6 +7,10 @@ import {
   unsubscribeWatch,
 } from '@main/services/FileWatcherService';
 import { atomicWriteAsync } from '@main/utils/atomicWrite';
+import {
+  assertInWorkspace,
+  assertRegularFile,
+} from '@main/utils/pathScope';
 import { IPC } from '@shared/ipc-channels';
 import { createLogger } from '@shared/logger';
 import type { DirEntry } from '@shared/types';
@@ -46,12 +50,13 @@ function isIgnored(name: string): boolean {
 
 export function registerFsIpc(): void {
   ipcMain.handle(IPC.FS_READ_DIR, async (_e, absPath: string): Promise<DirEntry[]> => {
-    const entries = await fs.promises.readdir(absPath, { withFileTypes: true });
+    const safe = await assertInWorkspace(absPath);
+    const entries = await fs.promises.readdir(safe, { withFileTypes: true });
     return entries
       .filter((e) => !isIgnored(e.name))
       .map((e) => ({
         name: e.name,
-        path: path.join(absPath, e.name),
+        path: path.join(safe, e.name),
         isDirectory: e.isDirectory(),
         isSymlink: e.isSymbolicLink(),
       }))
@@ -62,26 +67,28 @@ export function registerFsIpc(): void {
   });
 
   ipcMain.handle(IPC.FS_READ_FILE, async (_e, absPath: string): Promise<string> => {
-    const stat = await fs.promises.stat(absPath);
+    const safe = await assertInWorkspace(absPath);
+    const stat = await assertRegularFile(safe);
     if (stat.size > MAX_READ_BYTES) {
       throw new Error(
         `File too large (${stat.size} bytes > ${MAX_READ_BYTES}). Large-file support is a later milestone.`,
       );
     }
-    return fs.promises.readFile(absPath, 'utf8');
+    return fs.promises.readFile(safe, 'utf8');
   });
 
   ipcMain.handle(
     IPC.FS_READ_BINARY,
     async (_e, absPath: string): Promise<{ mime: string; base64: string; size: number }> => {
-      const stat = await fs.promises.stat(absPath);
+      const safe = await assertInWorkspace(absPath);
+      const stat = await assertRegularFile(safe);
       if (stat.size > MAX_BINARY_BYTES) {
         throw new Error(
           `File too large (${stat.size} bytes > ${MAX_BINARY_BYTES}).`,
         );
       }
-      const buf = await fs.promises.readFile(absPath);
-      const mime = mimeForPath(absPath);
+      const buf = await fs.promises.readFile(safe);
+      const mime = mimeForPath(safe);
       return { mime, base64: buf.toString('base64'), size: stat.size };
     },
   );
@@ -90,10 +97,11 @@ export function registerFsIpc(): void {
     if (typeof data !== 'string') {
       throw new Error('FS_WRITE_FILE expects UTF-8 string data');
     }
+    const safe = await assertInWorkspace(absPath);
     try {
-      await atomicWriteAsync(absPath, data);
+      await atomicWriteAsync(safe, data);
     } catch (err) {
-      logger.error(`write failed for ${absPath}:`, (err as Error).message);
+      logger.error(`write failed for ${safe}:`, (err as Error).message);
       throw err;
     }
     return true;
@@ -101,46 +109,54 @@ export function registerFsIpc(): void {
 
   ipcMain.handle(
     IPC.FS_LIST_FILES,
-    async (_e, cwd: string): Promise<string[]> => listFiles(cwd),
+    async (_e, cwd: string): Promise<string[]> => {
+      const safe = await assertInWorkspace(cwd);
+      return listFiles(safe);
+    },
   );
 
   ipcMain.handle(
     IPC.FS_CREATE,
     async (_e, absPath: string, kind: 'file' | 'folder'): Promise<string> => {
+      const safe = await assertInWorkspace(absPath);
       if (kind === 'folder') {
-        await fs.promises.mkdir(absPath, { recursive: false });
+        await fs.promises.mkdir(safe, { recursive: false });
       } else {
-        await fs.promises.mkdir(path.dirname(absPath), { recursive: true });
+        await fs.promises.mkdir(path.dirname(safe), { recursive: true });
         // Fail if it exists so the UI can surface a clear error.
-        const fh = await fs.promises.open(absPath, 'wx');
+        const fh = await fs.promises.open(safe, 'wx');
         await fh.close();
       }
-      return absPath;
+      return safe;
     },
   );
 
   ipcMain.handle(
     IPC.FS_RENAME,
     async (_e, src: string, dest: string): Promise<string> => {
-      await fs.promises.rename(src, dest);
-      return dest;
+      const safeSrc = await assertInWorkspace(src);
+      const safeDest = await assertInWorkspace(dest);
+      await fs.promises.rename(safeSrc, safeDest);
+      return safeDest;
     },
   );
 
   ipcMain.handle(IPC.FS_DELETE, async (_e, absPath: string): Promise<void> => {
+    const safe = await assertInWorkspace(absPath);
     try {
-      await shell.trashItem(absPath);
+      await shell.trashItem(safe);
     } catch (err) {
       logger.warn(`trashItem failed, falling back to rm -rf: ${(err as Error).message}`);
-      await fs.promises.rm(absPath, { recursive: true, force: true });
+      await fs.promises.rm(safe, { recursive: true, force: true });
     }
   });
 
   ipcMain.handle(
     IPC.FS_DUPLICATE,
     async (_e, absPath: string): Promise<string> => {
-      const dir = path.dirname(absPath);
-      const base = path.basename(absPath);
+      const safe = await assertInWorkspace(absPath);
+      const dir = path.dirname(safe);
+      const base = path.basename(safe);
       const dot = base.indexOf('.');
       const stem = dot > 0 ? base.slice(0, dot) : base;
       const extOnly = dot > 0 ? base.slice(dot) : '';
@@ -151,18 +167,20 @@ export function registerFsIpc(): void {
         if (n > 100) break;
       }
       const dest = path.join(dir, candidate);
-      await fs.promises.cp(absPath, dest, { recursive: true });
+      await fs.promises.cp(safe, dest, { recursive: true });
       return dest;
     },
   );
 
   ipcMain.handle(IPC.FS_REVEAL, async (_e, absPath: string): Promise<void> => {
-    shell.showItemInFolder(absPath);
+    const safe = await assertInWorkspace(absPath);
+    shell.showItemInFolder(safe);
   });
 
   ipcMain.handle(IPC.FS_WATCH, async (event, root: string, enable: boolean) => {
-    if (enable) subscribeWatch(root, event.sender);
-    else unsubscribeWatch(root, event.sender);
+    const safe = await assertInWorkspace(root);
+    if (enable) subscribeWatch(safe, event.sender);
+    else unsubscribeWatch(safe, event.sender);
   });
 }
 

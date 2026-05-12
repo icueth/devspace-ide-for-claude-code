@@ -112,7 +112,10 @@ function isInPluginMarketplacesDir(filePath: string): boolean {
 }
 
 async function readSkillFile(filePath: string): Promise<string> {
-  const st = await fs.promises.stat(filePath);
+  const st = await fs.promises.lstat(filePath);
+  if (!st.isFile()) {
+    throw new Error(`refusing non-regular skill file: ${filePath}`);
+  }
   if (st.size > MAX_SKILL_FILE_BYTES) {
     throw new Error(`skill file too large (${st.size} bytes)`);
   }

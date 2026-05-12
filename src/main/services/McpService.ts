@@ -2,6 +2,8 @@ import { homedir } from 'node:os';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
+import { atomicWriteAsync } from '@main/utils/atomicWrite';
+import { assertInWorkspace, assertSafeKey } from '@main/utils/pathScope';
 import { createLogger } from '@shared/logger';
 import type {
   McpScope,
@@ -13,10 +15,6 @@ import type {
 
 const logger = createLogger('Mcp');
 
-// Locations Claude Code consults for MCP definitions. We intentionally
-// leave the auto-managed `~/.claude/mcp.json` alone — `claude mcp add`
-// writes there itself, and double-managing it from two writers
-// invites a race.
 function globalConfigFile(): string {
   return path.join(homedir(), '.claude.json');
 }
@@ -25,11 +23,28 @@ function projectConfigFile(projectPath: string): string {
   return path.join(projectPath, '.mcp.json');
 }
 
+/**
+ * Resolve the file to write to, validating that:
+ *  - global scope always writes ~/.claude.json (renderer cannot redirect)
+ *  - project scope requires a projectPath that lives under an open workspace
+ *
+ * Note: legacy callers pass `filePath` from `listMcpServers`, but we never
+ * trust it — we always rebuild the path from scope + projectPath.
+ */
+async function resolveConfigFile(
+  scope: McpScope,
+  projectPath: string | null | undefined,
+): Promise<string> {
+  if (scope === 'global') return globalConfigFile();
+  if (!projectPath || typeof projectPath !== 'string') {
+    throw new Error('project scope requires a projectPath');
+  }
+  const safe = await assertInWorkspace(projectPath);
+  return projectConfigFile(safe);
+}
+
 interface RawConfig {
   mcpServers?: Record<string, RawMcpServer>;
-  // Everything else in the file is preserved verbatim on write so we
-  // don't accidentally clobber unrelated claude settings (the global
-  // file is 100KB+ of mixed settings).
   [key: string]: unknown;
 }
 
@@ -40,8 +55,28 @@ interface RawMcpServer {
   url?: string;
   transport?: string;
   headers?: Record<string, string>;
-  // Unknown fields kept around so a save round-trip doesn't drop them.
   [key: string]: unknown;
+}
+
+// ─── per-file mutex to defeat read-modify-write races ───────────────────────
+
+const writeLocks = new Map<string, Promise<void>>();
+
+async function withFileLock<T>(file: string, fn: () => Promise<T>): Promise<T> {
+  const prev = writeLocks.get(file) ?? Promise.resolve();
+  let release!: () => void;
+  const next = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  writeLocks.set(file, prev.then(() => next));
+  try {
+    await prev;
+    return await fn();
+  } finally {
+    release();
+    // Free the map slot when the chain has drained.
+    if (writeLocks.get(file) === next) writeLocks.delete(file);
+  }
 }
 
 // ─── public API ─────────────────────────────────────────────────────────────
@@ -53,14 +88,23 @@ export async function listMcpServers(
   const sources: Array<{ file: string; scope: McpScope }> = [
     { file: globalConfigFile(), scope: 'global' },
   ];
-  if (projectPath) {
-    sources.push({ file: projectConfigFile(projectPath), scope: 'project' });
+  if (projectPath && typeof projectPath === 'string') {
+    // Listing doesn't write; permit any project workspace path the user added.
+    try {
+      const safe = await assertInWorkspace(projectPath);
+      sources.push({ file: projectConfigFile(safe), scope: 'project' });
+    } catch {
+      // not a known workspace — quietly skip; renderer may pass a stale path
+    }
   }
 
   for (const { file, scope } of sources) {
     const cfg = await readConfig(file);
     const servers = cfg.mcpServers ?? {};
     for (const [name, raw] of Object.entries(servers)) {
+      if (typeof name !== 'string' || !/^[A-Za-z0-9._-]{1,64}$/.test(name)) {
+        continue; // skip malformed entries on read
+      }
       out.push({
         name,
         scope,
@@ -77,15 +121,18 @@ export async function listMcpServers(
 }
 
 export async function saveMcpServer(entry: McpServerEntry): Promise<McpServerEntry> {
-  const file =
-    entry.scope === 'global'
-      ? globalConfigFile()
-      : entry.filePath;
-  const cfg = await readConfig(file);
-  if (!cfg.mcpServers) cfg.mcpServers = {};
-  cfg.mcpServers[entry.name] = denormalizeServer(entry.server);
-  await writeConfig(file, cfg);
-  return { ...entry, filePath: file };
+  assertSafeKey(entry.name);
+  const projectPath = entry.scope === 'project'
+    ? path.dirname(entry.filePath ?? '')
+    : null;
+  const file = await resolveConfigFile(entry.scope, projectPath);
+  return withFileLock(file, async () => {
+    const cfg = await readConfig(file);
+    if (!cfg.mcpServers) cfg.mcpServers = Object.create(null) as Record<string, RawMcpServer>;
+    cfg.mcpServers[entry.name] = denormalizeServer(entry.server);
+    await writeConfig(file, cfg);
+    return { ...entry, filePath: file };
+  });
 }
 
 export async function renameMcpServer(
@@ -95,17 +142,22 @@ export async function renameMcpServer(
   newName: string,
 ): Promise<void> {
   if (oldName === newName) return;
-  const file = scope === 'global' ? globalConfigFile() : filePath;
-  const cfg = await readConfig(file);
-  if (!cfg.mcpServers?.[oldName]) {
-    throw new Error(`mcp server not found: ${oldName}`);
-  }
-  if (cfg.mcpServers[newName]) {
-    throw new Error(`mcp server already exists: ${newName}`);
-  }
-  cfg.mcpServers[newName] = cfg.mcpServers[oldName];
-  delete cfg.mcpServers[oldName];
-  await writeConfig(file, cfg);
+  assertSafeKey(oldName);
+  assertSafeKey(newName);
+  const projectPath = scope === 'project' ? path.dirname(filePath) : null;
+  const file = await resolveConfigFile(scope, projectPath);
+  await withFileLock(file, async () => {
+    const cfg = await readConfig(file);
+    if (!cfg.mcpServers?.[oldName]) {
+      throw new Error(`mcp server not found: ${oldName}`);
+    }
+    if (cfg.mcpServers[newName]) {
+      throw new Error(`mcp server already exists: ${newName}`);
+    }
+    cfg.mcpServers[newName] = cfg.mcpServers[oldName];
+    delete cfg.mcpServers[oldName];
+    await writeConfig(file, cfg);
+  });
 }
 
 export async function deleteMcpServer(
@@ -113,12 +165,16 @@ export async function deleteMcpServer(
   filePath: string,
   name: string,
 ): Promise<void> {
-  const file = scope === 'global' ? globalConfigFile() : filePath;
-  const cfg = await readConfig(file);
-  if (cfg.mcpServers) {
-    delete cfg.mcpServers[name];
-    await writeConfig(file, cfg);
-  }
+  assertSafeKey(name);
+  const projectPath = scope === 'project' ? path.dirname(filePath) : null;
+  const file = await resolveConfigFile(scope, projectPath);
+  await withFileLock(file, async () => {
+    const cfg = await readConfig(file);
+    if (cfg.mcpServers) {
+      delete cfg.mcpServers[name];
+      await writeConfig(file, cfg);
+    }
+  });
 }
 
 export async function createMcpServer(
@@ -127,21 +183,18 @@ export async function createMcpServer(
   name: string,
   server: McpServer,
 ): Promise<McpServerEntry> {
-  if (scope === 'project' && !projectPath) {
-    throw new Error('project scope requires a projectPath');
-  }
-  const file =
-    scope === 'global'
-      ? globalConfigFile()
-      : projectConfigFile(projectPath ?? '');
-  const cfg = await readConfig(file);
-  if (!cfg.mcpServers) cfg.mcpServers = {};
-  if (cfg.mcpServers[name]) {
-    throw new Error(`mcp server already exists: ${name}`);
-  }
-  cfg.mcpServers[name] = denormalizeServer(server);
-  await writeConfig(file, cfg);
-  return { name, scope, filePath: file, server };
+  assertSafeKey(name);
+  const file = await resolveConfigFile(scope, projectPath);
+  return withFileLock(file, async () => {
+    const cfg = await readConfig(file);
+    if (!cfg.mcpServers) cfg.mcpServers = Object.create(null) as Record<string, RawMcpServer>;
+    if (cfg.mcpServers[name]) {
+      throw new Error(`mcp server already exists: ${name}`);
+    }
+    cfg.mcpServers[name] = denormalizeServer(server);
+    await writeConfig(file, cfg);
+    return { name, scope, filePath: file, server };
+  });
 }
 
 // ─── internals ──────────────────────────────────────────────────────────────
@@ -150,35 +203,31 @@ async function readConfig(file: string): Promise<RawConfig> {
   try {
     const raw = await fs.promises.readFile(file, 'utf8');
     const parsed = JSON.parse(raw) as RawConfig;
+    // Reseat mcpServers map into a null-prototype object so __proto__ keys
+    // can never be assigned through downstream `cfg.mcpServers[name] = …`.
+    if (parsed.mcpServers && typeof parsed.mcpServers === 'object') {
+      const clean = Object.create(null) as Record<string, RawMcpServer>;
+      for (const [k, v] of Object.entries(parsed.mcpServers)) {
+        if (k === '__proto__' || k === 'constructor' || k === 'prototype') continue;
+        clean[k] = v;
+      }
+      parsed.mcpServers = clean;
+    }
     return parsed;
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
     if (code === 'ENOENT') return {};
-    // Corrupt JSON in the global file is dangerous — we should NOT
-    // overwrite it on save. Re-throw so the UI surfaces the error.
     logger.warn(`failed to read ${file}: ${(err as Error).message}`);
     throw err;
   }
 }
 
 async function writeConfig(file: string, cfg: RawConfig): Promise<void> {
-  await fs.promises.mkdir(path.dirname(file), { recursive: true });
-  // Pretty-print to match how Claude writes the file. The global file is
-  // edited by multiple tools (claude CLI itself, claude desktop, this app)
-  // and they all use 2-space indentation by convention.
   const json = JSON.stringify(cfg, null, 2);
-  // Atomic write: stage to a sibling then rename. Without this a crash
-  // mid-write could leave the user with an unparseable ~/.claude.json
-  // and a broken claude install.
-  const tmp = `${file}.tmp-${Date.now()}`;
-  await fs.promises.writeFile(tmp, json);
-  await fs.promises.rename(tmp, file);
+  await atomicWriteAsync(file, json);
 }
 
 function normalizeServer(raw: RawMcpServer): McpServer {
-  // Heuristic: presence of `command` = stdio, presence of `url` = http/sse.
-  // If both are present, prefer command (stdio is closer to most claude
-  // setups and shows up more often in the wild).
   if (raw.command) {
     return {
       transport: 'stdio',
@@ -198,8 +247,6 @@ function normalizeServer(raw: RawMcpServer): McpServer {
           : undefined,
     };
   }
-  // Garbage entry — fall back to a stub stdio shape so the UI can still
-  // render and the user can fix it manually.
   return { transport: 'stdio', command: '' };
 }
 
@@ -213,8 +260,6 @@ function denormalizeServer(server: McpServer): RawMcpServer {
   }
   const s = server as McpHttpServer;
   const out: RawMcpServer = { url: s.url };
-  // Only write `transport` field for sse — claude defaults http when
-  // absent. Keeps generated JSON minimal.
   if (s.transport === 'sse') out.transport = 'sse';
   if (s.headers && Object.keys(s.headers).length > 0) out.headers = s.headers;
   return out;
