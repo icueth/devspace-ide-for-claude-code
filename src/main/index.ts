@@ -35,6 +35,7 @@ import { registerGitIpc } from '@main/ipc/git';
 import { registerLlmIpc } from '@main/ipc/llm';
 import { registerMcpIpc } from '@main/ipc/mcp';
 import { registerSkillsIpc } from '@main/ipc/skills';
+import { registerStyleAdapterIpc } from '@main/ipc/styleAdapter';
 import { registerTeamsIpc } from '@main/ipc/teams';
 import { registerPtyIpc } from '@main/ipc/pty';
 import { registerSearchIpc } from '@main/ipc/search';
@@ -259,6 +260,7 @@ app.whenReady().then(async () => {
   registerTeamsIpc();
   registerDesignIpc();
   registerDevServerIpc();
+  registerStyleAdapterIpc();
 
   await createWindow();
 

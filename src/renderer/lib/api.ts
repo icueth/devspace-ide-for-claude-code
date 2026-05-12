@@ -42,11 +42,14 @@ import type {
 } from '@shared/types';
 import type {
   CreateDesignInput,
+  DesignAdapterDetectResult,
   DesignEvent,
   DesignSaveEditsInput,
   DesignScreen,
   DesignSkill,
   DesignSystem,
+  DesignWriteBackInput,
+  DesignWriteBackResult,
   DevServerEvent,
   DevServerInfo,
   DevServerStartInput,
@@ -269,6 +272,18 @@ export interface DevspaceApi {
       cb: (event: DevServerEvent) => void,
     ) => () => void;
   };
+  // Phase 0.8 write-back. The renderer captures user edits in the Live
+  // Preview Edit panel, calls `detect(projectPath)` on mount to learn
+  // which style adapter to default to, then `writeBack` with `dryRun:
+  // true` to preview the diff and `dryRun: false` to commit. The main
+  // process resolves each edit through the matching `StyleAdapter`
+  // (Tailwind in 0.8; vanilla CSS / styled-components / CSS Modules in
+  // 0.9). Mirrors the `devServer` namespace shape — detect + a single
+  // write call.
+  styleAdapter: {
+    detect: (projectPath: string) => Promise<DesignAdapterDetectResult>;
+    writeBack: (input: DesignWriteBackInput) => Promise<DesignWriteBackResult>;
+  };
   codeflow: {
     getStatus: (projectPath: string) => Promise<CodeflowStatus>;
     analyze: (projectPath: string, opts?: { force?: boolean }) => Promise<void>;
@@ -475,6 +490,19 @@ function makeStubApi(): DevspaceApi {
       subscribe: () => Promise.resolve(),
       unsubscribe: () => Promise.resolve(),
       onEvent: () => () => undefined,
+    },
+    styleAdapter: {
+      // Permissive idle stub so the EditPanel can render before the
+      // backend agent finishes wiring the preload binding. Returns an
+      // "unknown" adapter shape so the UI shows the "not yet detected"
+      // empty state instead of throwing.
+      detect: () =>
+        Promise.resolve({
+          preferred: 'unknown',
+          available: [],
+          evidence: [],
+        } as DesignAdapterDetectResult),
+      writeBack: notWired('styleAdapter.writeBack'),
     },
     codeflow: {
       getStatus: notWired('codeflow.getStatus'),

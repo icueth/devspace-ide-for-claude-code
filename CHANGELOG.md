@@ -5,6 +5,39 @@ All notable changes to DevSpace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.8.0] — 2026-05-12
+
+### Added — Design Studio Phase C3a (Tailwind write-back)
+
+- **Edit mode in Live Preview** can now write changes back to JSX/TSX source files. Pick an element, edit CSS properties, see a unified diff preview (dry-run), click Apply to land the change on disk.
+- **`StyleAdapterService`** detects the project's styling stack and dispatches to the matching adapter. v0.8.0 ships **Tailwind** only; v0.9.0 adds vanilla CSS, styled-components, CSS Modules.
+- **TailwindAdapter** does AST-based JSX writes via `@babel/parser`. Two strategies:
+  - **Class swap** (preferred): when the bridge reports `classOrigin: 'literal'`, the adapter parses the existing `className="..."` literal, removes the old conflict-group class via `prefixForClass`, splices the new class in. Preserves the user's existing class order, quote style, and surrounding formatting.
+  - **Style-prop write** (fallback): when className is computed (`cn(...)`, template literal, binary concat) or no Tailwind equivalent exists, the adapter adds/merges a `style={{...}}` attribute with proper JS string escaping.
+- **35 CSS properties supported** (background-color, color, padding+sides, margin+sides, gap, width/height incl. min/max, font-size/weight, border-radius/width, opacity, display, text-align, flex-direction, justify-content, align-items, position, font-style, text-decoration, cursor, overflow). Tailwind palette: 17 hues × 10 shades + black/white/transparent. Spacing scale: 32 px tokens. Off-palette values fall back to `bg-[#xxx]` arbitrary-value syntax.
+- **Adapter detector** classifies projects: `tailwindcss + tailwind.config.*` → Tailwind preferred; styled-components/Emotion in deps → preferred when no Tailwind; `.module.css` files or vanilla `.css` files contribute to `available` list. Evidence is surfaced in a "Why this adapter?" tooltip.
+- **Dry-run preview**: every property edit triggers a debounced (300ms) dry-run round-trip that returns a unified diff per file. The Apply button is only clickable once the user has pending changes and the adapter is Tailwind.
+
+### Hardening applied before commit (2 reviewers, 27 findings)
+
+- 🔒 **SEC-CRITICAL** (RCE): Strict character allowlist for Tailwind arbitrary-value brackets (`bg-[#xxx]` etc.) — user-typed CSS values previously got spliced verbatim into JSX className literals, letting any `"`/`<`/`{` break out of the attribute and inject JSX/JS that runs on the next dev-server build. The allowlist now rejects anything outside `[A-Za-z0-9_:./%#,-]` and falls back to the safe `style={{...}}` path.
+- 🔒 **SEC-CRITICAL** (RCE): `edit.tailwindClass` from IPC input is now validated against a strict Tailwind-class regex (allows variants like `hover:`/`md:` and arbitrary brackets, refuses whitespace/quotes/braces/equals).
+- 🔒 **SEC-HIGH**: `source.ref` files are `lstat`'d BEFORE realpath — symlinks are rejected even when they point inside the project root, closing the "src/Innocent.tsx → package.json" attack.
+- 🔒 **SEC-HIGH**: Write-back is restricted to JS/TS extensions (`.tsx/.jsx/.ts/.js/.mjs/.cjs/.mts/.cts`); no more attempts to splice into `package.json`, `.env`, etc.
+- 🔒 **SEC-MEDIUM**: Babel parser switched to `errorRecovery: false` — partial ASTs from malformed input could yield phantom JSX matches at wrong byte ranges.
+- 🔒 **SEC-MEDIUM**: Per-edit shape validation at the IPC boundary (`property`/`value` strings with hard length caps, `source.ref` length cap, `edits[]` length 1–200).
+- 🐛 **BUG-HIGH**: Per-file async lock in `StyleAdapterService` so two concurrent `writeBack` calls to the same file serialize — eliminates the silent read-splice-rename race that dropped one user's edit.
+- 🐛 **BUG-HIGH**: `EditPanel` Apply button uses an `inFlightRef` synchronous guard so spam-clicks during React's render gap can't fire `writeBack` twice.
+- 🐛 **BUG-HIGH**: `reqIdRef` is bumped on selected-element change so a stale dry-run from the previous element can't paint the new panel.
+- 🐛 **BUG-HIGH**: Apply is disabled when the picked adapter isn't Tailwind (the only one implemented in 0.8); the existing "Vanilla CSS write-back arrives in v0.9.0" warning now extends to every non-Tailwind selection.
+- 🐛 **BUG-HIGH**: `existsMatching` no longer counts skipped directories against the entry cap — fixes monorepo detection misses for `css-modules` / `vanilla-css` files behind a forest of `node_modules`.
+
+### Verification
+
+- 157/157 vitest tests pass (62 new for Tailwind/StyleAdapter)
+- Typecheck clean across all three tsconfigs
+- arm64 dmg build clean
+
 ## [0.7.0] — 2026-05-12
 
 ### Added — Design Studio Phase C1+C2 (Live Preview)

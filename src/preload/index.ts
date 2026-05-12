@@ -285,6 +285,12 @@ const api = {
       return () => ipcRenderer.off(IPC.DESIGN_EVENT, listener);
     },
   },
+  styleAdapter: {
+    detect: (projectPath: string) =>
+      ipcRenderer.invoke(IPC.DESIGN_DETECT_ADAPTER, { projectPath }),
+    writeBack: (input: import('@shared/design').DesignWriteBackInput) =>
+      ipcRenderer.invoke(IPC.DESIGN_WRITE_BACK, input),
+  },
   devServer: {
     detect: (projectPath: string) =>
       ipcRenderer.invoke(IPC.DEVSERVER_DETECT, projectPath),

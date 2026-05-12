@@ -24,6 +24,7 @@ import type {
   DevServerInfo,
 } from '@shared/design';
 
+import { EditPanel } from './EditPanel';
 import { LivePreviewLogPane } from './LivePreviewLogPane';
 import { LivePreviewToolbar } from './LivePreviewToolbar';
 import {
@@ -590,11 +591,18 @@ export function LivePreviewView({ projectPath }: LivePreviewViewProps) {
           />
         </main>
 
-        {mode !== 'view' && (
+        {mode === 'inspect' && (
           <ElementInfoPanel
             info={selectedElement}
             onClose={() => setMode('view')}
             mode={mode}
+          />
+        )}
+        {mode === 'edit' && (
+          <EditPanel
+            selectedElement={selectedElement}
+            projectPath={projectPath}
+            onClose={() => setMode('view')}
           />
         )}
       </div>

@@ -418,19 +418,49 @@ export interface DesignWriteBackInput {
   // diff" before the user confirms.
   preferredAdapter?: StyleAdapterKind;
   edits: DesignWriteBackEdit[];
+  // When true the service computes the diff/summary but DOES NOT write
+  // to disk. Returns the same `applied[]` shape with `summary` populated
+  // so the UI can render a "Preview" before the user confirms.
+  dryRun?: boolean;
+}
+
+export interface DesignAdapterDetectInput {
+  projectPath: string;
+}
+
+export interface DesignAdapterDetectResult {
+  // The single adapter the project prefers, based on its style stack.
+  preferred: StyleAdapterKind;
+  // All adapters that *could* be applied. Tailwind + CSS Modules can
+  // coexist (e.g. Next.js app); the UI offers a dropdown when this list
+  // has more than one entry.
+  available: StyleAdapterKind[];
+  // Files / features the detector used to make the call. Surfaced in a
+  // "?" tooltip so users understand why a particular adapter was picked.
+  evidence: string[];
+}
+
+export interface DesignWriteBackApplied {
+  // The original source.ref the renderer sent (echoed for matching).
+  sourceRef: string;
+  adapter: StyleAdapterKind;
+  // Absolute path of the file that was touched (or would be touched on
+  // dryRun). Empty when the adapter failed before resolving a file.
+  filePath: string;
+  // Human-readable summary the UI shows in the "applied" / "preview" toast
+  // (e.g. "swap bg-red-500 → bg-blue-500" or "added style={{color}}").
+  summary: string;
+  // Optional unified diff for the preview panel (one hunk per edit).
+  // Format: `--- a/<rel>\n+++ b/<rel>\n@@ ... @@\n-…\n+…`. Renderer can
+  // pass this to its existing diff viewer.
+  diff?: string;
+  error?: string;
 }
 
 export interface DesignWriteBackResult {
   ok: boolean;
   // One entry per edit. Same length and order as `input.edits`.
-  applied: Array<{
-    sourceRef: string;
-    adapter: StyleAdapterKind;
-    filePath: string;       // absolute path of the file that was touched
-    // Human-readable summary the UI shows in the "applied" toast.
-    summary: string;
-    error?: string;         // populated when this single edit failed
-  }>;
+  applied: DesignWriteBackApplied[];
   // Aggregate error when the whole batch failed before any edit landed.
   errorMessage?: string;
 }
