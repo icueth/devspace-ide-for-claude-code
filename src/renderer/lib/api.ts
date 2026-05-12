@@ -43,6 +43,7 @@ import type {
 import type {
   CreateDesignInput,
   DesignEvent,
+  DesignSaveEditsInput,
   DesignScreen,
   DesignSkill,
   DesignSystem,
@@ -225,6 +226,7 @@ export interface DevspaceApi {
     get: (projectPath: string, screenId: string) => Promise<DesignScreen | null>;
     create: (input: CreateDesignInput) => Promise<DesignScreen>;
     regenerate: (input: RegenerateDesignInput) => Promise<DesignScreen>;
+    saveEdits: (input: DesignSaveEditsInput) => Promise<DesignScreen>;
     delete: (projectPath: string, screenId: string) => Promise<void>;
     cancel: (projectPath: string, screenId: string) => Promise<void>;
     listSkills: (projectPath: string | null) => Promise<DesignSkill[]>;
@@ -409,6 +411,7 @@ function makeStubApi(): DevspaceApi {
       get: () => Promise.resolve(null),
       create: notWired('design.create'),
       regenerate: notWired('design.regenerate'),
+      saveEdits: notWired('design.saveEdits'),
       delete: notWired('design.delete'),
       cancel: notWired('design.cancel'),
       listSkills: () => Promise.resolve([]),

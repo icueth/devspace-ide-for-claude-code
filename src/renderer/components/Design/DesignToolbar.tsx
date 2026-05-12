@@ -4,8 +4,12 @@ import {
   Check,
   ChevronDown,
   CircleDot,
+  Eye,
   Loader2,
+  MousePointer,
   Paintbrush,
+  Pencil,
+  Save,
   Sparkles,
   X,
 } from 'lucide-react';
@@ -13,6 +17,7 @@ import { useMemo } from 'react';
 
 import { cn } from '@renderer/lib/utils';
 import type {
+  DesignBridgeMode,
   DesignScope,
   DesignScreenStatus,
   DesignSkill,
@@ -43,6 +48,17 @@ export interface DesignToolbarProps {
   onBriefChange: (brief: string) => void;
   onGenerate: () => void;
   onCancel: () => void;
+  // ─── Phase B: inspect/edit mode toggle ────────────────────────────
+  /** Current renderer-side inspect/edit mode. */
+  mode: DesignBridgeMode;
+  /** Mode toggle handler. */
+  onModeChange: (mode: DesignBridgeMode) => void;
+  /** Number of pending CSS edits awaiting save. */
+  pendingEditsCount: number;
+  /** Save-edits handler — only invoked when there are pending edits. */
+  onSaveEdits: () => void;
+  /** True while the save snapshot/IPC round-trip is in flight. */
+  saving: boolean;
 }
 
 /**
@@ -66,6 +82,11 @@ export function DesignToolbar({
   onBriefChange,
   onGenerate,
   onCancel,
+  mode,
+  onModeChange,
+  pendingEditsCount,
+  onSaveEdits,
+  saving,
 }: DesignToolbarProps) {
   const skillGroups = useMemo(() => groupByScope(skills), [skills]);
   const systemGroups = useMemo(() => groupByScope(systems), [systems]);
@@ -151,7 +172,30 @@ export function DesignToolbar({
           )}
         </PickerSelect>
 
+        <ModeToggle mode={mode} onChange={onModeChange} disabled={busy} />
+
         <div className="flex-1" />
+        {mode === 'edit' && pendingEditsCount > 0 && (
+          <button
+            type="button"
+            onClick={onSaveEdits}
+            disabled={saving}
+            className={cn(
+              'inline-flex h-[26px] items-center gap-1.5 rounded-[6px] border px-2.5 text-[11px] font-medium transition',
+              saving
+                ? 'pointer-events-none border-border bg-surface-3 text-text-muted opacity-60'
+                : 'border-semantic-success/40 bg-[rgba(34,197,94,0.12)] text-semantic-success hover:bg-[rgba(34,197,94,0.18)]',
+            )}
+            title="Snapshot current edits as a new version"
+          >
+            {saving ? (
+              <Loader2 size={11} className="animate-spin" />
+            ) : (
+              <Save size={11} />
+            )}
+            {saving ? 'Saving…' : `Save edits (${pendingEditsCount})`}
+          </button>
+        )}
         <StatusBadge status={status} errorMessage={errorMessage ?? null} />
       </div>
 
@@ -201,6 +245,69 @@ export function DesignToolbar({
           </button>
         )}
       </div>
+    </div>
+  );
+}
+
+interface ModeToggleProps {
+  mode: DesignBridgeMode;
+  onChange: (mode: DesignBridgeMode) => void;
+  disabled?: boolean;
+}
+
+const MODE_OPTIONS: Array<{
+  value: DesignBridgeMode;
+  icon: React.ReactNode;
+  label: string;
+  title: string;
+}> = [
+  { value: 'view', icon: <Eye size={11} />, label: 'View', title: 'View only' },
+  {
+    value: 'inspect',
+    icon: <MousePointer size={11} />,
+    label: 'Inspect',
+    title: 'Hover to highlight, click to inspect element',
+  },
+  {
+    value: 'edit',
+    icon: <Pencil size={11} />,
+    label: 'Edit',
+    title: 'Edit element styles inline',
+  },
+];
+
+function ModeToggle({ mode, onChange, disabled }: ModeToggleProps) {
+  return (
+    <div
+      className={cn(
+        'inline-flex overflow-hidden rounded-[6px] border border-border-subtle bg-surface-3',
+        disabled && 'opacity-60',
+      )}
+      role="group"
+      aria-label="Preview mode"
+    >
+      {MODE_OPTIONS.map((opt) => {
+        const active = mode === opt.value;
+        return (
+          <button
+            key={opt.value}
+            type="button"
+            title={opt.title}
+            disabled={disabled}
+            onClick={() => onChange(opt.value)}
+            aria-pressed={active}
+            className={cn(
+              'inline-flex h-[26px] items-center gap-1 px-2 text-[10.5px] font-medium transition',
+              active
+                ? 'bg-[rgba(76,141,255,0.18)] text-accent'
+                : 'text-text-muted hover:bg-surface-4 hover:text-text',
+            )}
+          >
+            {opt.icon}
+            {opt.label}
+          </button>
+        );
+      })}
     </div>
   );
 }

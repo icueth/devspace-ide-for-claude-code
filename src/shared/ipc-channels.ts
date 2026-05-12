@@ -137,6 +137,11 @@ export const IPC = {
   DESIGN_READ_HTML: 'design:read-html',
   DESIGN_SUBSCRIBE: 'design:subscribe',
   DESIGN_EVENT: 'design:event',
+  // Phase B: write-back of inline edits as a new version. Renderer sends
+  // the full edited HTML snapshot (already serialized from the iframe
+  // bridge) plus the op log for provenance. Main hardens + archives the
+  // previous index.html into history/ + writes the new one atomically.
+  DESIGN_SAVE_EDITS: 'design:save-edits',
 
   // Codeflow — codebase visualization + Claude-generated architecture docs
   CODEFLOW_GET_STATUS: 'codeflow:get-status',

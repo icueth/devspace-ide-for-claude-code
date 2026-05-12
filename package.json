@@ -1,7 +1,7 @@
 {
   "name": "devspace",
   "type": "module",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "One-window MacBook dev workspace with Claude Code CLI at the core",
   "license": "MIT",
   "author": {
@@ -67,6 +67,7 @@
     "diff": "^8.0.3",
     "highlight.js": "^11.11.1",
     "lucide-react": "^0.577.0",
+    "node-html-parser": "^7.1.0",
     "node-pty": "^1.1.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
@@ -132,7 +133,9 @@
       {
         "from": "resources/design-packs",
         "to": "design-packs",
-        "filter": ["**/*"]
+        "filter": [
+          "**/*"
+        ]
       }
     ],
     "compression": "maximum",

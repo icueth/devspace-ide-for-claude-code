@@ -5,6 +5,106 @@ All notable changes to DevSpace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.6.0] — 2026-05-12
+
+### Added — Design Studio Phase B
+- **Inspect mode.** A new toolbar segmented control (View / Inspect /
+  Edit) drives the preview iframe. In Inspect, hovering a generated
+  element highlights it with an outline; clicking opens a right-side
+  panel with the element's tag, classes, dimensions, and the most
+  relevant computed styles (color, font, padding/margin, border-radius,
+  …). All identity is via `data-devspace-id` attributes assigned at
+  hardening time — stable across regenerations and edits.
+- **Edit mode.** Same hover/click flow, but the side panel becomes a
+  control surface: color pickers for text + background, font-size with
+  unit, font-weight selector, padding/margin/border-radius inputs,
+  display + text-align toggles. Every change streams an `applyEdit`
+  message to the iframe which calls `setProperty()` on the live
+  element — instant visual feedback without a re-render. The EditPanel
+  optimistically updates its own display from each op so the slider
+  stays in sync with what's painted.
+- **Save edits as new version.** A toolbar Save button (visible when at
+  least one edit is pending in Edit mode) requests a full DOM snapshot
+  from the iframe via postMessage. The renderer prompts for an optional
+  note and writes the result through the new `design:save-edits` IPC,
+  which archives the prior `index.html` into `history/<versionId>/`,
+  hardens the inbound HTML through the same pipeline as generation
+  output, and appends a new version row marked `origin: 'edit'` (so
+  history shows generated vs manually-edited revisions distinctly). The
+  existing MAX_VERSIONS=20 eviction policy applies to both kinds.
+- **Bridge protocol** (`@shared/design`) — typed postMessage union with
+  6 inbound + 5 outbound message kinds (`bridgeReady`, `elementHover`,
+  `elementSelect`, `editApplied`, `snapshot`, `bridgeError` /
+  `setMode`, `applyEdit`, `clearOverrides`, `requestSnapshot`,
+  `focusElement`). Iframe is sandboxed with `allow-scripts` only — no
+  `allow-same-origin`, no `allow-popups` — and the renderer validates
+  every inbound message by `event.source === iframe.contentWindow`.
+- **`DesignElementInfo.source` field reservation.** Every element in the
+  preview now reports `source: { kind: 'generated' }`. Phase C will
+  populate this with a JSX file/line reference when the previewed tree
+  originates from real user source code rather than a Claude generation
+  — the field is in the protocol now so Phase C does not break v1.
+
+### Security
+- **Bridge spoof prevention.** A hostile inline `<script>` in a
+  Claude-generated screen runs in the same `contentWindow` as the
+  bridge IIFE — meaning the renderer's `event.source` identity check
+  cannot distinguish bridge from squatter. The exploit: hostile script
+  observes `requestSnapshot` and races the legitimate bridge with a
+  forged `snapshot` reply containing attacker-chosen HTML, which the
+  renderer would forward to `saveEdits` and persist. Fix: `saveEdits`
+  now strips ALL inline `<script>` tags from inbound HTML before
+  re-hardening. The bridge IIFE is then re-injected fresh from
+  trusted server-side source. Legitimate generation-time inline
+  scripts remain in earlier version rows untouched, so nothing is
+  lost — only the *edit path* refuses to round-trip inline JS.
+- **Additional hardener strips.** `<meta http-equiv="refresh">` and
+  `<base>` tags are now stripped on every persist. Combined with the
+  existing CSP and sandbox they were redundant, but they were the only
+  remaining tags that could nudge the iframe toward an attacker-chosen
+  navigation target.
+- **Rate-limited saveEdits.** Per-screen 2-second cooldown caps disk
+  fill if a compromised renderer pivots through `saveEdits`. The
+  HTML payload cap is tightened from 5 MB to 2 MB (real screens are
+  20–200 KB).
+- **Selector hardening.** The bridge IIFE's `findById` and `applyEdit`
+  now reject any non-numeric element ID before reaching `querySelector`
+  — defense-in-depth against a future renderer-side bug that could
+  leak user input into the selector.
+
+### Changed
+- `hardenGeneratedHtml` now also tags every element with a stable
+  `data-devspace-id` and injects the bridge IIFE script before
+  `</body>`. Both operations are idempotent — re-running on already-
+  hardened HTML neither renumbers existing IDs nor stacks bridge
+  copies.
+- Snapshot serialization in the bridge IIFE now clears both `outline`
+  AND `outline-offset` on the hovered/selected elements before
+  capturing `outerHTML`, so the editor's `2px solid #6366f1` /
+  `1px` offset can no longer bleed into the persisted HTML as a
+  permanent inline style.
+
+### Fixed
+- Snapshot waiter no longer leaks its 10-second timeout when the user
+  cancels the note prompt during a save. The note prompt now opens
+  *before* the snapshot request, so a cancellation never even sends
+  the message.
+- `bridgeReady` re-handshake (which fires every time the iframe
+  remounts — e.g. after a successful save bumps `reloadKey`) now
+  re-sends the renderer's *current* mode instead of a hardcoded
+  `'view'`. Previously the bridge would silently drop back to view
+  mode on every save, leaving the renderer's mode toggle out of sync.
+- Sidebar-driven screen switch now confirms before discarding pending
+  edits.
+
+### Tests
+- 47 vitest specs (up from 30): adds 9 idTagger specs (including an
+  insertion-survivability test verifying that a new sibling near the
+  top of the document gets `max(existing) + 1` without renumbering
+  any pre-existing tag) and 8 bridge-script audit specs (no `eval`,
+  no `new Function`, no `document.write`, source identity validated,
+  protocol handshake announced).
+
 ## [0.5.0] — 2026-05-12
 
 ### Added

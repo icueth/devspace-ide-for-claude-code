@@ -17,15 +17,51 @@ import {
 import { DesignBriefPanel } from '@renderer/components/Design/DesignBriefPanel';
 import { DesignPreview } from '@renderer/components/Design/DesignPreview';
 import { DesignToolbar } from '@renderer/components/Design/DesignToolbar';
+import { EditPanel } from '@renderer/components/Design/EditPanel';
+import { ElementInspector } from '@renderer/components/Design/ElementInspector';
 import { api } from '@renderer/lib/api';
+import {
+  sendApplyEdit,
+  sendClearOverrides,
+  sendRequestSnapshot,
+  sendSetMode,
+} from '@renderer/lib/designBridge';
 import { cn } from '@renderer/lib/utils';
 import type {
+  DesignBridgeInbound,
+  DesignBridgeMode,
+  DesignEditOp,
+  DesignElementInfo,
   DesignEvent,
+  DesignSaveEditsInput,
   DesignScreen,
   DesignScreenVersion,
   DesignSkill,
   DesignSystem,
 } from '@shared/design';
+
+// Map a kebab-case CSS property name (the form the bridge speaks) to the
+// camelCase key under `DesignElementInfo.computedStyles`. Returns null
+// for properties not surfaced in the panel — callers should skip those
+// instead of polluting computedStyles with unknown keys.
+function cssPropertyToCamelKey(
+  property: string,
+): keyof DesignElementInfo['computedStyles'] | null {
+  const map: Record<string, keyof DesignElementInfo['computedStyles']> = {
+    'color': 'color',
+    'background-color': 'backgroundColor',
+    'font-size': 'fontSize',
+    'font-family': 'fontFamily',
+    'font-weight': 'fontWeight',
+    'padding': 'padding',
+    'margin': 'margin',
+    'border-radius': 'borderRadius',
+    'border': 'border',
+    'display': 'display',
+    'text-align': 'textAlign',
+  };
+  return map[property] ?? null;
+}
 
 export interface DesignViewProps {
   projectPath: string;
@@ -68,6 +104,23 @@ export function DesignView({ projectPath }: DesignViewProps) {
   const [toolbarError, setToolbarError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const onEventRef = useRef<((ev: DesignEvent) => void) | null>(null);
+
+  // ─── Phase B inspect/edit state ─────────────────────────────────────
+  const iframeRef = useRef<HTMLIFrameElement | null>(null);
+  const [mode, setMode] = useState<DesignBridgeMode>('view');
+  const [selectedElement, setSelectedElement] =
+    useState<DesignElementInfo | null>(null);
+  const [, setHoveredElement] = useState<DesignElementInfo | null>(null);
+  const [pendingEdits, setPendingEdits] = useState<DesignEditOp[]>([]);
+  const [saving, setSaving] = useState(false);
+  // Pending snapshot promise resolver — set when the user clicks
+  // "Save edits", cleared when the iframe replies (or we timeout).
+  const snapshotWaiterRef = useRef<{
+    requestId: string;
+    resolve: (snap: { html: string; ops: DesignEditOp[] }) => void;
+    reject: (err: Error) => void;
+    timer: ReturnType<typeof setTimeout>;
+  } | null>(null);
 
   // ─── Initial load ────────────────────────────────────────────────────
   useEffect(() => {
@@ -278,6 +331,228 @@ export function DesignView({ projectPath }: DesignViewProps) {
     [activeScreen],
   );
 
+  // Mode is read out of a ref inside handleBridgeMessage so the callback
+  // can stay stable (no re-binding on every mode change) while still
+  // re-sending the current mode on bridgeReady. Without this, a bridge
+  // re-handshake (e.g. after reloadKey bump on save) would force the
+  // iframe back to 'view' even when the renderer was mid-edit.
+  const modeRef = useRef<DesignBridgeMode>('view');
+  useEffect(() => {
+    modeRef.current = mode;
+  }, [mode]);
+
+  // ─── Phase B handlers ───────────────────────────────────────────────
+  const handleBridgeMessage = useCallback((msg: DesignBridgeInbound) => {
+    switch (msg.type) {
+      case 'devspace:bridgeReady':
+        // Pin the renderer's current mode into the freshly-loaded bridge.
+        // This matters most after a save (which bumps reloadKey and
+        // re-mounts the iframe) — without it, the new bridge bootstraps
+        // in 'view' regardless of the user's actual mode.
+        sendSetMode(iframeRef.current, modeRef.current);
+        break;
+      case 'devspace:elementHover':
+        setHoveredElement(msg.info);
+        break;
+      case 'devspace:elementSelect':
+        setSelectedElement(msg.info);
+        setHoveredElement(null);
+        break;
+      case 'devspace:editApplied':
+        setPendingEdits((prev) => {
+          // Dedupe by (elementId, property) — latest wins. Empty value
+          // means the override was cleared; drop the row entirely.
+          const filtered = prev.filter(
+            (op) =>
+              !(op.elementId === msg.elementId && op.property === msg.property),
+          );
+          if (msg.value === '') return filtered;
+          return [
+            ...filtered,
+            {
+              elementId: msg.elementId,
+              property: msg.property,
+              value: msg.value,
+              ts: Date.now(),
+            },
+          ];
+        });
+        // Optimistically reflect the new value back onto the selected
+        // element info so the EditPanel's displayed computedStyles stay
+        // current without round-tripping through the iframe.
+        setSelectedElement((prev) => {
+          if (!prev || prev.elementId !== msg.elementId) return prev;
+          const key = cssPropertyToCamelKey(msg.property);
+          if (!key) return prev;
+          return {
+            ...prev,
+            computedStyles: { ...prev.computedStyles, [key]: msg.value },
+          };
+        });
+        break;
+      case 'devspace:snapshot': {
+        const w = snapshotWaiterRef.current;
+        if (w && w.requestId === msg.requestId) {
+          clearTimeout(w.timer);
+          snapshotWaiterRef.current = null;
+          w.resolve({ html: msg.html, ops: msg.ops });
+        }
+        break;
+      }
+      case 'devspace:bridgeError':
+        setToolbarError(msg.message);
+        break;
+      default:
+        break;
+    }
+  }, []);
+
+  // Push mode changes into the iframe whenever they change.
+  useEffect(() => {
+    sendSetMode(iframeRef.current, mode);
+    if (mode === 'view') {
+      setSelectedElement(null);
+      setHoveredElement(null);
+    }
+  }, [mode]);
+
+  // Reset edit state on screen switch so we don't bleed selections /
+  // pending edits across screens. We DON'T confirm here because the
+  // switch comes from a list-row click that already happened — the
+  // sidebar Select handler now confirms BEFORE switching when there are
+  // unsaved edits, so by the time we land here the user already agreed.
+  useEffect(() => {
+    setSelectedElement(null);
+    setHoveredElement(null);
+    setPendingEdits([]);
+    setMode('view');
+  }, [activeScreenId]);
+
+  // Cancel any in-flight snapshot waiter on unmount so the timer +
+  // promise don't leak across project switches or pane unmounts.
+  useEffect(() => {
+    return () => {
+      const w = snapshotWaiterRef.current;
+      if (w) {
+        clearTimeout(w.timer);
+        w.reject(new Error('design view unmounted'));
+        snapshotWaiterRef.current = null;
+      }
+    };
+  }, []);
+
+  const handleEditChange = useCallback(
+    ({
+      elementId,
+      property,
+      value,
+    }: {
+      elementId: string;
+      property: string;
+      value: string;
+    }) => {
+      sendApplyEdit(iframeRef.current, elementId, property, value);
+    },
+    [],
+  );
+
+  const handleClearOverrides = useCallback(() => {
+    sendClearOverrides(iframeRef.current);
+    setPendingEdits([]);
+  }, []);
+
+  const handleSaveEdits = useCallback(async () => {
+    if (!activeScreen || pendingEdits.length === 0 || saving) return;
+    setSaving(true);
+    setToolbarError(null);
+    // crypto.randomUUID is always present in Electron renderers; no
+    // fallback needed. Throwing here would mean the runtime is broken
+    // long before save buttons are reachable.
+    const requestId = crypto.randomUUID();
+
+    // Prompt for the note FIRST. If the user cancels we never even
+    // send a snapshot request — the iframe stays untouched, the timer
+    // never starts, and there's nothing to clean up. (The original
+    // flow opened the prompt AFTER the snapshot arrived, which leaked
+    // the still-armed 10s timer on cancel.)
+    const note = window.prompt(
+      'Save edits as a new version. Optional note:',
+      '',
+    );
+    if (note === null) {
+      setSaving(false);
+      return;
+    }
+
+    try {
+      const snapshot = await new Promise<{ html: string; ops: DesignEditOp[] }>(
+        (resolve, reject) => {
+          const timer = setTimeout(() => {
+            if (
+              snapshotWaiterRef.current &&
+              snapshotWaiterRef.current.requestId === requestId
+            ) {
+              snapshotWaiterRef.current = null;
+              reject(new Error('Snapshot timed out after 10s'));
+            }
+          }, 10_000);
+          snapshotWaiterRef.current = { requestId, resolve, reject, timer };
+          sendRequestSnapshot(iframeRef.current, requestId);
+        },
+      );
+
+      const input: DesignSaveEditsInput = {
+        projectPath,
+        screenId: activeScreen.id,
+        html: snapshot.html,
+        // Prefer the iframe-reported op list (its ordering reflects what
+        // actually applied), but fall back to our local list if missing.
+        ops: snapshot.ops.length > 0 ? snapshot.ops : pendingEdits,
+        note: note.trim() ? note.trim() : undefined,
+      };
+
+      const updated = await api.design.saveEdits(input);
+      setScreens((prev) =>
+        prev.some((s) => s.id === updated.id)
+          ? prev.map((s) => (s.id === updated.id ? updated : s))
+          : [updated, ...prev],
+      );
+      setPendingEdits([]);
+      setMode('view');
+      setPreview(null);
+      setReloadKey((k) => k + 1);
+    } catch (err) {
+      setToolbarError((err as Error).message ?? 'Save failed.');
+    } finally {
+      // Belt-and-suspenders: if the promise rejected and the waiter ref
+      // is still armed, clear it so the next save can't hit a stale
+      // resolver / dangling timer.
+      const w = snapshotWaiterRef.current;
+      if (w) {
+        clearTimeout(w.timer);
+        snapshotWaiterRef.current = null;
+      }
+      setSaving(false);
+    }
+  }, [activeScreen, pendingEdits, projectPath, saving]);
+
+  // Wraps setActiveScreenId with a confirm dialog when there are unsaved
+  // pending edits, so a stray sidebar click doesn't silently discard the
+  // user's work. No-op if the user clicks the row that's already active.
+  const handleSelectScreen = useCallback(
+    (id: string | null) => {
+      if (id === activeScreenId) return;
+      if (pendingEdits.length > 0) {
+        const ok = window.confirm(
+          `Discard ${pendingEdits.length} unsaved edit${pendingEdits.length > 1 ? 's' : ''}?`,
+        );
+        if (!ok) return;
+      }
+      setActiveScreenId(id);
+    },
+    [activeScreenId, pendingEdits.length],
+  );
+
   const handleDeleteScreen = useCallback(
     async (id: string) => {
       const screen = screens.find((s) => s.id === id);
@@ -326,6 +601,11 @@ export function DesignView({ projectPath }: DesignViewProps) {
         onBriefChange={setBrief}
         onGenerate={() => void handleGenerate()}
         onCancel={() => void handleCancel()}
+        mode={mode}
+        onModeChange={setMode}
+        pendingEditsCount={pendingEdits.length}
+        onSaveEdits={() => void handleSaveEdits()}
+        saving={saving}
       />
 
       {toolbarError && (
@@ -345,7 +625,7 @@ export function DesignView({ projectPath }: DesignViewProps) {
         <ScreenSidebar
           screens={screens}
           activeScreenId={activeScreenId}
-          onSelect={setActiveScreenId}
+          onSelect={handleSelectScreen}
           onDelete={(id) => void handleDeleteScreen(id)}
         />
 
@@ -356,6 +636,9 @@ export function DesignView({ projectPath }: DesignViewProps) {
               screenId={activeScreenId}
               versionId={previewVersionId}
               reloadKey={reloadKey}
+              mode={mode}
+              iframeRef={iframeRef}
+              onBridgeMessage={handleBridgeMessage}
               emptyLabel={
                 screens.length === 0 ? 'No designs yet' : 'Select a screen'
               }
@@ -366,6 +649,17 @@ export function DesignView({ projectPath }: DesignViewProps) {
               }
             />
           </div>
+
+          {mode !== 'view' && (
+            <InspectSidePanel
+              mode={mode}
+              info={selectedElement}
+              pendingEdits={pendingEdits}
+              onChange={handleEditChange}
+              onClearOverrides={handleClearOverrides}
+              onClose={() => setMode('view')}
+            />
+          )}
 
           <DesignBriefPanel
             screen={activeScreen}
@@ -500,6 +794,68 @@ function ScreenRow({ screen, isActive, onClick, onDelete }: ScreenRowProps) {
         </button>
       </div>
     </li>
+  );
+}
+
+interface InspectSidePanelProps {
+  mode: DesignBridgeMode;
+  info: DesignElementInfo | null;
+  pendingEdits: DesignEditOp[];
+  onChange: (op: {
+    elementId: string;
+    property: string;
+    value: string;
+  }) => void;
+  onClearOverrides: () => void;
+  onClose: () => void;
+}
+
+/**
+ * Right-rail companion to the iframe in Phase B. In 'inspect' mode it
+ * shows the read-only `ElementInspector`; in 'edit' mode it swaps to the
+ * `EditPanel`. The header carries a close button that drops back to
+ * 'view' mode (and clears local selection state via DesignView's effect).
+ */
+function InspectSidePanel({
+  mode,
+  info,
+  pendingEdits,
+  onChange,
+  onClearOverrides,
+  onClose,
+}: InspectSidePanelProps) {
+  const title = mode === 'edit' ? 'Edit element' : 'Inspect element';
+  return (
+    <aside
+      className="flex h-full w-[320px] shrink-0 flex-col border-l border-border bg-surface-2"
+      aria-label={title}
+    >
+      <div
+        className="flex h-9 shrink-0 items-center gap-2 border-b border-border px-3"
+        style={{ background: 'var(--color-surface-2)' }}
+      >
+        <span className="text-[11px] font-semibold text-text">{title}</span>
+        <div className="flex-1" />
+        <button
+          type="button"
+          onClick={onClose}
+          title="Close panel (return to view mode)"
+          className="rounded p-1 text-text-muted transition hover:bg-surface-3 hover:text-text"
+        >
+          <ChevronRight size={11} />
+        </button>
+      </div>
+      {mode === 'edit' ? (
+        <EditPanel
+          info={info}
+          pendingEdits={pendingEdits}
+          onChange={onChange}
+          onClearOverrides={onClearOverrides}
+        />
+      ) : (
+        <ElementInspector info={info} />
+      )}
+    </aside>
   );
 }
 

@@ -1,7 +1,15 @@
 import { Paintbrush } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import { api } from '@renderer/lib/api';
+import {
+  sendSetMode,
+  useDesignBridge,
+} from '@renderer/lib/designBridge';
+import type {
+  DesignBridgeInbound,
+  DesignBridgeMode,
+} from '@shared/design';
 
 /**
  * Sandboxed iframe rendering a generated design screen.
@@ -21,6 +29,11 @@ import { api } from '@renderer/lib/api';
  * DesignService) — remote `<script src>` / iframes / objects are
  * stripped, `javascript:` URLs neutralized, and a strict CSP meta is
  * injected before the HTML hits disk.
+ *
+ * Phase B extends this with an iframe bridge: the parent passes an
+ * `iframeRef` (so DesignView can `sendToBridge(iframeRef.current, …)`)
+ * and an `onBridgeMessage` callback for inbound protocol events. When
+ * `mode` changes we ping the iframe with a `setMode` message.
  */
 export interface DesignPreviewProps {
   /** Project root. Pass an empty string to render the empty state. */
@@ -42,6 +55,24 @@ export interface DesignPreviewProps {
   reloadKey?: number | string;
   emptyLabel?: string;
   emptyHint?: string;
+  /**
+   * Phase B: current inspect/edit mode. Defaults to 'view'. Sent to
+   * the iframe bridge so it can toggle hover highlights + click
+   * interception.
+   */
+  mode?: DesignBridgeMode;
+  /**
+   * Phase B: ref to the rendered <iframe>. Parent owns the ref so it
+   * can call `sendToBridge` and `requestSnapshot` against the same
+   * element this component renders. Optional — falls back to a local
+   * ref when omitted.
+   */
+  iframeRef?: React.RefObject<HTMLIFrameElement | null>;
+  /**
+   * Phase B: invoked for every inbound bridge message that originates
+   * from this iframe's contentWindow.
+   */
+  onBridgeMessage?: (msg: DesignBridgeInbound) => void;
 }
 
 export function DesignPreview({
@@ -51,9 +82,14 @@ export function DesignPreview({
   reloadKey,
   emptyLabel,
   emptyHint,
+  mode = 'view',
+  iframeRef,
+  onBridgeMessage,
 }: DesignPreviewProps) {
   const [blobUrl, setBlobUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const localRef = useRef<HTMLIFrameElement | null>(null);
+  const ref = iframeRef ?? localRef;
 
   useEffect(() => {
     if (!projectPath || !screenId) {
@@ -94,6 +130,20 @@ export function DesignPreview({
       if (createdUrl) URL.revokeObjectURL(createdUrl);
     };
   }, [projectPath, screenId, versionId, reloadKey]);
+
+  // Subscribe to inbound bridge messages from this iframe. The hook
+  // filters by `event.source === ref.current.contentWindow` so we don't
+  // leak chatter from any other window into the design controller.
+  useDesignBridge(ref, onBridgeMessage);
+
+  // Push mode changes to the bridge. The bridge ignores the message
+  // until it has finished its own DOMContentLoaded bootstrap, so this
+  // is a no-op when the iframe hasn't fired `bridgeReady` yet — the
+  // parent re-sends after seeing the ready handshake.
+  useEffect(() => {
+    if (!blobUrl) return;
+    sendSetMode(ref.current, mode);
+  }, [mode, blobUrl, ref]);
 
   if (error) {
     return (
@@ -138,6 +188,7 @@ export function DesignPreview({
   return (
     <iframe
       key={blobUrl}
+      ref={ref}
       src={blobUrl}
       // CRITICAL: no `allow-same-origin` → effective origin is opaque so
       // the embedded HTML can't reach window.devspace / localStorage.

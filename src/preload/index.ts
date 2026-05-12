@@ -254,6 +254,8 @@ const api = {
       ipcRenderer.invoke(IPC.DESIGN_CREATE, input),
     regenerate: (input: unknown) =>
       ipcRenderer.invoke(IPC.DESIGN_REGENERATE, input),
+    saveEdits: (input: import('@shared/design').DesignSaveEditsInput) =>
+      ipcRenderer.invoke(IPC.DESIGN_SAVE_EDITS, input),
     delete: (projectPath: string, screenId: string) =>
       ipcRenderer.invoke(IPC.DESIGN_DELETE, projectPath, screenId),
     cancel: (projectPath: string, screenId: string) =>

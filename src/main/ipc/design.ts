@@ -10,11 +10,13 @@ import {
   listSystems,
   readHtml,
   regenerateDesign,
+  saveEdits,
   subscribeEvents,
 } from '@main/services/DesignService';
 import { IPC } from '@shared/ipc-channels';
 import type {
   CreateDesignInput,
+  DesignSaveEditsInput,
   RegenerateDesignInput,
 } from '@shared/design';
 
@@ -43,6 +45,17 @@ export function registerDesignIpc(): void {
     (event, input: RegenerateDesignInput) => {
       subscribeEvents(input.projectPath, event.sender);
       return regenerateDesign(input);
+    },
+  );
+
+  ipcMain.handle(
+    IPC.DESIGN_SAVE_EDITS,
+    (event, input: DesignSaveEditsInput) => {
+      // Auto-subscribe so the editing renderer reliably receives the
+      // 'screen_updated' event emitted by saveEdits, even if the user
+      // never opened the design list panel in this session.
+      subscribeEvents(input.projectPath, event.sender);
+      return saveEdits(input);
     },
   );
 

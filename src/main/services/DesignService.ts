@@ -24,6 +24,8 @@ import * as path from 'node:path';
 import type { WebContents } from 'electron';
 
 import { generateDesign } from '@main/services/DesignGenerator';
+import { DEVSPACE_BRIDGE_SCRIPT } from '@main/services/design/bridgeScript';
+import { tagDevspaceIds } from '@main/services/design/idTagger';
 import { readSkill } from '@main/services/SkillsService';
 import { getBuiltinDesignPacksDir } from '@main/utils/designResourcePaths';
 import { IPC } from '@shared/ipc-channels';
@@ -33,6 +35,7 @@ import type {
   DesignEvent,
   DesignEventKind,
   DesignProject,
+  DesignSaveEditsInput,
   DesignScope,
   DesignScreen,
   DesignSkill,
@@ -112,6 +115,14 @@ function hardenGeneratedHtml(raw: string): string {
   if (!raw) return raw;
   let out = raw;
 
+  // 0. Strip any previously-injected bridge `<script data-devspace-bridge="1">`.
+  // Save round-trips run hardenGeneratedHtml on already-bridged HTML; we
+  // must not accumulate stacked copies of the IIFE.
+  out = out.replace(
+    /<script\b[^>]*\bdata-devspace-bridge\s*=\s*["']1["'][^>]*>[\s\S]*?<\/script\s*>/gi,
+    '',
+  );
+
   // 1. Strip remote-source script tags. Inline scripts survive.
   out = out.replace(
     /<script\b([^>]*\bsrc\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)[^>]*)>[\s\S]*?<\/script\s*>/gi,
@@ -121,6 +132,16 @@ function hardenGeneratedHtml(raw: string): string {
   // self-contained design preview, and they're prime exfil vectors.
   out = out.replace(/<(iframe|object|embed)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, '');
   out = out.replace(/<(iframe|object|embed)\b[^>]*\/?\s*>/gi, '');
+
+  // 2b. Strip <meta http-equiv="refresh"> — sandbox doesn't have
+  // allow-top-navigation but an in-frame refresh to an allowlisted host
+  // is still an outbound side channel. Also drop <base> as defense-in-
+  // depth on top of CSP `base-uri 'none'`.
+  out = out.replace(
+    /<meta\b[^>]*\bhttp-equiv\s*=\s*["']?refresh["']?[^>]*>/gi,
+    '',
+  );
+  out = out.replace(/<base\b[^>]*>/gi, '');
 
   // 3. Neutralize `href="javascript:..."` and `src="javascript:..."`.
   out = out.replace(
@@ -150,6 +171,23 @@ function hardenGeneratedHtml(raw: string): string {
       out = `<head>\n  ${cspMeta}\n</head>\n${out}`;
     }
   }
+
+  // 5. Tag every element with a stable `data-devspace-id` so the iframe
+  // bridge can address nodes by ID rather than fragile CSS selectors.
+  // The tagger is idempotent — re-running on already-tagged HTML does
+  // not change existing IDs.
+  out = tagDevspaceIds(out);
+
+  // 6. Inject the bridge IIFE just before `</body>` (or append if no
+  // body close tag is present). The marker attribute `data-devspace-
+  // bridge="1"` lets step 0 strip a previous copy on save round-trips.
+  const bridgeTag = `<script data-devspace-bridge="1">${DEVSPACE_BRIDGE_SCRIPT}</script>`;
+  if (/<\/body\s*>/i.test(out)) {
+    out = out.replace(/<\/body\s*>/i, `${bridgeTag}\n</body>`);
+  } else {
+    out = `${out}\n${bridgeTag}`;
+  }
+
   return out;
 }
 
@@ -360,6 +398,164 @@ export async function regenerateDesign(
   emit(s, 'screen_updated', screen.id, { screen });
 
   void runGeneration(s, screen, skill, designSystem);
+  return screen;
+}
+
+// Cap user-supplied HTML payload to keep main-process memory bounded
+// against a malicious renderer or a runaway edit overlay. Real outputs
+// run ~20-200 KB; 2 MB is the strictest cap that still leaves headroom
+// for genuinely heavy screens.
+const MAX_EDIT_HTML_BYTES = 2 * 1024 * 1024;
+
+// Per-screen rate limit on saveEdits. A compromised iframe (see Phase B
+// security review, finding HIGH 1) could spoof the snapshot reply and
+// race the legitimate bridge. Throttling caps the disk-fill risk and
+// gives the user / watchdogs a chance to notice the storm.
+const SAVE_EDITS_MIN_INTERVAL_MS = 2_000;
+const lastSaveAt = new Map<string, number>();
+
+// Strip ALL inline <script>...</script> from inbound saveEdits HTML.
+// Legitimate inline scripts come from the original Claude generation, not
+// from manual edits — they are PRESERVED in earlier version rows (saved
+// before any edit happened) and would be re-injected fresh as the bridge
+// IIFE by hardenGeneratedHtml anyway. Stripping here defeats the bridge-
+// spoofing attack: a hostile inline <script> in the rendered HTML could
+// have called window.parent.postMessage with a forged 'devspace:snapshot'
+// payload, and the renderer (which can only identity-check by
+// contentWindow, not by author within the iframe) would forward an
+// attacker-chosen HTML to disk. By the time saveEdits sees the HTML, the
+// only legitimate JS in it should be the bridge IIFE — which gets
+// regenerated regardless. Removing inline scripts on the way in
+// neutralises the spoof entirely.
+function stripAllInlineScripts(raw: string): string {
+  if (!raw) return raw;
+  // Paired open+close
+  let out = raw.replace(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi, '');
+  // Defensive: orphan opening tags
+  out = out.replace(/<script\b[^>]*\/?>/gi, '');
+  return out;
+}
+
+export async function saveEdits(
+  input: DesignSaveEditsInput,
+): Promise<DesignScreen> {
+  assertValidScreenId(input.screenId);
+  if (typeof input.html !== 'string' || input.html.trim() === '') {
+    throw new Error('design html is empty');
+  }
+  // Byte-length check (Buffer.byteLength avoids materializing another
+  // string copy just to count). Refuse oversize payloads up front so we
+  // never write multi-megabyte garbage to disk or accept a DoS vector.
+  if (Buffer.byteLength(input.html, 'utf8') > MAX_EDIT_HTML_BYTES) {
+    throw new Error('design html too large');
+  }
+
+  const s = getState(input.projectPath);
+  await s.hydrationPromise;
+  const screen = s.screens.get(input.screenId);
+  if (!screen) throw new Error(`screen not found: ${input.screenId}`);
+  if (screen.status === 'generating') {
+    throw new Error(`screen ${input.screenId} is generating — cannot save edits`);
+  }
+
+  // Rate limit. Soft floor — adds a 2-second cooldown per screen, which
+  // does not affect normal interactive use but caps disk-fill if an
+  // attacker pivots through the renderer.
+  const rateKey = `${s.projectPath}::${screen.id}`;
+  const now = Date.now();
+  const last = lastSaveAt.get(rateKey) ?? 0;
+  if (now - last < SAVE_EDITS_MIN_INTERVAL_MS) {
+    throw new Error(
+      `please wait ${Math.ceil((SAVE_EDITS_MIN_INTERVAL_MS - (now - last)) / 1000)}s between saves`,
+    );
+  }
+  lastSaveAt.set(rateKey, now);
+
+  const versionId = randomUUID();
+
+  // Archive the current index.html into history/<versionId>/ before
+  // overwriting. Mirrors runGeneration's success path so version rows
+  // remain consistently retrievable via readHtml(..., versionId).
+  const indexAbs = screenIndexHtml(s.projectPath, screen.id);
+  assertInsideDesignDir(s.projectPath, indexAbs);
+  const histDir = historyDir(s.projectPath, screen.id, versionId);
+  assertInsideDesignDir(s.projectPath, histDir);
+  try {
+    const prev = await fs.promises.readFile(indexAbs);
+    await fs.promises.mkdir(histDir, { recursive: true });
+    await fs.promises.writeFile(path.join(histDir, 'index.html'), prev);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code !== 'ENOENT') {
+      logger.warn(
+        `failed to archive previous html on save: ${(err as Error).message}`,
+      );
+    }
+    // If there's no prior index.html we still proceed — the screen may
+    // have been created but never generated; saving edits anyway is a
+    // valid Phase B operation.
+  }
+
+  // Strip ALL inline <script> first — this neutralises the bridge-
+  // spoofing attack where a hostile inline script in the original
+  // generation could forge a 'devspace:snapshot' reply with attacker-
+  // chosen HTML. After this strip, the only JS that ends up in the
+  // saved file is the bridge IIFE that hardenGeneratedHtml will inject
+  // fresh.
+  const scriptStripped = stripAllInlineScripts(input.html);
+
+  // Re-harden through the same pipeline as generation output. This
+  // re-asserts CSP, strips any javascript: hrefs the user may have
+  // inadvertently introduced, refreshes data-devspace-id coverage on
+  // any new nodes, and replaces the bridge script (step 0 in
+  // hardenGeneratedHtml strips any prior copy so we don't stack).
+  const hardened = hardenGeneratedHtml(scriptStripped);
+
+  await fs.promises.mkdir(path.dirname(indexAbs), { recursive: true });
+  const tmp = `${indexAbs}.tmp-${randomUUID()}`;
+  await fs.promises.writeFile(tmp, hardened);
+  await fs.promises.rename(tmp, indexAbs);
+
+  const relHtml = path.relative(designDir(s.projectPath), indexAbs);
+  screen.htmlPath = relHtml;
+
+  const nextVersions = [
+    ...screen.versions,
+    {
+      id: versionId,
+      createdAt: Date.now(),
+      brief: screen.brief,
+      htmlPath: relHtml,
+      origin: 'edit' as const,
+      edits: Array.isArray(input.ops) ? input.ops : [],
+      note: typeof input.note === 'string' && input.note.length > 0 ? input.note : undefined,
+    },
+  ];
+  // Same MAX_VERSIONS eviction as generation: drop oldest + rm its
+  // history dir so iterative edits don't bloat disk indefinitely.
+  while (nextVersions.length > MAX_VERSIONS) {
+    const evicted = nextVersions.shift();
+    if (evicted) {
+      const dir = historyDir(s.projectPath, screen.id, evicted.id);
+      try {
+        assertInsideDesignDir(s.projectPath, dir);
+        await fs.promises.rm(dir, { recursive: true, force: true });
+      } catch (err) {
+        logger.warn(
+          `failed to evict version ${evicted.id}: ${(err as Error).message}`,
+        );
+      }
+    }
+  }
+  screen.versions = nextVersions;
+  screen.status = 'ready';
+  screen.errorMessage = undefined;
+  screen.updatedAt = Date.now();
+
+  await persistScreenMeta(s.projectPath, screen);
+  await persistRegistry(s);
+  emit(s, 'screen_updated', screen.id, { screen });
+
   return screen;
 }
 
