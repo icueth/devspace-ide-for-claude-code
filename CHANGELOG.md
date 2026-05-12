@@ -5,6 +5,11 @@ All notable changes to DevSpace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.6.2] — 2026-05-12
+
+### Fixed
+- **Design tab failed to render with "A `<Select.Item />` must have a value prop that is not an empty string".** The design-system picker rendered a `<Select.Item value="" label="No design system" />`, which Radix UI rejects at render time (empty strings are reserved for `Select.Root`'s "no selection" state). Switched the "No design system" option to a `__none__` sentinel and translated it back to `null` at the `onValueChange` boundary. The 0.6.1 `RouteErrorBoundary` was already catching this — users on 0.6.1 see a contained "Design Studio failed to render" message instead of a black screen; on 0.6.2 the picker renders normally.
+
 ## [0.6.1] — 2026-05-12
 
 ### Fixed

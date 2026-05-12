@@ -24,6 +24,11 @@ import type {
   DesignSystem,
 } from '@shared/design';
 
+// Radix Select forbids `<Select.Item value="">` because empty string is
+// reserved for the "no selection" state on `<Select.Root>`. We surface
+// "No design system" via a sentinel and translate at the callback edge.
+const NONE_SENTINEL = '__none__';
+
 export interface DesignToolbarProps {
   skills: DesignSkill[];
   systems: DesignSystem[];
@@ -144,14 +149,14 @@ export function DesignToolbar({
 
         <PickerLabel icon={<Sparkles size={11} />} label="System" />
         <PickerSelect
-          value={selectedSystemSlug ?? ''}
-          onValueChange={(v) => onSystemChange(v === '' ? null : v)}
+          value={selectedSystemSlug ?? NONE_SENTINEL}
+          onValueChange={(v) => onSystemChange(v === NONE_SENTINEL ? null : v)}
           placeholder={selectedSystemLabel}
           disabled={busy}
           ariaLabel="Design system"
           empty={false}
         >
-          <SelectItem value="" label="No design system" />
+          <SelectItem value={NONE_SENTINEL} label="No design system" />
           {(['project', 'global', 'builtin'] as DesignScope[]).map((scope) =>
             systemGroups[scope].length > 0 ? (
               <Select.Group key={scope}>
