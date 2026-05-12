@@ -102,6 +102,9 @@ export const IPC = {
   AGENTS_SAVE: 'agents:save',
   AGENTS_CREATE: 'agents:create',
   AGENTS_DELETE: 'agents:delete',
+  // v0.11: copy any-scope (typically builtin) agent into global/project so
+  // the user can edit it. Builtin agents themselves are read-only.
+  AGENTS_DUPLICATE: 'agents:duplicate',
 
   // MCP servers (~/.claude.json + <project>/.mcp.json)
   MCP_LIST: 'mcp:list',
@@ -116,6 +119,9 @@ export const IPC = {
   SKILLS_SAVE: 'skills:save',
   SKILLS_CREATE: 'skills:create',
   SKILLS_DELETE: 'skills:delete',
+  // v0.11: copy any-scope (typically builtin/plugin) skill into
+  // global/project so the user can edit it.
+  SKILLS_DUPLICATE: 'skills:duplicate',
 
   // Teams (.devspace/teams.json)
   TEAMS_LIST: 'teams:list',

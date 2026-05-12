@@ -5,6 +5,136 @@ All notable changes to DevSpace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.11.0] — 2026-05-13
+
+### Added — bundled built-in agents & skills (never start empty)
+
+Fresh installs no longer ship to an empty Agents / Skills picker. The app
+bundle now carries a curated starter pack at
+`<App>.app/Contents/Resources/builtin-packs/` containing 30 agents and
+181 skills drawn from the open Claude Code ecosystem.
+
+- **`scope: 'builtin'`** — third scope alongside `global` / `project`
+  (and `plugin` for skills). Read-only by design; the picker shows a
+  "Built-in" group with a "(read-only)" suffix and a lock badge on the
+  editor.
+- **Duplicate-to-edit** — every built-in row has a "Duplicate to
+  Global / Project" dropdown. New IPC `api.agents.duplicate(filePath,
+  targetScope, projectPath)` + `api.skills.duplicate(...)`. For skills,
+  the duplicate is a full recursive folder copy (SKILL.md + sibling
+  `references/` / `examples/` / `assets/` / scripts), so the duplicate
+  is a complete working copy that doesn't depend on the original.
+- **Precedence: project > global > plugin > builtin.** Same-slug
+  collisions still list ALL entries; lower-priority duplicates carry an
+  `overridden: true` flag, dimmed in the picker.
+- **Discovery** — `AgentsService.listAgents()` and
+  `SkillsService.listSkills()` read the bundled pack via the new
+  `builtinPackPaths.ts` resolver (mirrors `designResourcePaths.ts`). In
+  dev mode without curation, the pack section degrades silently.
+
+### Added — chat message segment rendering
+
+Long streaming turns no longer collapse into one wall of tool calls + a
+flat paragraph. Each chronological chunk now renders as its own card,
+preserving the order Claude emitted them.
+
+- **`ChatMessage.segments` / `TeamStep.segments`** — optional ordered
+  array of `{ kind: 'text', id, text }` or `{ kind: 'tool_group', id,
+  toolUseIds: string[] }`. Tool details still live in `toolCalls[]`
+  (single source of truth, no duplication).
+- **Backend** — `ChatLineHandler` builds `segments[]` from the JSONL
+  stream in arrival order. Same-kind consecutive blocks coalesce; text
+  after a tool_use opens a new text segment, etc.
+- **Renderer** — `applyEvent` mirrors the segment-building rule from
+  events; `MessageBubble` renders `segments.map(...)` via
+  `<TextSegmentCard>` + `<ToolGroupSegment>` when present. Legacy
+  threads without `segments` fall back to the old flat layout.
+- **Persistence** — segments round-trip through the existing JSON
+  thread store. `ChatTranscript.hydrateFromDisk` validates segment
+  shape and caps each text segment at 500 KB / each message at 5000
+  segments, so a hand-edited or corrupt transcript can't DoS the
+  renderer.
+
+### Hardening applied before commit (2 reviewers, 23 findings)
+
+The agents/skills feature crosses an IPC boundary that takes a
+caller-controlled file path — that's the most dangerous shape, and
+both reviewers flagged it the same way. All blockers fixed before ship.
+
+- 🔒 **SEC-BLOCKER** (arbitrary file read): `agents:read` / `skills:read`
+  IPC accepted any `filePath` and fed it to `fs.readFile`. With agents
+  the entire file body comes back as `AgentDef.body`. A compromised
+  renderer (or a future url-handler bug) could exfiltrate `~/.ssh/`,
+  `~/Library/Application Support/Claude/credentials.json`, anything
+  the user can read. **Fix:** `assertValidAgentPath` /
+  `assertValidSkillPath` enforced at every IPC entry point. Path must
+  resolve to a real `<root>/.../<slug>.md` or `<root>/.../<slug>/
+  SKILL.md` location with a slug matching `/^[a-z0-9][a-z0-9-]{0,63}$/i`.
+- 🔒 **SEC-BLOCKER** (path-traversal + slug pollution): `duplicateAgent`
+  / `duplicateSkill` derived destination slug from the source path
+  with no sanitization. Combined with the read-anywhere primitive, an
+  attacker could read `/etc/passwd` then have it persisted to
+  `~/.claude/agents/passwd.md` for later re-read. **Fix:** same
+  IPC-boundary validation + slug regex + dest-containment check that
+  resolved paths stay inside the target scope's root.
+- 🔒 **SEC-HIGH** (arbitrary write): `saveAgent` / `saveSkill` accepted
+  scope as a caller-controlled field but trusted `agent.path`
+  unconditionally. A renderer could submit `scope: 'global'` and
+  `path: '~/.ssh/authorized_keys'` and the body would land there.
+  **Fix:** path validation + explicit refusal to write inside the
+  read-only `builtin-packs/` bundle or plugin marketplaces dir, even
+  if the caller claims a writable scope.
+- 🔒 **SEC-HIGH** (arbitrary recursive delete): `deleteSkill` did
+  `fs.rm(path.dirname(filePath), { recursive: true, force: true })`
+  with no constraint on `filePath`. Passing `~/Documents/foo/SKILL.md`
+  would `rm -rf ~/Documents/foo`. **Fix:** path validation gates the
+  recursive removal; combined with the existing builtin / plugin
+  guards, the only directories this can touch are
+  `<.claude>/skills/<slug>/`.
+- 🔒 **SEC-MEDIUM**: No size cap on agent/skill file reads or
+  transcript hydration. A 2 GB hostile file would slurp into memory
+  and freeze the main process. **Fix:** 2 MB cap on agent/skill files,
+  500 KB cap per text segment, 5000 segments per message in
+  `hydrateFromDisk`.
+- 🔒 **SEC-MEDIUM**: `parseSkill` derived `slug` from folder name
+  without validation. With B1's read-anywhere bypass, an attacker
+  could shadow legitimate slugs in the merged list. **Fix:** slug
+  regex enforced in `collectFromDir` and `collectPluginSkills` walks.
+- 🐛 **BUG-HIGH** (broken on memo): `applyEvent` mutated existing
+  segment objects in place (`lastSeg.text += event.text`). Worked
+  today only because nothing memoizes the segment children. The
+  moment anyone wraps `TextSegmentCard` with `React.memo` to optimize
+  streaming, the segment identity stays stable and the card freezes
+  mid-stream. **Fix:** replace-not-mutate — each event creates a new
+  segment object and a new `segments` array reference, so
+  ToolGroupSegment's existing `useMemo` over `[toolUseIds, allCalls]`
+  works correctly under memoization.
+- 🐛 **BUG-HIGH** (silent feature break): `duplicateSkill` copied only
+  `SKILL.md` but `api.ts` documented "recursive folder copy including
+  helper assets." Anthropic's marketplace skills routinely ship with
+  `references/`, `examples/`, helper scripts — duplicating one would
+  silently produce a non-working copy. **Fix:** actual recursive copy
+  via `fs.cp(srcDir, destDir, { recursive: true, errorOnExist: true })`.
+
+### Notes
+
+- DMG size: ~99.7 MB arm64 (+1.6 MB vs 0.10.0 for the 30 agents + 181
+  skills + attribution / license files in `resources/builtin-packs/`).
+- Architecture: path validation lives at the IPC boundary
+  (`src/main/ipc/{agents,skills}.ts`), not inside the service
+  functions. Service functions trust their inputs so internal callers
+  (e.g. `DesignService.maybeAddSkill` walking design-packs) can use
+  `readSkill` without the IPC-shape rules.
+- All 221 vitest tests pass (212 + 9 new BuiltinScope tests).
+
+### Attribution
+
+The bundled pack is curated from the open Claude Code ecosystem
+(community agent kits, Cookbook examples, contrib skill collections —
+all MIT or Apache-2.0 compatible). See
+`resources/builtin-packs/ATTRIBUTION.md` for upstream sources and
+`LICENSE` for the umbrella license.
+
 ## [0.10.0] — 2026-05-12
 
 ### Added — Chat-style Design Studio + project context awareness

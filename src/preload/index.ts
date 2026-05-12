@@ -191,6 +191,12 @@ const api = {
     ) => ipcRenderer.invoke(IPC.AGENTS_CREATE, scope, projectPath, slug),
     delete: (filePath: string) =>
       ipcRenderer.invoke(IPC.AGENTS_DELETE, filePath),
+    duplicate: (
+      filePath: string,
+      targetScope: 'global' | 'project',
+      projectPath: string | null,
+    ) =>
+      ipcRenderer.invoke(IPC.AGENTS_DUPLICATE, filePath, targetScope, projectPath),
   },
   teams: {
     list: (projectPath: string | null) =>
@@ -220,6 +226,12 @@ const api = {
     ) => ipcRenderer.invoke(IPC.SKILLS_CREATE, scope, projectPath, slug),
     delete: (filePath: string) =>
       ipcRenderer.invoke(IPC.SKILLS_DELETE, filePath),
+    duplicate: (
+      filePath: string,
+      targetScope: 'global' | 'project',
+      projectPath: string | null,
+    ) =>
+      ipcRenderer.invoke(IPC.SKILLS_DUPLICATE, filePath, targetScope, projectPath),
   },
   mcp: {
     list: (projectPath: string | null) =>

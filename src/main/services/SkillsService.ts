@@ -3,6 +3,10 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 
 import { createLogger } from '@shared/logger';
+import {
+  builtinPacksExist,
+  getBuiltinSkillsDir,
+} from '@main/utils/builtinPackPaths';
 import type { SkillDef, SkillScope } from '@shared/types';
 
 const logger = createLogger('Skills');
@@ -19,6 +23,102 @@ function pluginMarketplacesDir(): string {
   return path.join(homedir(), '.claude', 'plugins', 'marketplaces');
 }
 
+// Same caps + slug regex as AgentsService — skills are markdown +
+// optional helper directories, never huge files.
+const MAX_SKILL_FILE_BYTES = 2 * 1024 * 1024;
+const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,63}$/i;
+
+// Structural validation: `filePath` is a valid skill SKILL.md iff:
+//   • basename is exactly 'SKILL.md'
+//   • the immediate parent directory's basename matches SLUG_RE
+//   • the resolved path sits under one of the known skill roots:
+//       - builtin skills dir   (<resourcesPath>/builtin-packs/skills)
+//       - <anyDir>/.claude/skills  (global + project + any nested layout
+//         such as <root>/.claude/skills/design-skills/<slug>/SKILL.md)
+//       - <homedir>/.claude/plugins/marketplaces/...     (plugin scope)
+//
+// Nesting inside `.claude/skills` is allowed because some skill
+// collections (incl. DesignService's design-skills/) sub-categorize.
+// The boundary that matters is: writes/deletes never escape one of the
+// three known root subtrees and never name a file other than SKILL.md.
+function isValidSkillPath(filePath: string): boolean {
+  const resolved = path.resolve(filePath);
+  if (path.basename(resolved) !== 'SKILL.md') return false;
+  const parent = path.dirname(resolved);
+  const slug = path.basename(parent);
+  if (!SLUG_RE.test(slug)) return false;
+
+  // Walk parents looking for `.claude/skills` boundary or one of the
+  // known absolute roots. Cap the walk at 12 levels so a pathological
+  // input can't spin.
+  const builtinDir = path.resolve(getBuiltinSkillsDir());
+  const marketplacesDir = path.resolve(pluginMarketplacesDir());
+
+  if (
+    resolved === path.join(builtinDir, slug, 'SKILL.md') ||
+    isUnderPrefix(resolved, builtinDir)
+  ) {
+    return true;
+  }
+  if (isUnderPrefix(resolved, marketplacesDir)) {
+    // Plugin marketplaces are user-controlled but read-only at write
+    // time — list reads them, save/delete reject them later.
+    return true;
+  }
+
+  let cursor = parent;
+  for (let depth = 0; depth < 12; depth++) {
+    const above = path.dirname(cursor);
+    if (above === cursor) break;
+    if (
+      path.basename(cursor) === 'skills' &&
+      path.basename(above) === '.claude'
+    ) {
+      return true;
+    }
+    cursor = above;
+  }
+  return false;
+}
+
+function isUnderPrefix(child: string, parent: string): boolean {
+  const p = parent.endsWith(path.sep) ? parent : parent + path.sep;
+  return child.startsWith(p);
+}
+
+// Re-exported so the IPC handler can enforce path validation BEFORE
+// dispatching to any service function. Service functions stay
+// validation-free so internal callers (e.g. DesignService) can use
+// `readSkill` against the design-packs tree which lives outside the
+// usual scope roots.
+export function assertValidSkillPath(filePath: string): void {
+  if (!isValidSkillPath(filePath)) {
+    throw new Error(
+      `refuse to operate on path outside skill scopes: ${filePath}`,
+    );
+  }
+}
+
+function isInBuiltinSkillsDir(filePath: string): boolean {
+  const resolved = path.resolve(filePath);
+  const builtinDir = path.resolve(getBuiltinSkillsDir()) + path.sep;
+  return resolved.startsWith(builtinDir);
+}
+
+function isInPluginMarketplacesDir(filePath: string): boolean {
+  const resolved = path.resolve(filePath);
+  const root = path.resolve(pluginMarketplacesDir()) + path.sep;
+  return resolved.startsWith(root);
+}
+
+async function readSkillFile(filePath: string): Promise<string> {
+  const st = await fs.promises.stat(filePath);
+  if (st.size > MAX_SKILL_FILE_BYTES) {
+    throw new Error(`skill file too large (${st.size} bytes)`);
+  }
+  return fs.promises.readFile(filePath, 'utf8');
+}
+
 // ─── public API ─────────────────────────────────────────────────────────────
 
 export async function listSkills(
@@ -33,12 +133,26 @@ export async function listSkills(
   if (options?.includePlugins) {
     await collectPluginSkills(out);
   }
+  // v0.11: bundled starter pack. Same per-slug folder layout as the
+  // user-facing dirs, so collectFromDir handles it without modification.
+  // Skip silently when the directory hasn't been curated yet (fresh
+  // clone of the repo before assets are copied).
+  if (await builtinPacksExist()) {
+    await collectFromDir(getBuiltinSkillsDir(), 'builtin', out);
+  }
+
+  // Precedence: project > global > plugin > builtin. Lower-priority
+  // entries with a shadowed slug get `overridden = true`; the winner is
+  // left alone. We list ALL entries — UI decides what to dim/filter.
+  markOverridden(out);
+
   out.sort((a, b) => {
     if (a.scope !== b.scope) {
       const order: Record<SkillScope, number> = {
-        global: 0,
-        project: 1,
+        project: 0,
+        global: 1,
         plugin: 2,
+        builtin: 3,
       };
       return order[a.scope] - order[b.scope];
     }
@@ -48,22 +162,44 @@ export async function listSkills(
 }
 
 export async function readSkill(filePath: string): Promise<SkillDef> {
-  const raw = await fs.promises.readFile(filePath, 'utf8');
-  const home = homedir();
+  // Path validation lives at the IPC boundary (ipc/skills.ts) — internal
+  // callers like DesignService walk known directories themselves and
+  // shouldn't be subject to the IPC-shape rules.
+  const raw = await readSkillFile(filePath);
   const slug = path.basename(path.dirname(filePath));
-  const scope: SkillScope = filePath.includes(
-    path.join(home, '.claude', 'plugins'),
-  )
-    ? 'plugin'
-    : filePath.startsWith(path.join(home, '.claude', 'skills'))
-      ? 'global'
-      : 'project';
+  // Scope inference uses resolved paths with directory boundaries so a
+  // sibling like `~/.claude/skills-other/` can't masquerade as global.
+  const resolved = path.resolve(filePath);
+  const builtinPrefix = path.resolve(getBuiltinSkillsDir()) + path.sep;
+  const globalPrefix = path.resolve(globalSkillsDir()) + path.sep;
+  let scope: SkillScope;
+  if (resolved.startsWith(builtinPrefix)) {
+    scope = 'builtin';
+  } else if (isInPluginMarketplacesDir(resolved)) {
+    scope = 'plugin';
+  } else if (resolved.startsWith(globalPrefix)) {
+    scope = 'global';
+  } else {
+    scope = 'project';
+  }
   return parseSkill(filePath, scope, slug, raw);
 }
 
 export async function saveSkill(skill: SkillDef): Promise<SkillDef> {
   if (skill.scope === 'plugin') {
     throw new Error('plugin skills are read-only — duplicate to user scope first');
+  }
+  if (skill.scope === 'builtin') {
+    throw new Error(
+      'builtin skills are read-only — duplicate to global or project scope first',
+    );
+  }
+  // Path validation lives at IPC boundary (ipc/skills.ts).
+  if (isInBuiltinSkillsDir(skill.path)) {
+    throw new Error('refuse to write inside bundled builtin skills directory');
+  }
+  if (isInPluginMarketplacesDir(skill.path)) {
+    throw new Error('refuse to write inside plugin marketplaces directory');
   }
   await fs.promises.mkdir(path.dirname(skill.path), { recursive: true });
   const text = serializeSkill(skill);
@@ -110,14 +246,73 @@ export async function createSkill(
 }
 
 export async function deleteSkill(filePath: string): Promise<void> {
-  // Remove the entire skill folder. SKILL.md is the marker file but the
-  // folder may also hold assets (templates, helpers). Refusing to touch
-  // plugin-managed skills since their lifecycle is owned elsewhere.
-  const dir = path.dirname(filePath);
-  if (dir.includes(pluginMarketplacesDir())) {
+  // CRITICAL: recursive directory removal. Path validation MUST happen
+  // at the IPC boundary in `ipc/skills.ts` (assertValidSkillPath) before
+  // we reach this point. Internal callers must not invoke deleteSkill on
+  // unvalidated paths — there are currently none, but treat this as a
+  // load-bearing invariant.
+  // Refuse to touch read-only sources (builtin bundle, plugin marketplace).
+  if (isInBuiltinSkillsDir(filePath)) {
+    throw new Error('refuse to delete bundled builtin skill');
+  }
+  if (isInPluginMarketplacesDir(filePath)) {
     throw new Error('refuse to delete plugin-managed skill from a marketplace');
   }
+  const dir = path.dirname(path.resolve(filePath));
   await fs.promises.rm(dir, { recursive: true, force: true });
+}
+
+// v0.11: duplicate any-scope skill (typically builtin) into global/project
+// so the user can edit it. Copies SKILL.md plus any sibling assets the
+// skill ships with (references/, examples/, scripts/, etc.) so the
+// duplicate is a complete, working copy that doesn't depend on the
+// original folder.
+export async function duplicateSkill(
+  filePath: string,
+  targetScope: 'global' | 'project',
+  projectPath: string | null,
+): Promise<SkillDef> {
+  if (targetScope === 'project' && !projectPath) {
+    throw new Error('project scope requires a projectPath');
+  }
+  // Source path validation lives at IPC boundary (ipc/skills.ts). Slug
+  // shape is still enforced here so an internal caller can't accidentally
+  // create folders with traversal-like names.
+  const slug = path.basename(path.dirname(filePath));
+  if (!SLUG_RE.test(slug)) {
+    throw new Error(`invalid skill slug derived from source: ${slug}`);
+  }
+
+  const baseDir =
+    targetScope === 'global' ? globalSkillsDir() : projectSkillsDir(projectPath ?? '');
+  const destDir = path.join(baseDir, slug);
+
+  // Belt-and-braces dest containment check.
+  const resolvedDest = path.resolve(destDir);
+  const resolvedBase = path.resolve(baseDir) + path.sep;
+  if (!resolvedDest.startsWith(resolvedBase)) {
+    throw new Error('duplicate destination escapes target scope');
+  }
+
+  // Fail fast if destination already exists — we never overwrite.
+  try {
+    await fs.promises.access(destDir);
+    throw new Error(`skill already exists at destination: ${destDir}`);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code !== 'ENOENT') throw err;
+  }
+
+  // Recursive copy of the entire skill folder. fs.cp preserves directory
+  // structure so siblings (references/, examples/, assets/, scripts/) all
+  // come along. We pre-size-check the SKILL.md before copying to surface
+  // a clean error rather than failing mid-copy.
+  await readSkillFile(filePath); // throws if too large
+  const srcDir = path.dirname(path.resolve(filePath));
+  await fs.promises.mkdir(path.dirname(destDir), { recursive: true });
+  await fs.promises.cp(srcDir, destDir, { recursive: true, errorOnExist: true });
+
+  return readSkill(path.join(destDir, 'SKILL.md'));
 }
 
 // ─── internals ──────────────────────────────────────────────────────────────
@@ -139,9 +334,13 @@ async function collectFromDir(
   }
   for (const e of entries) {
     if (!e.isDirectory()) continue;
+    // Slug shape gate — defense in depth against unusual folder names
+    // on disk (symlinks, leftover from manual edits). Folders that don't
+    // match the slug regex are silently skipped rather than parsed.
+    if (!SLUG_RE.test(e.name)) continue;
     const skillFile = path.join(baseDir, e.name, 'SKILL.md');
     try {
-      const raw = await fs.promises.readFile(skillFile, 'utf8');
+      const raw = await readSkillFile(skillFile);
       out.push(parseSkill(skillFile, scope, e.name, raw));
     } catch {
       // No SKILL.md in that folder — skip silently. Some users keep stray
@@ -188,9 +387,10 @@ async function collectPluginSkills(out: SkillDef[]): Promise<void> {
       }
       for (const s of skillFolders) {
         if (!s.isDirectory()) continue;
+        if (!SLUG_RE.test(s.name)) continue;
         const skillFile = path.join(skillsDir, s.name, 'SKILL.md');
         try {
-          const raw = await fs.promises.readFile(skillFile, 'utf8');
+          const raw = await readSkillFile(skillFile);
           const skill = parseSkill(skillFile, 'plugin', s.name, raw);
           skill.pluginSource = `${mkt.name}${candidate === mktDir ? '' : `/${path.basename(candidate)}`}`;
           out.push(skill);
@@ -198,6 +398,32 @@ async function collectPluginSkills(out: SkillDef[]): Promise<void> {
           /* not a skill */
         }
       }
+    }
+  }
+}
+
+// Walk the collected skills and stamp `overridden = true` on the
+// lower-priority duplicate for any slug that exists at more than one
+// scope. Precedence: project > global > plugin > builtin.
+function markOverridden(skills: SkillDef[]): void {
+  const priority: Record<SkillScope, number> = {
+    project: 4,
+    global: 3,
+    plugin: 2,
+    builtin: 1,
+  };
+  const winners = new Map<string, SkillDef>();
+  for (const s of skills) {
+    const existing = winners.get(s.slug);
+    if (!existing) {
+      winners.set(s.slug, s);
+      continue;
+    }
+    if (priority[s.scope] > priority[existing.scope]) {
+      existing.overridden = true;
+      winners.set(s.slug, s);
+    } else {
+      s.overridden = true;
     }
   }
 }

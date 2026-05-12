@@ -3,6 +3,10 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 
 import { createLogger } from '@shared/logger';
+import {
+  builtinPacksExist,
+  getBuiltinAgentsDir,
+} from '@main/utils/builtinPackPaths';
 import type { AgentDef, AgentScope } from '@shared/types';
 
 const logger = createLogger('Agents');
@@ -11,12 +15,80 @@ const logger = createLogger('Agents');
 // the same two places the interactive CLI does:
 //   • ~/.claude/agents/   — every project, every user
 //   • <cwd>/.claude/agents/ — pinned to this repo
+// Plus, v0.11 adds a third bundled location:
+//   • <Resources>/builtin-packs/agents/ — read-only, ships with the app
 function globalAgentsDir(): string {
   return path.join(homedir(), '.claude', 'agents');
 }
 
 function projectAgentsDir(projectPath: string): string {
   return path.join(projectPath, '.claude', 'agents');
+}
+
+// Hard upper bound for agent files. Real frontmatter+body never exceeds
+// tens of KB; anything larger is either accidental dump or hostile input
+// to slurp into memory and parse.
+const MAX_AGENT_FILE_BYTES = 2 * 1024 * 1024;
+
+// Slug must match this shape — derived from filename or duplicate-source
+// path. Constrains the surface for path-traversal pollution and matches
+// what claude's `/agents` CLI accepts.
+const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,63}$/i;
+
+// Structural path validation: `filePath` is a valid agent location iff
+// it's a single .md file living directly inside one of three known shapes:
+//   • <builtinDir>/<slug>.md
+//   • <homedir>/.claude/agents/<slug>.md
+//   • <anyDir>/.claude/agents/<slug>.md     (project-scoped)
+//
+// This is the security boundary for every IPC entry point that takes a
+// caller-supplied path (read, save, delete, duplicate-source). Without
+// it a compromised renderer can pivot the agents IPC into an arbitrary
+// file-read / file-write / recursive-delete primitive.
+function isValidAgentPath(filePath: string): boolean {
+  const resolved = path.resolve(filePath);
+  if (!resolved.endsWith('.md')) return false;
+  const parent = path.dirname(resolved);
+  const base = path.basename(resolved, '.md');
+  if (!SLUG_RE.test(base)) return false;
+
+  // Direct child of builtin dir.
+  const builtinDir = path.resolve(getBuiltinAgentsDir());
+  if (parent === builtinDir) return true;
+
+  // Direct child of `~/.claude/agents` or `<any>/.claude/agents`.
+  if (
+    path.basename(parent) === 'agents' &&
+    path.basename(path.dirname(parent)) === '.claude'
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+// Re-exported so the IPC handler enforces path validation BEFORE
+// dispatching. Service functions stay validation-free so internal
+// callers can pass non-IPC-shape paths (none today, but kept consistent
+// with SkillsService).
+export function assertValidAgentPath(filePath: string): void {
+  if (!isValidAgentPath(filePath)) {
+    throw new Error(`refuse to operate on path outside agent scopes: ${filePath}`);
+  }
+}
+
+function isInBuiltinAgentsDir(filePath: string): boolean {
+  const resolved = path.resolve(filePath);
+  const builtinDir = path.resolve(getBuiltinAgentsDir()) + path.sep;
+  return resolved.startsWith(builtinDir);
+}
+
+async function readAgentFile(filePath: string): Promise<string> {
+  const st = await fs.promises.stat(filePath);
+  if (st.size > MAX_AGENT_FILE_BYTES) {
+    throw new Error(`agent file too large (${st.size} bytes)`);
+  }
+  return fs.promises.readFile(filePath, 'utf8');
 }
 
 // ─── public API ─────────────────────────────────────────────────────────────
@@ -27,6 +99,13 @@ export async function listAgents(projectPath: string | null): Promise<AgentDef[]
   ];
   if (projectPath) {
     dirs.push({ dir: projectAgentsDir(projectPath), scope: 'project' });
+  }
+
+  // Builtin pack ships under <Resources>/builtin-packs/agents/. In rare dev
+  // cases (fresh clone before curation) the directory may not exist — skip
+  // silently in that case rather than spam warnings.
+  if (await builtinPacksExist()) {
+    dirs.push({ dir: getBuiltinAgentsDir(), scope: 'builtin' });
   }
 
   const out: AgentDef[] = [];
@@ -44,36 +123,64 @@ export async function listAgents(projectPath: string | null): Promise<AgentDef[]
     for (const e of entries) {
       if (!e.isFile() || !e.name.endsWith('.md')) continue;
       const filePath = path.join(dir, e.name);
+      // Defense in depth — readdir might return a file with a slug that
+      // doesn't match our shape (extremely unusual on disk, but a hostile
+      // sibling could land via symlink). Skip rather than parse.
+      if (!isValidAgentPath(filePath)) continue;
       try {
-        const raw = await fs.promises.readFile(filePath, 'utf8');
+        const raw = await readAgentFile(filePath);
         out.push(parseAgent(filePath, scope, raw));
       } catch (err) {
         logger.warn(`failed to parse ${filePath}: ${(err as Error).message}`);
       }
     }
   }
-  // Stable sort: scope (global before project) then slug.
+
+  // Precedence: project > global > builtin. The lower-priority entry of
+  // any shadowed slug gets `overridden = true`; the winning entry is left
+  // untouched. We list ALL entries — the Settings UI dims overrides, the
+  // picker can filter as it likes.
+  markOverridden(out);
+
+  // Stable sort: project first, then global, then builtin; within a scope
+  // sort by slug. Matches the original two-scope ordering and tacks
+  // builtin on the bottom.
+  const scopeOrder: Record<AgentScope, number> = {
+    project: 0,
+    global: 1,
+    builtin: 2,
+  };
   out.sort((a, b) => {
-    if (a.scope !== b.scope) return a.scope === 'global' ? -1 : 1;
+    if (a.scope !== b.scope) return scopeOrder[a.scope] - scopeOrder[b.scope];
     return a.slug.localeCompare(b.slug);
   });
   return out;
 }
 
 export async function readAgent(filePath: string): Promise<AgentDef> {
-  const raw = await fs.promises.readFile(filePath, 'utf8');
-  // Infer scope from the path — anything under the user's home counts as
-  // global, otherwise project. Edge case: a project rooted at the home
-  // dir collapses to global, which is fine for our purposes.
-  const home = homedir();
-  const scope: AgentScope =
-    filePath.startsWith(path.join(home, '.claude', 'agents'))
-      ? 'global'
-      : 'project';
+  // Path validation lives at the IPC boundary (ipc/agents.ts).
+  const raw = await readAgentFile(filePath);
+  // Infer scope from the resolved path with directory-boundary checks
+  // (string startsWith would accept `~/.claude/agents-other/...`).
+  const resolved = path.resolve(filePath);
+  const builtinDir = path.resolve(getBuiltinAgentsDir()) + path.sep;
+  const globalDir = path.resolve(globalAgentsDir()) + path.sep;
+  let scope: AgentScope = 'project';
+  if (resolved.startsWith(builtinDir)) scope = 'builtin';
+  else if (resolved.startsWith(globalDir)) scope = 'global';
   return parseAgent(filePath, scope, raw);
 }
 
 export async function saveAgent(agent: AgentDef): Promise<AgentDef> {
+  if (agent.scope === 'builtin') {
+    throw new Error(
+      'builtin agents are read-only — duplicate to global or project scope first',
+    );
+  }
+  // Path validation lives at the IPC boundary (ipc/agents.ts).
+  if (isInBuiltinAgentsDir(agent.path)) {
+    throw new Error('refuse to write inside bundled builtin agents directory');
+  }
   await fs.promises.mkdir(path.dirname(agent.path), { recursive: true });
   const text = serializeAgent(agent);
   await fs.promises.writeFile(agent.path, text);
@@ -87,6 +194,9 @@ export async function createAgent(
   projectPath: string | null,
   slug: string,
 ): Promise<AgentDef> {
+  if (scope === 'builtin') {
+    throw new Error('cannot create builtin agents — they ship with the app');
+  }
   const cleanSlug = slug
     .toLowerCase()
     .replace(/[^a-z0-9-]+/g, '-')
@@ -119,7 +229,57 @@ export async function createAgent(
 }
 
 export async function deleteAgent(filePath: string): Promise<void> {
-  await fs.promises.unlink(filePath);
+  // Path validation lives at the IPC boundary (ipc/agents.ts).
+  // Refuse to delete bundled builtin agents — they live inside the .app's
+  // resources and would be restored on next launch anyway. Use the resolved
+  // path so a symlink can't sneak through (same string-prefix bypass we
+  // closed for readAgent's scope inference).
+  if (isInBuiltinAgentsDir(filePath)) {
+    throw new Error('refuse to delete bundled builtin agent');
+  }
+  await fs.promises.unlink(path.resolve(filePath));
+}
+
+// v0.11: duplicate a builtin (or any-scope) agent into global/project so
+// the user can edit it. Preserves frontmatter + body verbatim, refuses to
+// overwrite an existing slug at the destination.
+export async function duplicateAgent(
+  filePath: string,
+  targetScope: 'global' | 'project',
+  projectPath: string | null,
+): Promise<AgentDef> {
+  if (targetScope === 'project' && !projectPath) {
+    throw new Error('project scope requires a projectPath');
+  }
+  // Source path validation lives at the IPC boundary (ipc/agents.ts).
+  const slug = path.basename(filePath, '.md');
+  if (!SLUG_RE.test(slug)) {
+    throw new Error(`invalid agent slug derived from source: ${slug}`);
+  }
+  const raw = await readAgentFile(filePath);
+
+  const destDir =
+    targetScope === 'global' ? globalAgentsDir() : projectAgentsDir(projectPath ?? '');
+  await fs.promises.mkdir(destDir, { recursive: true });
+  const destPath = path.join(destDir, `${slug}.md`);
+
+  // Belt-and-braces: confirm dest stays inside destDir after resolution.
+  const resolvedDest = path.resolve(destPath);
+  const resolvedDestDir = path.resolve(destDir) + path.sep;
+  if (!resolvedDest.startsWith(resolvedDestDir)) {
+    throw new Error('duplicate destination escapes target scope');
+  }
+
+  try {
+    await fs.promises.access(destPath);
+    throw new Error(`agent already exists at destination: ${destPath}`);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code !== 'ENOENT') throw err;
+  }
+
+  await fs.promises.writeFile(destPath, raw);
+  return readAgent(destPath);
 }
 
 // ─── parser / serializer ────────────────────────────────────────────────────
@@ -281,6 +441,34 @@ function assignField(
       break;
     default:
       extra[key] = value;
+  }
+}
+
+// Walk the collected agents and stamp `overridden = true` on the
+// lower-priority duplicate for any slug that exists at more than one
+// scope. Precedence: project > global > builtin.
+function markOverridden(agents: AgentDef[]): void {
+  const priority: Record<AgentScope, number> = {
+    project: 3,
+    global: 2,
+    builtin: 1,
+  };
+  // bySlug holds the current "winner" — the highest-priority scope seen
+  // for that slug so far. Every other entry with the same slug gets
+  // tagged `overridden`.
+  const winners = new Map<string, AgentDef>();
+  for (const a of agents) {
+    const existing = winners.get(a.slug);
+    if (!existing) {
+      winners.set(a.slug, a);
+      continue;
+    }
+    if (priority[a.scope] > priority[existing.scope]) {
+      existing.overridden = true;
+      winners.set(a.slug, a);
+    } else {
+      a.overridden = true;
+    }
   }
 }
 

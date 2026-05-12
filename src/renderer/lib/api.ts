@@ -177,6 +177,17 @@ export interface DevspaceApi {
       slug: string,
     ) => Promise<AgentDef>;
     delete: (filePath: string) => Promise<void>;
+    // Copy a builtin (or any other) agent file into the user's
+    // writable global/project scope. Source path is the builtin's
+    // absolute path under <Resources>/builtin-packs/agents/; target is
+    // either 'global' (~/.claude/agents/) or 'project' (<projectPath>/
+    // .claude/agents/). Resolves to the freshly written AgentDef so the
+    // renderer can select it after a list refresh.
+    duplicate: (
+      filePath: string,
+      targetScope: 'global' | 'project',
+      projectPath: string | null,
+    ) => Promise<AgentDef>;
   };
   teams: {
     list: (projectPath: string | null) => Promise<TeamDef[]>;
@@ -208,6 +219,15 @@ export interface DevspaceApi {
       slug: string,
     ) => Promise<SkillDef>;
     delete: (filePath: string) => Promise<void>;
+    // Copy a read-only skill (builtin or plugin) into the user's
+    // writable global/project scope. Source is the skill's SKILL.md path.
+    // The backend recursively copies the entire skill folder (SKILL.md
+    // plus any helper assets) into the target scope.
+    duplicate: (
+      filePath: string,
+      targetScope: 'global' | 'project',
+      projectPath: string | null,
+    ) => Promise<SkillDef>;
   };
   mcp: {
     list: (projectPath: string | null) => Promise<McpServerEntry[]>;
@@ -451,6 +471,7 @@ function makeStubApi(): DevspaceApi {
       save: notWired('agents.save'),
       create: notWired('agents.create'),
       delete: notWired('agents.delete'),
+      duplicate: notWired('agents.duplicate'),
     },
     mcp: {
       list: () => Promise.resolve([]),
@@ -465,6 +486,7 @@ function makeStubApi(): DevspaceApi {
       save: notWired('skills.save'),
       create: notWired('skills.create'),
       delete: notWired('skills.delete'),
+      duplicate: notWired('skills.duplicate'),
     },
     teams: {
       list: () => Promise.resolve([]),

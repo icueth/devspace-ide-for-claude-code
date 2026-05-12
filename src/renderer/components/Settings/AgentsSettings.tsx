@@ -21,6 +21,8 @@ import {
   Folder,
   FolderOpen,
   Globe,
+  Lock,
+  Package,
   Plus,
   Save,
   Trash2,
@@ -66,6 +68,9 @@ export function AgentsSettings() {
   const [collapsed, setCollapsed] = useState<Record<AgentScope, boolean>>({
     global: false,
     project: false,
+    // Built-in pack collapsed by default so the list of read-only entries
+    // doesn't visually drown out the user's own agents on first open.
+    builtin: true,
   });
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [draft, setDraft] = useState<AgentDef | null>(null);
@@ -110,13 +115,23 @@ export function AgentsSettings() {
   }, [draft, original]);
 
   const grouped = useMemo(() => {
-    const g: Record<AgentScope, AgentDef[]> = { global: [], project: [] };
+    const g: Record<AgentScope, AgentDef[]> = {
+      global: [],
+      project: [],
+      builtin: [],
+    };
     for (const a of agents) g[a.scope].push(a);
     return g;
   }, [agents]);
 
   const onSave = useCallback(async () => {
     if (!draft || saving) return;
+    // Builtin scope is read-only — surface a clear error rather than
+    // round-tripping to the backend just to bounce off the disk.
+    if (draft.scope === 'builtin') {
+      setError('Built-in agents are read-only. Duplicate to global/project first.');
+      return;
+    }
     setSaving(true);
     setError(null);
     try {
@@ -134,6 +149,7 @@ export function AgentsSettings() {
 
   const onDelete = useCallback(async () => {
     if (!draft) return;
+    if (draft.scope === 'builtin') return;
     const ok = window.confirm(
       `Delete agent "${draft.name}"? This removes ${draft.path}.`,
     );
@@ -151,6 +167,27 @@ export function AgentsSettings() {
 
   const onDuplicate = useCallback(async () => {
     if (!draft) return;
+    // Builtin agents are read-only and can't be Save()'d in-place, so the
+    // Copy button always routes through the duplicate IPC which clones
+    // the file into the user's writable scope (global by default; project
+    // if a project is open). Editable scopes (global/project) keep the
+    // existing prompt-for-slug-then-save flow so the user can rename.
+    if (draft.scope === 'builtin') {
+      const targetScope: AgentScope =
+        activeProject ? 'project' : 'global';
+      try {
+        const created = await api.agents.duplicate(
+          draft.path,
+          targetScope,
+          targetScope === 'project' ? (activeProject?.path ?? null) : null,
+        );
+        await reload();
+        setSelectedPath(created.path);
+      } catch (err) {
+        setError((err as Error).message);
+      }
+      return;
+    }
     const newName = window.prompt(
       'New agent slug (lowercase, hyphenated):',
       `${draft.slug}-copy`,
@@ -179,7 +216,27 @@ export function AgentsSettings() {
     } catch (err) {
       setError((err as Error).message);
     }
-  }, [draft, activeProject?.path, reload]);
+  }, [draft, activeProject, reload]);
+
+  // Builtin-specific duplicate that lets the caller pick the target scope
+  // (global or project). Used by the sidebar row's inline "Duplicate to
+  // …" action so the user doesn't have to open the editor first.
+  const onDuplicateBuiltin = useCallback(
+    async (agent: AgentDef, targetScope: 'global' | 'project') => {
+      try {
+        const created = await api.agents.duplicate(
+          agent.path,
+          targetScope,
+          targetScope === 'project' ? (activeProject?.path ?? null) : null,
+        );
+        await reload();
+        setSelectedPath(created.path);
+      } catch (err) {
+        setError((err as Error).message);
+      }
+    },
+    [activeProject?.path, reload],
+  );
 
   const onCreate = useCallback(
     async (scope: AgentScope) => {
@@ -207,11 +264,24 @@ export function AgentsSettings() {
         className="flex w-[280px] shrink-0 flex-col overflow-y-auto border-r border-border"
         style={{ background: 'var(--color-surface-2)' }}
       >
-        {(['global', 'project'] as AgentScope[]).map((scope) => {
+        {(['global', 'project', 'builtin'] as AgentScope[]).map((scope) => {
           const list = grouped[scope];
           const isCollapsed = collapsed[scope];
+          const isBuiltin = scope === 'builtin';
           const canCreate =
             scope === 'global' || (scope === 'project' && !!activeProject);
+          // Built-in section is hidden entirely when empty so users
+          // without the bundled pack (dev builds, broken install) don't
+          // see a confusing "Built-in (0)" header.
+          if (isBuiltin && list.length === 0) return null;
+          const scopeLabel =
+            scope === 'global'
+              ? 'Global'
+              : scope === 'project'
+                ? 'Project'
+                : 'Built-in';
+          const ScopeIcon =
+            scope === 'global' ? Globe : scope === 'project' ? Folder : Package;
           return (
             <div key={scope} className="flex flex-col">
               <div className="flex items-center gap-1 border-b border-border-subtle bg-surface-3/40 px-2 py-2">
@@ -226,9 +296,14 @@ export function AgentsSettings() {
                   ) : (
                     <ChevronDown size={10} />
                   )}
-                  {scope === 'global' ? <Globe size={11} /> : <Folder size={11} />}
+                  <ScopeIcon size={11} />
                   <span className="flex-1">
-                    {scope === 'global' ? 'Global' : 'Project'}
+                    {scopeLabel}
+                    {isBuiltin && (
+                      <span className="ml-1 text-[9.5px] font-normal normal-case text-text-dim">
+                        (read-only)
+                      </span>
+                    )}
                   </span>
                   <span className="text-text-dim">({list.length})</span>
                 </button>
@@ -277,31 +352,14 @@ export function AgentsSettings() {
                   {list.map((a) => {
                     const isActive = selectedPath === a.path;
                     return (
-                      <button
+                      <AgentRow
                         key={a.path}
-                        onClick={() => setSelectedPath(a.path)}
-                        title={a.description || a.slug}
-                        className={cn(
-                          'flex items-center gap-2 px-3 py-1.5 text-left text-[11.5px] transition',
-                          isActive
-                            ? 'bg-[rgba(76,141,255,0.18)] text-text'
-                            : 'text-text-secondary hover:bg-surface-3 hover:text-text',
-                        )}
-                      >
-                        <Bot
-                          size={11}
-                          className="shrink-0"
-                          style={a.color ? { color: cssColor(a.color) } : undefined}
-                        />
-                        <span className="min-w-0 flex-1 truncate font-mono">
-                          {a.name}
-                        </span>
-                        {a.model && (
-                          <span className="shrink-0 rounded-full bg-surface-3 px-1.5 text-[9px] uppercase text-text-muted">
-                            {a.model}
-                          </span>
-                        )}
-                      </button>
+                        agent={a}
+                        isActive={isActive}
+                        canDuplicateToProject={!!activeProject}
+                        onSelect={() => setSelectedPath(a.path)}
+                        onDuplicateBuiltin={onDuplicateBuiltin}
+                      />
                     );
                   })}
                 </div>
@@ -344,6 +402,92 @@ export function AgentsSettings() {
   );
 }
 
+// One sidebar row. Builtin entries can't be edited in place, so the row
+// gets a small inline "Duplicate to global/project" dropdown that calls
+// agents.duplicate without first opening the read-only editor — saves a
+// click and makes the override flow obvious. Overridden rows (same slug
+// also exists at a higher-priority scope) dim + tag so the user
+// understands precedence at a glance.
+function AgentRow({
+  agent,
+  isActive,
+  canDuplicateToProject,
+  onSelect,
+  onDuplicateBuiltin,
+}: {
+  agent: AgentDef;
+  isActive: boolean;
+  canDuplicateToProject: boolean;
+  onSelect: () => void;
+  onDuplicateBuiltin: (agent: AgentDef, target: 'global' | 'project') => void;
+}) {
+  const isBuiltin = agent.scope === 'builtin';
+  const isOverridden = agent.overridden === true;
+  return (
+    <div
+      className={cn(
+        'flex items-center gap-2 px-3 py-1.5 text-left text-[11.5px] transition',
+        isActive
+          ? 'bg-[rgba(76,141,255,0.18)] text-text'
+          : 'text-text-secondary hover:bg-surface-3 hover:text-text',
+        isOverridden && 'opacity-60',
+      )}
+    >
+      <button
+        onClick={onSelect}
+        title={agent.description || agent.slug}
+        className="flex min-w-0 flex-1 items-center gap-2 text-left"
+      >
+        <Bot
+          size={11}
+          className="shrink-0"
+          style={agent.color ? { color: cssColor(agent.color) } : undefined}
+        />
+        <span className="min-w-0 flex-1 truncate font-mono">{agent.name}</span>
+        {isOverridden && (
+          <span
+            className="shrink-0 rounded-full bg-surface-3 px-1.5 text-[9px] uppercase text-text-dim"
+            title="A higher-priority scope shadows this entry"
+          >
+            Overridden
+          </span>
+        )}
+        {agent.model && (
+          <span className="shrink-0 rounded-full bg-surface-3 px-1.5 text-[9px] uppercase text-text-muted">
+            {agent.model}
+          </span>
+        )}
+      </button>
+      {isBuiltin && (
+        // Native <select> is good enough here — matches the rest of the
+        // settings UI patterns (no headless picker library) and gives the
+        // user the two viable targets without an extra dialog.
+        <select
+          aria-label="Duplicate to scope"
+          title="Duplicate this read-only agent to a writable scope"
+          value=""
+          onChange={(e) => {
+            const v = e.target.value as '' | 'global' | 'project';
+            if (v === 'global' || v === 'project') {
+              onDuplicateBuiltin(agent, v);
+            }
+            // Reset so picking the same target twice in a row works.
+            e.target.value = '';
+          }}
+          onClick={(e) => e.stopPropagation()}
+          className="shrink-0 rounded-[5px] border border-border-subtle bg-surface-3 px-1 py-[1px] text-[9.5px] uppercase text-text-muted hover:text-text focus:border-accent focus:outline-none"
+        >
+          <option value="" disabled>
+            Duplicate to…
+          </option>
+          <option value="global">Global</option>
+          {canDuplicateToProject && <option value="project">Project</option>}
+        </select>
+      )}
+    </div>
+  );
+}
+
 interface AgentEditorProps {
   agent: AgentDef;
   dirty: boolean;
@@ -365,6 +509,12 @@ function AgentEditor({
   onDelete,
   onDuplicate,
 }: AgentEditorProps) {
+  // Built-in agents are bundled inside the .app's Resources dir and live
+  // on a read-only volume on a signed install. Disable every mutating
+  // control here so a user trying to "fix" a builtin doesn't get a
+  // confusing EACCES from the backend — they get a clear "duplicate it
+  // first" affordance via the Copy button.
+  const readOnly = agent.scope === 'builtin';
   const update = useCallback(
     (patch: Partial<AgentDef>) => onChange({ ...agent, ...patch }),
     [agent, onChange],
@@ -385,12 +535,12 @@ function AgentEditor({
     const handler = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === 's') {
         e.preventDefault();
-        if (dirty) onSave();
+        if (dirty && !readOnly) onSave();
       }
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [dirty, onSave]);
+  }, [dirty, readOnly, onSave]);
 
   return (
     <>
@@ -398,7 +548,12 @@ function AgentEditor({
         <span className="truncate font-mono text-[10.5px] text-text-muted">
           {agent.path.replace(/^\/Users\/[^/]+/, '~')}
         </span>
-        {dirty && (
+        {readOnly && (
+          <span className="inline-flex items-center gap-1 rounded-full bg-surface-3 px-2 py-[1px] text-[9px] uppercase text-text-muted">
+            <Lock size={9} /> read-only
+          </span>
+        )}
+        {dirty && !readOnly && (
           <span className="rounded-full bg-[rgba(245,158,11,0.18)] px-2 py-[1px] text-[9px] font-semibold uppercase tracking-wide text-[#fcd34d]">
             modified
           </span>
@@ -409,29 +564,35 @@ function AgentEditor({
         )}
         <button
           onClick={onDuplicate}
-          title="Duplicate this agent"
+          title={
+            readOnly
+              ? 'Duplicate to a writable scope'
+              : 'Duplicate this agent'
+          }
           className="rounded p-1 text-text-muted transition hover:bg-surface-3 hover:text-text"
         >
           <Copy size={12} />
         </button>
-        <button
-          onClick={onDelete}
-          title="Delete this agent"
-          className="rounded p-1 text-text-muted transition hover:bg-surface-3 hover:text-semantic-error"
-        >
-          <Trash2 size={12} />
-        </button>
+        {!readOnly && (
+          <button
+            onClick={onDelete}
+            title="Delete this agent"
+            className="rounded p-1 text-text-muted transition hover:bg-surface-3 hover:text-semantic-error"
+          >
+            <Trash2 size={12} />
+          </button>
+        )}
         <button
           onClick={onSave}
-          disabled={!dirty || saving}
+          disabled={!dirty || saving || readOnly}
           className={cn(
             'inline-flex items-center gap-1 rounded-[6px] px-3 py-[5px] text-[11px] font-medium transition',
-            !dirty || saving
+            !dirty || saving || readOnly
               ? 'pointer-events-none border border-border bg-surface-3 text-text-muted opacity-50'
               : 'text-white hover:brightness-110',
           )}
           style={
-            !dirty || saving
+            !dirty || saving || readOnly
               ? undefined
               : {
                   background:
@@ -451,8 +612,9 @@ function AgentEditor({
             <input
               type="text"
               value={agent.name}
+              disabled={readOnly}
               onChange={(e) => update({ name: e.target.value })}
-              className="w-full rounded-[6px] border border-border-subtle bg-surface-3 px-2 py-1.5 font-mono text-[11.5px] text-text focus:border-accent focus:outline-none"
+              className="w-full rounded-[6px] border border-border-subtle bg-surface-3 px-2 py-1.5 font-mono text-[11.5px] text-text focus:border-accent focus:outline-none disabled:opacity-60"
             />
           </FormField>
 
@@ -462,9 +624,10 @@ function AgentEditor({
           >
             <textarea
               value={agent.description}
+              disabled={readOnly}
               onChange={(e) => update({ description: e.target.value })}
               rows={3}
-              className="w-full resize-none rounded-[6px] border border-border-subtle bg-surface-3 px-2 py-1.5 text-[11.5px] text-text focus:border-accent focus:outline-none"
+              className="w-full resize-none rounded-[6px] border border-border-subtle bg-surface-3 px-2 py-1.5 text-[11.5px] text-text focus:border-accent focus:outline-none disabled:opacity-60"
             />
           </FormField>
 
@@ -474,8 +637,9 @@ function AgentEditor({
                 <button
                   key={m || 'default'}
                   onClick={() => update({ model: m || undefined })}
+                  disabled={readOnly}
                   className={cn(
-                    'rounded-[5px] border px-2 py-1 text-[10.5px] transition',
+                    'rounded-[5px] border px-2 py-1 text-[10.5px] transition disabled:opacity-60',
                     (agent.model ?? '') === m
                       ? 'border-accent bg-accent/10 text-text'
                       : 'border-border-subtle bg-surface-3 text-text-secondary hover:border-border-hi hover:text-text',
@@ -494,9 +658,10 @@ function AgentEditor({
             <input
               type="text"
               value={agent.color ?? ''}
+              disabled={readOnly}
               onChange={(e) => update({ color: e.target.value || undefined })}
               placeholder="blue, green, #a855f7…"
-              className="w-full rounded-[6px] border border-border-subtle bg-surface-3 px-2 py-1.5 font-mono text-[11px] text-text placeholder:text-text-dim focus:border-accent focus:outline-none"
+              className="w-full rounded-[6px] border border-border-subtle bg-surface-3 px-2 py-1.5 font-mono text-[11px] text-text placeholder:text-text-dim focus:border-accent focus:outline-none disabled:opacity-60"
             />
           </FormField>
 
@@ -508,7 +673,7 @@ function AgentEditor({
                 : `Restricted to ${agent.tools.length} tool(s)`
             }
             action={
-              agent.tools !== undefined ? (
+              agent.tools !== undefined && !readOnly ? (
                 <button
                   onClick={() => update({ tools: undefined })}
                   className="text-[10px] text-accent hover:underline"
@@ -529,6 +694,7 @@ function AgentEditor({
                     <input
                       type="checkbox"
                       checked={checked}
+                      disabled={readOnly}
                       onChange={() => toggleTool(t)}
                       className="h-3 w-3 accent-accent"
                     />
@@ -558,6 +724,7 @@ function AgentEditor({
         <BodyEditor
           key={agent.path}
           value={agent.body}
+          readOnly={readOnly}
           onChange={(body) => update({ body })}
           onSave={onSave}
         />
@@ -597,11 +764,12 @@ function FormField({
 
 interface BodyEditorProps {
   value: string;
+  readOnly?: boolean;
   onChange: (value: string) => void;
   onSave: () => void;
 }
 
-function BodyEditor({ value, onChange, onSave }: BodyEditorProps) {
+function BodyEditor({ value, readOnly = false, onChange, onSave }: BodyEditorProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const viewRef = useRef<EditorView | null>(null);
   const onChangeRef = useRef(onChange);
@@ -629,6 +797,7 @@ function BodyEditor({ value, onChange, onSave }: BodyEditorProps) {
           oneDark,
           baseEditorTheme,
           markdown(),
+          EditorState.readOnly.of(readOnly),
           keymap.of([
             ...defaultKeymap,
             ...historyKeymap,
@@ -657,7 +826,7 @@ function BodyEditor({ value, onChange, onSave }: BodyEditorProps) {
       viewRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [readOnly]);
 
   useEffect(() => {
     const v = viewRef.current;

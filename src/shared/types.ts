@@ -142,6 +142,24 @@ export interface ChatEvent {
   ts: number;
 }
 
+// Ordered visual segments of one assistant turn. Each segment renders as
+// its own card in the UI. The full sequence preserves the chronological
+// order text / tool-use blocks arrived from the model, so a turn that
+// reads as "explain → call 3 tools → explain more → call 2 more tools"
+// renders as 4 cards in that order instead of a single wall of text
+// stacked on top of all tools.
+//
+// `tool_group` segments only reference tool calls by id — the full tool
+// detail lives in ChatMessage.toolCalls[] / TeamStep.toolCalls[] (single
+// source of truth, no duplication). Renderer joins them at render time.
+//
+// Optional for back-compat. Messages persisted before v0.11.0 don't have
+// segments[]; renderers fall back to flat `content + toolCalls[]` and
+// show the legacy single-bubble layout for those.
+export type ChatMessageSegment =
+  | { kind: 'text'; id: string; text: string }
+  | { kind: 'tool_group'; id: string; toolUseIds: string[] };
+
 // Persisted message. The renderer also keeps an in-memory `streaming`
 // shape that mirrors this but with partial text; once the turn completes,
 // the streaming view is committed into the chat thread.
@@ -151,6 +169,11 @@ export interface ChatMessage {
   // Final flattened text after streaming completed. For assistant, also
   // includes everything except thinking blocks. In team mode this stays
   // empty — per-step content lives in teamRun.steps[].content.
+  //
+  // Note: `content` is the concatenated text across all text-segments,
+  // kept in sync for back-compat readers (search, copy-to-clipboard,
+  // legacy rendering when `segments` is absent). New code reading the
+  // turn should prefer `segments`.
   content: string;
   // Tool use + tool result pairs in order. Renderer renders as collapsible
   // "Reading … (3)" pills.
@@ -161,6 +184,9 @@ export interface ChatMessage {
     result?: string;
     isError?: boolean;
   }>;
+  // Ordered text / tool_group segments — see ChatMessageSegment. Optional
+  // so messages from v0.10.x and earlier still parse cleanly.
+  segments?: ChatMessageSegment[];
   thinking?: string;
   createdAt: number;
   // Token usage if the upstream model reported it.
@@ -200,6 +226,10 @@ export interface TeamStep {
     result?: string;
     isError?: boolean;
   }>;
+  // Same chronological segmentation as ChatMessage.segments — present
+  // for v0.11+ runs, absent for legacy steps where the renderer falls
+  // back to flat content+toolCalls.
+  segments?: ChatMessageSegment[];
   thinking?: string;
   startedAt?: number;
   finishedAt?: number;
@@ -410,7 +440,11 @@ export interface McpServerEntry {
 // `allowed-tools` (hyphenated, claude's published convention) instead
 // of `tools`.
 
-export type SkillScope = 'global' | 'project' | 'plugin';
+// 'builtin' is the bundled starter pack we ship inside the .app — these
+// live read-only under <Resources>/builtin-packs/skills/. Discovered on
+// every list() and merged with global/project. Users can override a
+// builtin by creating the same slug at global or project scope.
+export type SkillScope = 'global' | 'project' | 'plugin' | 'builtin';
 
 export interface SkillDef {
   path: string;          // absolute path to SKILL.md
@@ -424,6 +458,10 @@ export interface SkillDef {
   body: string;
   // For plugin-scoped skills, which marketplace/plugin owns this skill.
   pluginSource?: string;
+  // True when the same slug exists at a higher-priority scope (project
+  // overrides global overrides builtin). The renderer dims overridden
+  // entries and labels them so the user understands precedence.
+  overridden?: boolean;
 }
 
 // ─── Agents (~/.claude/agents/*.md and <project>/.claude/agents/*.md) ───────
@@ -437,13 +475,17 @@ export interface SkillDef {
 // call so external edits (from `claude` CLI's `/agents`, plain editors,
 // or another DevSpace window) show up immediately.
 
-export type AgentScope = 'global' | 'project';
+// 'builtin' is the bundled starter pack inside the .app
+// (<Resources>/builtin-packs/agents/). Read-only — user must duplicate
+// to global/project before editing. Project > global > builtin.
+export type AgentScope = 'global' | 'project' | 'builtin';
 
 export interface AgentDef {
   // Absolute path to the markdown file.
   path: string;
   // 'global' lives in ~/.claude/agents/; 'project' lives in
-  // <projectRoot>/.claude/agents/. Both are listed and editable.
+  // <projectRoot>/.claude/agents/; 'builtin' lives under the app
+  // Resources dir and is read-only.
   scope: AgentScope;
   // Filename without `.md` — drives the slug shown when `name` is empty
   // or unset.
@@ -462,6 +504,9 @@ export interface AgentDef {
   // Markdown body — everything after the closing `---` line. Becomes the
   // agent's system prompt when dispatched.
   body: string;
+  // Same as SkillDef.overridden — true when a higher-priority scope has
+  // a file with the same slug shadowing this one.
+  overridden?: boolean;
 }
 
 export interface UpdateInfo {

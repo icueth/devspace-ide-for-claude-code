@@ -259,4 +259,230 @@ describe('makeStepLineHandler', () => {
 
     expect(step.content).toBe('step output');
   });
+
+  it('builds chronological segments for the step target', () => {
+    const state = emptyState();
+    const thread = freshThread();
+    const step = freshStep();
+    const handle = makeStepLineHandler(state, thread, step, 0);
+
+    handle(
+      asLine({
+        type: 'assistant',
+        message: {
+          content: [
+            { type: 'text', text: 'plan: ' },
+            { type: 'tool_use', id: 't1', name: 'Read', input: {} },
+            { type: 'text', text: 'done.' },
+          ],
+        },
+      }),
+    );
+
+    expect(step.segments).toBeDefined();
+    expect(step.segments).toHaveLength(3);
+    expect(step.segments![0]).toMatchObject({ kind: 'text', text: 'plan: ' });
+    expect(step.segments![1]).toMatchObject({
+      kind: 'tool_group',
+      toolUseIds: ['t1'],
+    });
+    expect(step.segments![2]).toMatchObject({ kind: 'text', text: 'done.' });
+  });
+});
+
+describe('segments — chronological assembly', () => {
+  it('a single text block produces one text segment containing that text', () => {
+    const state = emptyState();
+    const thread = freshThread();
+    const assistant = freshAssistant();
+    const handle = makeSoloLineHandler(state, thread, assistant);
+
+    handle(
+      asLine({
+        type: 'assistant',
+        message: { content: [{ type: 'text', text: 'just text' }] },
+      }),
+    );
+
+    expect(assistant.segments).toBeDefined();
+    expect(assistant.segments).toHaveLength(1);
+    const seg = assistant.segments![0]!;
+    expect(seg.kind).toBe('text');
+    if (seg.kind === 'text') {
+      expect(seg.text).toBe('just text');
+      expect(seg.id).toMatch(/.+/);
+    }
+  });
+
+  it('text → tool_use → text produces three segments in that order', () => {
+    const state = emptyState();
+    const thread = freshThread();
+    const assistant = freshAssistant();
+    const handle = makeSoloLineHandler(state, thread, assistant);
+
+    handle(
+      asLine({
+        type: 'assistant',
+        message: {
+          content: [
+            { type: 'text', text: 'analyzing… ' },
+            { type: 'tool_use', id: 't-1', name: 'Read', input: { path: '/x' } },
+            { type: 'text', text: 'found it.' },
+          ],
+        },
+      }),
+    );
+
+    expect(assistant.segments).toHaveLength(3);
+    expect(assistant.segments![0]).toMatchObject({
+      kind: 'text',
+      text: 'analyzing… ',
+    });
+    expect(assistant.segments![1]).toMatchObject({
+      kind: 'tool_group',
+      toolUseIds: ['t-1'],
+    });
+    expect(assistant.segments![2]).toMatchObject({
+      kind: 'text',
+      text: 'found it.',
+    });
+  });
+
+  it('back-to-back text blocks coalesce into one text segment', () => {
+    const state = emptyState();
+    const thread = freshThread();
+    const assistant = freshAssistant();
+    const handle = makeSoloLineHandler(state, thread, assistant);
+
+    handle(
+      asLine({
+        type: 'assistant',
+        message: { content: [{ type: 'text', text: 'hello ' }] },
+      }),
+    );
+    handle(
+      asLine({
+        type: 'assistant',
+        message: { content: [{ type: 'text', text: 'world' }] },
+      }),
+    );
+
+    expect(assistant.segments).toHaveLength(1);
+    expect(assistant.segments![0]).toMatchObject({
+      kind: 'text',
+      text: 'hello world',
+    });
+  });
+
+  it('back-to-back tool_use blocks coalesce into one tool_group with multiple ids', () => {
+    const state = emptyState();
+    const thread = freshThread();
+    const assistant = freshAssistant();
+    const handle = makeSoloLineHandler(state, thread, assistant);
+
+    handle(
+      asLine({
+        type: 'assistant',
+        message: {
+          content: [
+            { type: 'tool_use', id: 'a', name: 'Read', input: {} },
+            { type: 'tool_use', id: 'b', name: 'Grep', input: {} },
+          ],
+        },
+      }),
+    );
+
+    expect(assistant.segments).toHaveLength(1);
+    expect(assistant.segments![0]).toMatchObject({
+      kind: 'tool_group',
+      toolUseIds: ['a', 'b'],
+    });
+  });
+
+  it('thinking blocks do not break a run of text segments', () => {
+    const state = emptyState();
+    const thread = freshThread();
+    const assistant = freshAssistant();
+    const handle = makeSoloLineHandler(state, thread, assistant);
+
+    handle(
+      asLine({
+        type: 'assistant',
+        message: {
+          content: [
+            { type: 'text', text: 'before ' },
+            { type: 'thinking', thinking: 'pondering…' },
+            { type: 'text', text: 'after' },
+          ],
+        },
+      }),
+    );
+
+    expect(assistant.segments).toHaveLength(1);
+    expect(assistant.segments![0]).toMatchObject({
+      kind: 'text',
+      text: 'before after',
+    });
+    expect(assistant.thinking).toBe('pondering…');
+  });
+
+  it('content stays in sync as the concatenation of all text segments', () => {
+    const state = emptyState();
+    const thread = freshThread();
+    const assistant = freshAssistant();
+    const handle = makeSoloLineHandler(state, thread, assistant);
+
+    handle(
+      asLine({
+        type: 'assistant',
+        message: {
+          content: [
+            { type: 'text', text: 'one ' },
+            { type: 'tool_use', id: 't1', name: 'Read', input: {} },
+            { type: 'text', text: 'two ' },
+            { type: 'tool_use', id: 't2', name: 'Edit', input: {} },
+            { type: 'text', text: 'three' },
+          ],
+        },
+      }),
+    );
+
+    const concatenated = assistant
+      .segments!.filter((s): s is Extract<typeof s, { kind: 'text' }> => s.kind === 'text')
+      .map((s) => s.text)
+      .join('');
+    expect(assistant.content).toBe(concatenated);
+    expect(assistant.content).toBe('one two three');
+  });
+
+  it('toolCalls ids match the union of all tool_group.toolUseIds in order', () => {
+    const state = emptyState();
+    const thread = freshThread();
+    const assistant = freshAssistant();
+    const handle = makeSoloLineHandler(state, thread, assistant);
+
+    handle(
+      asLine({
+        type: 'assistant',
+        message: {
+          content: [
+            { type: 'text', text: 'plan ' },
+            { type: 'tool_use', id: 't1', name: 'Read', input: {} },
+            { type: 'tool_use', id: 't2', name: 'Read', input: {} },
+            { type: 'text', text: 'review ' },
+            { type: 'tool_use', id: 't3', name: 'Edit', input: {} },
+          ],
+        },
+      }),
+    );
+
+    const idsFromSegments = assistant
+      .segments!.filter(
+        (s): s is Extract<typeof s, { kind: 'tool_group' }> => s.kind === 'tool_group',
+      )
+      .flatMap((s) => s.toolUseIds);
+    const idsFromToolCalls = assistant.toolCalls.map((c) => c.id);
+    expect(idsFromSegments).toEqual(['t1', 't2', 't3']);
+    expect(idsFromToolCalls).toEqual(idsFromSegments);
+  });
 });

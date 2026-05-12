@@ -73,6 +73,9 @@ export function SkillsSettings() {
     global: false,
     project: false,
     plugin: true,
+    // Built-in pack collapsed by default so the bundled list doesn't
+    // bury the user's own skills on first open.
+    builtin: true,
   });
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [draft, setDraft] = useState<SkillDef | null>(null);
@@ -127,12 +130,16 @@ export function SkillsSettings() {
       global: [],
       project: [],
       plugin: [],
+      builtin: [],
     };
     for (const s of skills) if (matches(s)) g[s.scope].push(s);
     return g;
   }, [skills, filter]);
 
-  const readOnly = draft?.scope === 'plugin';
+  // Both 'plugin' (marketplace-managed) and 'builtin' (bundled inside the
+  // .app) are read-only — the user has to duplicate them into a writable
+  // scope before they can edit.
+  const readOnly = draft?.scope === 'plugin' || draft?.scope === 'builtin';
 
   const onSave = useCallback(async () => {
     if (!draft || readOnly || saving) return;
@@ -169,8 +176,26 @@ export function SkillsSettings() {
 
   const onDuplicate = useCallback(async () => {
     if (!draft) return;
-    // Plugin → user clone gives users a way to customize without touching
-    // the marketplace.
+    // Plugin / builtin → use the dedicated duplicate IPC which performs a
+    // recursive folder copy preserving SKILL.md plus helper assets. Falls
+    // back to the create+save flow for editable scopes so the user can
+    // rename via a prompt.
+    if (draft.scope === 'plugin' || draft.scope === 'builtin') {
+      const targetScope: 'global' | 'project' =
+        activeProject ? 'project' : 'global';
+      try {
+        const created = await api.skills.duplicate(
+          draft.path,
+          targetScope,
+          targetScope === 'project' ? (activeProject?.path ?? null) : null,
+        );
+        await reload();
+        setSelectedPath(created.path);
+      } catch (err) {
+        setError((err as Error).message);
+      }
+      return;
+    }
     const newName = window.prompt(
       'New skill slug (lowercase, hyphenated):',
       `${draft.slug}-copy`,
@@ -193,7 +218,26 @@ export function SkillsSettings() {
     } catch (err) {
       setError((err as Error).message);
     }
-  }, [draft, reload]);
+  }, [draft, activeProject, reload]);
+
+  // Builtin/plugin sidebar shortcut: lets the user duplicate directly to
+  // the chosen scope without opening the read-only editor first.
+  const onDuplicateReadOnly = useCallback(
+    async (skill: SkillDef, targetScope: 'global' | 'project') => {
+      try {
+        const created = await api.skills.duplicate(
+          skill.path,
+          targetScope,
+          targetScope === 'project' ? (activeProject?.path ?? null) : null,
+        );
+        await reload();
+        setSelectedPath(created.path);
+      } catch (err) {
+        setError((err as Error).message);
+      }
+    },
+    [activeProject?.path, reload],
+  );
 
   const onCreate = useCallback(
     async (scope: 'global' | 'project') => {
@@ -248,11 +292,29 @@ export function SkillsSettings() {
         </div>
 
         <div className="flex-1 overflow-y-auto">
-          {(['global', 'project', 'plugin'] as SkillScope[]).map((scope) => {
+          {(['global', 'project', 'plugin', 'builtin'] as SkillScope[]).map((scope) => {
             const list = grouped[scope];
             if (scope === 'plugin' && !includePlugins) return null;
+            // Hide builtin section entirely when there's nothing bundled
+            // (dev builds without the resources/builtin-packs/ dir).
+            if (scope === 'builtin' && list.length === 0) return null;
             const isCollapsed = collapsed[scope];
             const canCreate = scope === 'global' || (scope === 'project' && !!activeProject);
+            const isReadOnlyScope = scope === 'plugin' || scope === 'builtin';
+            const scopeLabel =
+              scope === 'global'
+                ? 'Global'
+                : scope === 'project'
+                  ? 'Project'
+                  : scope === 'plugin'
+                    ? 'Plugins'
+                    : 'Built-in';
+            const ScopeIcon =
+              scope === 'global'
+                ? Globe
+                : scope === 'project'
+                  ? Folder
+                  : Package;
             return (
               <div key={scope} className="flex flex-col">
                 <div className="flex items-center gap-1 border-b border-border-subtle bg-surface-3/40 px-2 py-2">
@@ -267,19 +329,14 @@ export function SkillsSettings() {
                     ) : (
                       <ChevronDown size={10} />
                     )}
-                    {scope === 'global' ? (
-                      <Globe size={11} />
-                    ) : scope === 'project' ? (
-                      <Folder size={11} />
-                    ) : (
-                      <Package size={11} />
-                    )}
+                    <ScopeIcon size={11} />
                     <span className="flex-1">
-                      {scope === 'global'
-                        ? 'Global'
-                        : scope === 'project'
-                          ? 'Project'
-                          : 'Plugins'}
+                      {scopeLabel}
+                      {isReadOnlyScope && (
+                        <span className="ml-1 text-[9.5px] font-normal normal-case text-text-dim">
+                          (read-only)
+                        </span>
+                      )}
                     </span>
                     <span className="text-text-dim">({list.length})</span>
                   </button>
@@ -328,39 +385,16 @@ export function SkillsSettings() {
                         {filter ? 'No matches.' : 'Empty.'}
                       </div>
                     )}
-                    {list.map((s) => {
-                      const isActive = selectedPath === s.path;
-                      return (
-                        <button
-                          key={s.path}
-                          onClick={() => setSelectedPath(s.path)}
-                          title={s.description || s.slug}
-                          className={cn(
-                            'flex items-center gap-2 px-3 py-1.5 text-left text-[11.5px] transition',
-                            isActive
-                              ? 'bg-[rgba(76,141,255,0.18)] text-text'
-                              : 'text-text-secondary hover:bg-surface-3 hover:text-text',
-                          )}
-                        >
-                          {s.scope === 'plugin' ? (
-                            <Lock size={10} className="shrink-0 text-text-dim" />
-                          ) : (
-                            <Lightbulb size={11} className="shrink-0 text-accent" />
-                          )}
-                          <span className="min-w-0 flex-1 truncate font-mono">
-                            {s.name}
-                          </span>
-                          {s.allowedTools && s.allowedTools.length > 0 && (
-                            <span
-                              className="shrink-0 rounded-full bg-surface-3 px-1.5 text-[9px] uppercase text-text-muted"
-                              title={`Restricted to: ${s.allowedTools.join(', ')}`}
-                            >
-                              {s.allowedTools.length}t
-                            </span>
-                          )}
-                        </button>
-                      );
-                    })}
+                    {list.map((s) => (
+                      <SkillRow
+                        key={s.path}
+                        skill={s}
+                        isActive={selectedPath === s.path}
+                        canDuplicateToProject={!!activeProject}
+                        onSelect={() => setSelectedPath(s.path)}
+                        onDuplicateReadOnly={onDuplicateReadOnly}
+                      />
+                    ))}
                   </div>
                 )}
               </div>
@@ -394,6 +428,90 @@ export function SkillsSettings() {
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+// One sidebar row. Plugin and builtin entries can't be edited directly
+// — they get an inline duplicate dropdown so the user can clone to a
+// writable scope without first opening the read-only editor. Overridden
+// rows dim + tag so the precedence (project > global > plugin > builtin)
+// is obvious at a glance.
+function SkillRow({
+  skill,
+  isActive,
+  canDuplicateToProject,
+  onSelect,
+  onDuplicateReadOnly,
+}: {
+  skill: SkillDef;
+  isActive: boolean;
+  canDuplicateToProject: boolean;
+  onSelect: () => void;
+  onDuplicateReadOnly: (skill: SkillDef, target: 'global' | 'project') => void;
+}) {
+  const isReadOnly = skill.scope === 'plugin' || skill.scope === 'builtin';
+  const isOverridden = skill.overridden === true;
+  return (
+    <div
+      className={cn(
+        'flex items-center gap-2 px-3 py-1.5 text-left text-[11.5px] transition',
+        isActive
+          ? 'bg-[rgba(76,141,255,0.18)] text-text'
+          : 'text-text-secondary hover:bg-surface-3 hover:text-text',
+        isOverridden && 'opacity-60',
+      )}
+    >
+      <button
+        onClick={onSelect}
+        title={skill.description || skill.slug}
+        className="flex min-w-0 flex-1 items-center gap-2 text-left"
+      >
+        {isReadOnly ? (
+          <Lock size={10} className="shrink-0 text-text-dim" />
+        ) : (
+          <Lightbulb size={11} className="shrink-0 text-accent" />
+        )}
+        <span className="min-w-0 flex-1 truncate font-mono">{skill.name}</span>
+        {isOverridden && (
+          <span
+            className="shrink-0 rounded-full bg-surface-3 px-1.5 text-[9px] uppercase text-text-dim"
+            title="A higher-priority scope shadows this entry"
+          >
+            Overridden
+          </span>
+        )}
+        {skill.allowedTools && skill.allowedTools.length > 0 && (
+          <span
+            className="shrink-0 rounded-full bg-surface-3 px-1.5 text-[9px] uppercase text-text-muted"
+            title={`Restricted to: ${skill.allowedTools.join(', ')}`}
+          >
+            {skill.allowedTools.length}t
+          </span>
+        )}
+      </button>
+      {isReadOnly && (
+        <select
+          aria-label="Duplicate to scope"
+          title="Duplicate this read-only skill to a writable scope"
+          value=""
+          onChange={(e) => {
+            const v = e.target.value as '' | 'global' | 'project';
+            if (v === 'global' || v === 'project') {
+              onDuplicateReadOnly(skill, v);
+            }
+            e.target.value = '';
+          }}
+          onClick={(e) => e.stopPropagation()}
+          className="shrink-0 rounded-[5px] border border-border-subtle bg-surface-3 px-1 py-[1px] text-[9.5px] uppercase text-text-muted hover:text-text focus:border-accent focus:outline-none"
+        >
+          <option value="" disabled>
+            Duplicate to…
+          </option>
+          <option value="global">Global</option>
+          {canDuplicateToProject && <option value="project">Project</option>}
+        </select>
+      )}
     </div>
   );
 }

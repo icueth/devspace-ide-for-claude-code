@@ -11,7 +11,12 @@
 import { randomUUID } from 'node:crypto';
 
 import { broadcast, type ProjectState } from '@main/services/ChatTranscript';
-import type { ChatMessage, ChatThread, TeamStep } from '@shared/types';
+import type {
+  ChatMessage,
+  ChatMessageSegment,
+  ChatThread,
+  TeamStep,
+} from '@shared/types';
 
 // Shape of one JSONL event emitted by `claude --output-format stream-json`.
 export interface ClaudeStreamEvent {
@@ -47,6 +52,41 @@ export function parseStreamLine(raw: string): ClaudeStreamEvent | null {
   }
 }
 
+// Shared segment accumulators. Both makeSoloLineHandler and
+// makeStepLineHandler need the SAME chronological segmentation rule —
+// text deltas extend the current text segment, tool_use blocks extend
+// the current tool_group segment, thinking blocks are passthrough. The
+// helpers mutate the target's `segments` array in place and lazily
+// allocate it on the first relevant block so messages that never
+// receive any text/tool_use stay segments-free (back-compat with
+// v0.10.x persisted shapes).
+
+type SegmentTarget = { segments?: ChatMessageSegment[] };
+
+function appendTextToSegments(target: SegmentTarget, text: string): void {
+  target.segments ??= [];
+  const last = target.segments[target.segments.length - 1];
+  if (last && last.kind === 'text') {
+    last.text += text;
+  } else {
+    target.segments.push({ kind: 'text', id: randomUUID(), text });
+  }
+}
+
+function appendToolUseToSegments(target: SegmentTarget, toolUseId: string): void {
+  target.segments ??= [];
+  const last = target.segments[target.segments.length - 1];
+  if (last && last.kind === 'tool_group') {
+    last.toolUseIds.push(toolUseId);
+  } else {
+    target.segments.push({
+      kind: 'tool_group',
+      id: randomUUID(),
+      toolUseIds: [toolUseId],
+    });
+  }
+}
+
 // Build a line-handler that mutates the given assistant message + emits
 // solo-turn events (no stepIndex). The same factory drives both fresh
 // spawns and resume-on-boot tails.
@@ -62,6 +102,7 @@ export function makeSoloLineHandler(
       for (const block of e.message.content) {
         if (block.type === 'text' && block.text) {
           assistant.content += block.text;
+          appendTextToSegments(assistant, block.text);
           broadcast(state, thread.id, {
             kind: 'text_delta',
             text: block.text,
@@ -81,6 +122,7 @@ export function makeSoloLineHandler(
             name: block.name ?? 'tool',
             input: block.input ?? {},
           });
+          appendToolUseToSegments(assistant, id);
           broadcast(state, thread.id, {
             kind: 'tool_use',
             toolUseId: id,
@@ -141,6 +183,7 @@ export function makeStepLineHandler(
       for (const block of e.message.content) {
         if (block.type === 'text' && block.text) {
           stepTarget.content += block.text;
+          appendTextToSegments(stepTarget, block.text);
           broadcast(state, thread.id, {
             kind: 'text_delta',
             text: block.text,
@@ -162,6 +205,7 @@ export function makeStepLineHandler(
             name: block.name ?? 'tool',
             input: block.input ?? {},
           });
+          appendToolUseToSegments(stepTarget, id);
           broadcast(state, thread.id, {
             kind: 'tool_use',
             toolUseId: id,

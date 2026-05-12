@@ -93,6 +93,32 @@ export function lookupState(projectPath: string): ProjectState | undefined {
   return states.get(path.resolve(projectPath));
 }
 
+// Per-message segment cap. Real assistant turns rarely exceed 20–30
+// segments; this lets a hostile/garbage transcript not balloon the
+// renderer's reconciler. Same intent as the legacy turn timeout —
+// bound the worst case, accept loss of trailing junk.
+const MAX_SEGMENTS_PER_MESSAGE = 5000;
+// Per-text-segment text cap. ReactMarkdown is not designed to handle
+// multi-megabyte single nodes; truncate to keep the render path sane.
+const MAX_TEXT_SEGMENT_CHARS = 500_000;
+
+function isValidSegment(s: unknown): boolean {
+  if (!s || typeof s !== 'object') return false;
+  const x = s as Record<string, unknown>;
+  if (typeof x.id !== 'string') return false;
+  if (x.kind === 'text') {
+    return typeof x.text === 'string' && x.text.length <= MAX_TEXT_SEGMENT_CHARS;
+  }
+  if (x.kind === 'tool_group') {
+    return (
+      Array.isArray(x.toolUseIds) &&
+      x.toolUseIds.every((id) => typeof id === 'string') &&
+      x.toolUseIds.length <= 1000
+    );
+  }
+  return false;
+}
+
 async function hydrateFromDisk(state: ProjectState): Promise<void> {
   const dir = threadsDir(state.projectPath);
   let files: fs.Dirent[];
@@ -106,9 +132,27 @@ async function hydrateFromDisk(state: ProjectState): Promise<void> {
     try {
       const raw = await fs.promises.readFile(path.join(dir, f.name), 'utf8');
       const thread = JSON.parse(raw) as ChatThread;
-      if (thread.id && Array.isArray(thread.messages)) {
-        state.threads.set(thread.id, thread);
+      if (!thread.id || !Array.isArray(thread.messages)) continue;
+      // Defensive: filter out malformed/hostile segment shapes before
+      // they reach the renderer. Legacy threads (no segments) flow
+      // through untouched.
+      for (const m of thread.messages) {
+        if (Array.isArray(m.segments)) {
+          m.segments = m.segments
+            .filter(isValidSegment)
+            .slice(0, MAX_SEGMENTS_PER_MESSAGE);
+        }
+        if (m.teamRun && Array.isArray(m.teamRun.steps)) {
+          for (const step of m.teamRun.steps) {
+            if (Array.isArray(step.segments)) {
+              step.segments = step.segments
+                .filter(isValidSegment)
+                .slice(0, MAX_SEGMENTS_PER_MESSAGE);
+            }
+          }
+        }
       }
+      state.threads.set(thread.id, thread);
     } catch {
       /* skip corrupt thread */
     }

@@ -47,6 +47,7 @@ import { cn } from '@renderer/lib/utils';
 import type {
   ChatEvent,
   ChatMessage,
+  ChatMessageSegment,
   ChatThread,
   TeamDef,
   TeamStep,
@@ -725,29 +726,42 @@ function MessageBubble({ message }: { message: ChatMessage }) {
       </div>
       <div className="min-w-0 flex-1 select-text space-y-2">
         {message.thinking && <ThinkingBlock text={message.thinking} />}
-        {message.toolCalls.length > 0 && (
-          <ToolCallList calls={message.toolCalls} />
+        {message.segments && message.segments.length > 0 ? (
+          // v0.11+ segmented render: each text / tool_group chunk is its
+          // own card so the chronological order of claude's output is
+          // preserved (instead of the legacy "all tools, then all text"
+          // flattening). Empty text segments at the very tail of a
+          // streaming turn — common between two tool calls — show nothing
+          // and let the next event fall into a new segment.
+          <SegmentedBody message={message} />
+        ) : (
+          <>
+            {message.toolCalls.length > 0 && (
+              <ToolCallList calls={message.toolCalls} />
+            )}
+            {message.content ? (
+              // Render ReactMarkdown directly inline — DO NOT use the editor's
+              // <MarkdownPreview> wrapper here. That component anchors content
+              // via `position: absolute; inset: 0` for the split-pane case,
+              // which collapses to zero height inside a natural-flow chat
+              // bubble (the bubble itself has no fixed size, so `h-full` on
+              // the wrapper means 100% of 0 = 0). Replies came back fine from
+              // the model but visually clipped to a single line. Same fix we
+              // applied to the Update dialog.
+              <TextSegmentCard text={message.content} />
+            ) : message.status === 'streaming' && message.toolCalls.length === 0 ? (
+              <WaitingPill message={message} />
+            ) : null}
+          </>
         )}
-        {message.content ? (
-          // Render ReactMarkdown directly inline — DO NOT use the editor's
-          // <MarkdownPreview> wrapper here. That component anchors content
-          // via `position: absolute; inset: 0` for the split-pane case,
-          // which collapses to zero height inside a natural-flow chat
-          // bubble (the bubble itself has no fixed size, so `h-full` on
-          // the wrapper means 100% of 0 = 0). Replies came back fine from
-          // the model but visually clipped to a single line. Same fix we
-          // applied to the Update dialog.
-          <div className="prose prose-invert max-w-none break-words text-[12.5px] leading-relaxed prose-headings:mt-3 prose-headings:mb-1.5 prose-p:my-1.5 prose-ul:my-1.5 prose-ol:my-1.5 prose-li:my-0.5 prose-pre:my-2 prose-pre:overflow-x-auto prose-pre:rounded-md prose-pre:bg-surface-3 prose-pre:p-2.5 prose-pre:text-[11.5px] prose-code:rounded prose-code:bg-surface-3 prose-code:px-1 prose-code:py-0.5 prose-code:text-[11.5px] prose-code:before:content-none prose-code:after:content-none prose-a:text-accent prose-a:no-underline hover:prose-a:underline">
-            <ReactMarkdown
-              remarkPlugins={[remarkGfm]}
-              rehypePlugins={[[rehypeHighlight, { detect: true }]]}
-            >
-              {message.content}
-            </ReactMarkdown>
-          </div>
-        ) : message.status === 'streaming' && message.toolCalls.length === 0 ? (
-          <WaitingPill message={message} />
-        ) : null}
+        {/* Pre-first-output pill: in segmented mode we still need the
+            "Waiting for claude" indicator while the turn is in flight
+            but no segments have arrived (or every segment is empty). */}
+        {message.segments && message.segments.length > 0 &&
+          message.status === 'streaming' &&
+          isSegmentListEmpty(message.segments) && (
+            <WaitingPill message={message} />
+          )}
         {message.status === 'error' && (
           <div className="rounded-[7px] border border-semantic-error/40 bg-semantic-error/10 px-3 py-2 font-mono text-[10.5px] text-semantic-error">
             {message.error ?? 'unknown error'}
@@ -755,6 +769,98 @@ function MessageBubble({ message }: { message: ChatMessage }) {
         )}
         <AssistantFooter message={message} />
       </div>
+    </div>
+  );
+}
+
+// Renders ChatMessage.segments in order. Text segments become Markdown
+// cards; tool_group segments resolve their ids back to the message's
+// toolCalls[] (single source of truth) and reuse the existing
+// ToolCallList component so the verb-ing aggregation behavior matches
+// what users already know.
+function SegmentedBody({
+  message,
+}: {
+  message: { segments?: ChatMessageSegment[]; toolCalls: ChatMessage['toolCalls'] };
+}) {
+  const segs = message.segments ?? [];
+  return (
+    <>
+      {segs.map((seg) => {
+        if (seg.kind === 'text') {
+          if (!seg.text) return null;
+          return <TextSegmentCard key={seg.id} text={seg.text} />;
+        }
+        return (
+          <ToolGroupSegment
+            key={seg.id}
+            toolUseIds={seg.toolUseIds}
+            allCalls={message.toolCalls}
+          />
+        );
+      })}
+    </>
+  );
+}
+
+// Memoized resolution from segment ids → ToolCall[] so we don't re-walk
+// the calls array on every render. toolUseIds is identity-stable (we
+// only ever push new ids — never reorder), so the dependency list is
+// safe even though the contents are mutated in applyEvent's spreaded
+// thread copy.
+function ToolGroupSegment({
+  toolUseIds,
+  allCalls,
+}: {
+  toolUseIds: string[];
+  allCalls: ChatMessage['toolCalls'];
+}) {
+  const calls = useMemo(
+    () => resolveCalls(toolUseIds, allCalls),
+    [toolUseIds, allCalls],
+  );
+  if (calls.length === 0) return null;
+  return <ToolCallList calls={calls} />;
+}
+
+function resolveCalls(
+  toolUseIds: string[],
+  allCalls: ChatMessage['toolCalls'],
+): ChatMessage['toolCalls'] {
+  if (toolUseIds.length === 0) return [];
+  const byId = new Map(allCalls.map((c) => [c.id, c] as const));
+  const out: ChatMessage['toolCalls'] = [];
+  for (const id of toolUseIds) {
+    const c = byId.get(id);
+    if (c) out.push(c);
+  }
+  return out;
+}
+
+// Returns true when every segment renders to nothing — used to decide
+// whether the WaitingPill should still show while streaming.
+function isSegmentListEmpty(segments: ChatMessageSegment[]): boolean {
+  for (const s of segments) {
+    if (s.kind === 'text' && s.text) return false;
+    if (s.kind === 'tool_group' && s.toolUseIds.length > 0) return false;
+  }
+  return true;
+}
+
+// One markdown card inside a segmented assistant turn. Visually identical
+// to the legacy single-content render (same prose classes) — the only
+// difference is each text-chunk gets its own block instead of being
+// concatenated into one giant string. No border / padding wrapper here
+// because the parent bubble already provides space-y-2 between cards.
+function TextSegmentCard({ text }: { text: string }) {
+  return (
+    <div className="prose prose-invert max-w-none break-words text-[12.5px] leading-relaxed prose-headings:mt-3 prose-headings:mb-1.5 prose-p:my-1.5 prose-ul:my-1.5 prose-ol:my-1.5 prose-li:my-0.5 prose-pre:my-2 prose-pre:overflow-x-auto prose-pre:rounded-md prose-pre:bg-surface-3 prose-pre:p-2.5 prose-pre:text-[11.5px] prose-code:rounded prose-code:bg-surface-3 prose-code:px-1 prose-code:py-0.5 prose-code:text-[11.5px] prose-code:before:content-none prose-code:after:content-none prose-a:text-accent prose-a:no-underline hover:prose-a:underline">
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        rehypePlugins={[[rehypeHighlight, { detect: true }]]}
+      >
+        {text}
+      </ReactMarkdown>
     </div>
   );
 }
@@ -1284,27 +1390,28 @@ function StepDetail({ step, index }: { step: TeamStep; index: number }) {
           </span>
         )}
       </summary>
-      <div className="border-t border-border-subtle px-3 py-2 select-text">
-        {step.toolCalls.length > 0 && (
-          <div className="mb-2">
-            <ToolCallList calls={step.toolCalls} />
-          </div>
+      <div className="space-y-2 border-t border-border-subtle px-3 py-2 select-text">
+        {step.segments && step.segments.length > 0 ? (
+          // v0.11+ segmented step render — same chronological cards as
+          // ChatMessage segments, scoped to this step's content/toolCalls.
+          <SegmentedBody message={{ segments: step.segments, toolCalls: step.toolCalls }} />
+        ) : (
+          <>
+            {step.toolCalls.length > 0 && <ToolCallList calls={step.toolCalls} />}
+            {step.content ? (
+              <TextSegmentCard text={step.content} />
+            ) : null}
+          </>
         )}
-        {step.content ? (
-          <div className="prose prose-invert max-w-none break-words text-[12.5px] leading-relaxed prose-headings:mt-3 prose-headings:mb-1.5 prose-p:my-1.5 prose-ul:my-1.5 prose-ol:my-1.5 prose-li:my-0.5 prose-pre:my-2 prose-pre:overflow-x-auto prose-pre:rounded-md prose-pre:bg-surface-3 prose-pre:p-2.5 prose-pre:text-[11.5px] prose-code:rounded prose-code:bg-surface-3 prose-code:px-1 prose-code:py-0.5 prose-code:text-[11.5px] prose-code:before:content-none prose-code:after:content-none prose-a:text-accent prose-a:no-underline hover:prose-a:underline">
-            <ReactMarkdown
-              remarkPlugins={[remarkGfm]}
-              rehypePlugins={[[rehypeHighlight, { detect: true }]]}
-            >
-              {step.content}
-            </ReactMarkdown>
-          </div>
-        ) : isRunning ? (
-          <div className="flex items-center gap-1.5 text-[11.5px] text-text-muted">
-            <Loader2 size={11} className="animate-spin" />
-            <span>working…</span>
-          </div>
-        ) : null}
+        {isRunning &&
+          (!step.segments || step.segments.length === 0
+            ? !step.content
+            : isSegmentListEmpty(step.segments)) && (
+            <div className="flex items-center gap-1.5 text-[11.5px] text-text-muted">
+              <Loader2 size={11} className="animate-spin" />
+              <span>working…</span>
+            </div>
+          )}
         {step.error && (
           <div className="mt-2 rounded-[6px] border border-semantic-error/40 bg-semantic-error/10 px-3 py-2 font-mono text-[10.5px] text-semantic-error">
             {step.error}
@@ -1352,6 +1459,16 @@ function truncate(s: string, max: number): string {
  * than the message itself. Lets sequential pipelines render per-step
  * text and tool blocks without polluting the parent message's content.
  */
+// Stable-ish identifier for a freshly-created segment. crypto.randomUUID
+// is available in modern Electron's renderer context (Chromium 90+), but
+// fall back to a timestamp+random combo to keep this defensive — the id
+// only needs to be unique within one assistant turn for React keying.
+function newSegmentId(): string {
+  const c = (globalThis as { crypto?: { randomUUID?: () => string } }).crypto;
+  if (c?.randomUUID) return c.randomUUID();
+  return `seg-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
 function applyEvent(
   thread: ChatThread,
   threadId: string,
@@ -1393,17 +1510,59 @@ function applyEvent(
 
   if (event.kind === 'text_delta' && event.text) {
     target.content += event.text;
+    // Mirror onto segments[] so the renderer can paint each text /
+    // tool_group chunk as its own card in chronological order. If the
+    // last segment is already text, extend it; otherwise push a new one.
+    //
+    // Important: when extending an existing segment we REPLACE it with a
+    // new object (not mutate `lastSeg.text += ...`). That gives each
+    // event a fresh segment identity so any downstream `React.memo` on
+    // segment-keyed children can safely fast-path. Same goes for
+    // `target.segments = [...]` — we rebuild the array reference per
+    // event rather than `.push()` so memoized children re-render.
+    const prev = target.segments ?? [];
+    const lastSeg = prev[prev.length - 1];
+    if (lastSeg && lastSeg.kind === 'text') {
+      const updated: ChatMessageSegment = {
+        kind: 'text',
+        id: lastSeg.id,
+        text: lastSeg.text + event.text,
+      };
+      target.segments = [...prev.slice(0, -1), updated];
+    } else {
+      target.segments = [
+        ...prev,
+        { kind: 'text', id: newSegmentId(), text: event.text },
+      ];
+    }
   } else if (event.kind === 'thinking_delta' && event.text) {
     target.thinking = (target.thinking ?? '') + event.text;
   } else if (event.kind === 'tool_use') {
+    const toolUseId = event.toolUseId ?? `tu-${Date.now()}`;
     target.toolCalls = [
       ...target.toolCalls,
       {
-        id: event.toolUseId ?? `tu-${Date.now()}`,
+        id: toolUseId,
         name: event.toolName ?? 'tool',
         input: event.toolInput ?? {},
       },
     ];
+    // Same immutable replace-not-mutate pattern as text_delta.
+    const prev = target.segments ?? [];
+    const lastSeg = prev[prev.length - 1];
+    if (lastSeg && lastSeg.kind === 'tool_group') {
+      const updated: ChatMessageSegment = {
+        kind: 'tool_group',
+        id: lastSeg.id,
+        toolUseIds: [...lastSeg.toolUseIds, toolUseId],
+      };
+      target.segments = [...prev.slice(0, -1), updated];
+    } else {
+      target.segments = [
+        ...prev,
+        { kind: 'tool_group', id: newSegmentId(), toolUseIds: [toolUseId] },
+      ];
+    }
   } else if (event.kind === 'tool_result') {
     target.toolCalls = target.toolCalls.map((c) =>
       c.id === event.toolUseId
