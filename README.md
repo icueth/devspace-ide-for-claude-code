@@ -9,7 +9,7 @@ It uses `tmux` under the hood so every agent and shell pane survives app
 restarts, panel remounts, and accidental Cmd+Q.
 
 <p align="center">
-  <a href="https://github.com/icueth/devspace-ide-for-claude-code/releases/latest/download/devspace-0.4.0-arm64.dmg">
+  <a href="https://github.com/icueth/devspace-ide-for-claude-code/releases/latest">
     <img alt="Download for macOS — Apple Silicon" src="https://img.shields.io/badge/Download%20for%20macOS-Apple%20Silicon%20(M1%2FM2%2FM3%2FM4)-000?style=for-the-badge&logo=apple&logoColor=white" />
   </a>
   &nbsp;
@@ -475,13 +475,9 @@ DevSpace also requires **macOS 12+** (Monterey or later).
 1. Download the latest **`.dmg`** from
    [Releases](https://github.com/icueth/devspace-ide-for-claude-code/releases/latest).
 2. Open the DMG and drag **DevSpace** into `/Applications`.
-3. The app is **not notarized** (yet). The first time you launch it,
-   macOS may block it — open **System Settings → Privacy & Security**
-   and click **Open Anyway**, or run:
-
-   ```bash
-   xattr -dr com.apple.quarantine /Applications/devspace.app
-   ```
+3. Launch from `/Applications` — see the **macOS Gatekeeper** section
+   below if you hit *"Apple could not verify devspace is free of
+   malware…"* on a fresh Mac.
 
 > Releases ship the **Apple Silicon (`arm64`) DMG only**. Intel Macs are
 > not supported in the current builds.
@@ -489,6 +485,80 @@ DevSpace also requires **macOS 12+** (Monterey or later).
 The app's header version pill auto-checks for updates against GitHub
 Releases on boot and on focus — when a newer version exists it pulses,
 and clicking it opens release notes inline with a one-click DMG download.
+
+### macOS Gatekeeper — *"Apple could not verify devspace is free of malware"*
+
+DevSpace DMGs are **not yet signed with an Apple Developer ID** and
+**not notarized**. On a clean Mac — especially **macOS Sequoia (15) or
+Tahoe (16)** where Apple removed the old right-click Open bypass —
+double-clicking the app shows a blocking dialog with no obvious way
+forward. Pick one of the three workarounds below. All are safe — you
+can verify the binary on GitHub Releases first if you want.
+
+#### Option 1 — System Settings (recommended on Sequoia / Tahoe)
+
+1. Try to open **devspace.app** normally — the warning dialog appears.
+   Click **Done** (or **Cancel**).
+2. Open **System Settings → Privacy & Security**.
+3. Scroll down to the **Security** section. You'll see a line that says
+   *"devspace was blocked to protect your Mac."* with an **Open Anyway**
+   button.
+4. Click **Open Anyway** → enter your Mac password → the app launches.
+   You'll only have to do this once.
+
+#### Option 2 — Terminal one-liner (works on every macOS version)
+
+Strip the quarantine flag that Safari / Chrome / Arc attach to anything
+downloaded through a browser:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/devspace.app
+```
+
+After this, double-clicking DevSpace just opens — no dialog. The flag
+won't come back unless you reinstall.
+
+#### Option 3 — Right-click Open (older macOS only)
+
+On **macOS Sonoma (14) and earlier**, the classic bypass still works:
+
+1. Open Finder → `/Applications`.
+2. **Right-click** (or Control-click) **devspace.app** → **Open**.
+3. The warning shows up with an extra **Open** button → click it.
+
+Apple removed this path on Sequoia, so Option 1 or 2 is the way forward
+on new Macs.
+
+#### "But my friend installed the same version and didn't see this warning"
+
+Likely one of three reasons — none of them mean the DMG itself is
+different:
+
+- **Different macOS version.** Sonoma (14) and earlier are far more
+  permissive than Sequoia (15) and Tahoe (16).
+- **Different download path.** The quarantine flag only attaches when
+  you download via a browser. `gh release download`, `curl`, `wget`, and
+  AirDrop from another Mac all skip it entirely.
+- **Pre-existing approval.** If they ran an earlier DevSpace version and
+  clicked through, macOS remembers and stops asking on that machine.
+
+#### Verifying the DMG yourself
+
+Every release ships with checksums in the GitHub release notes. After
+downloading you can confirm the file hasn't been tampered with:
+
+```bash
+shasum -a 256 ~/Downloads/devspace-*-arm64.dmg
+```
+
+Compare the output against the SHA-256 listed on the release page.
+
+#### Signed + notarized builds — when?
+
+A signed + notarized build requires an Apple Developer Program
+membership (US$99/year), a Developer ID certificate, and an
+`xcrun notarytool` round-trip on every release. It's on the roadmap but
+not blocking — the three workarounds above unblock you today.
 
 ---
 
