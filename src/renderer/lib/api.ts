@@ -47,6 +47,9 @@ import type {
   DesignScreen,
   DesignSkill,
   DesignSystem,
+  DevServerEvent,
+  DevServerInfo,
+  DevServerStartInput,
   RegenerateDesignInput,
 } from '@shared/design';
 
@@ -238,6 +241,34 @@ export interface DevspaceApi {
       cb: (event: DesignEvent) => void,
     ) => () => void;
   };
+  devServer: {
+    // Detect framework + script + package manager without starting anything.
+    // Backend reads package.json + lockfiles; renderer uses the result to
+    // decide which "Start <framework>" button to render. Idempotent.
+    detect: (projectPath: string) => Promise<DevServerInfo>;
+    // Spawn the dev script through PtyPool. Resolves once the spawn has
+    // been queued — the renderer must rely on `onEvent` to learn when the
+    // URL is parsed out of stdout (status_changed → 'running' + url_resolved).
+    start: (input: DevServerStartInput) => Promise<DevServerInfo>;
+    // Kill the spawned process and clean up the PTY id. Safe to call
+    // when no server is running (no-op).
+    stop: (projectPath: string) => Promise<DevServerInfo>;
+    // Current snapshot of detection + lifecycle state. Returned eagerly
+    // on mount so the UI can paint without waiting for the first event.
+    status: (projectPath: string) => Promise<DevServerInfo>;
+    // Bind the main-process event stream to this project. Must be called
+    // before `onEvent` callbacks fire — symmetric with design.subscribe.
+    subscribe: (projectPath: string) => Promise<void>;
+    // Symmetric tear-down. Called by the renderer on tab unmount so dead
+    // tabs don't keep receiving events.
+    unsubscribe: (projectPath: string) => Promise<void>;
+    // Streamed lifecycle + log events for a single project. Returns an
+    // unsubscribe handle; calling it tears down the IPC listener.
+    onEvent: (
+      projectPath: string,
+      cb: (event: DevServerEvent) => void,
+    ) => () => void;
+  };
   codeflow: {
     getStatus: (projectPath: string) => Promise<CodeflowStatus>;
     analyze: (projectPath: string, opts?: { force?: boolean }) => Promise<void>;
@@ -418,6 +449,31 @@ function makeStubApi(): DevspaceApi {
       listSystems: () => Promise.resolve([]),
       readHtml: notWired('design.readHtml'),
       subscribe: notWired('design.subscribe'),
+      onEvent: () => () => undefined,
+    },
+    devServer: {
+      // Permissive idle stub so the LivePreview pane doesn't blow up
+      // before the backend agent wires the preload binding.
+      detect: () =>
+        Promise.resolve({
+          kind: 'unknown',
+          scriptName: '',
+          url: null,
+          status: 'idle',
+          logTail: [],
+        } as DevServerInfo),
+      start: notWired('devServer.start'),
+      stop: notWired('devServer.stop'),
+      status: () =>
+        Promise.resolve({
+          kind: 'unknown',
+          scriptName: '',
+          url: null,
+          status: 'idle',
+          logTail: [],
+        } as DevServerInfo),
+      subscribe: () => Promise.resolve(),
+      unsubscribe: () => Promise.resolve(),
       onEvent: () => () => undefined,
     },
     codeflow: {

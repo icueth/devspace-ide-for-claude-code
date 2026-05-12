@@ -32,6 +32,11 @@ const DesignView = lazy(() =>
     default: m.DesignView,
   })),
 );
+const LivePreviewView = lazy(() =>
+  import('@renderer/components/LivePreview/LivePreviewView').then((m) => ({
+    default: m.LivePreviewView,
+  })),
+);
 import { api } from '@renderer/lib/api';
 import { cn } from '@renderer/lib/utils';
 import { useEditorStore, type PaneId } from '@renderer/state/editor';
@@ -232,6 +237,12 @@ function EditorBody({ tab, onChange, onSave, onNavDone, mdMode }: EditorBodyProp
         <RouteErrorBoundary label="Design Studio">
           <Suspense fallback={<LazyFallback label="Loading design studio…" />}>
             <DesignView projectPath={tab.designProjectPath ?? ''} />
+          </Suspense>
+        </RouteErrorBoundary>
+      ) : tab.kind === 'live-preview' ? (
+        <RouteErrorBoundary label="Live Preview">
+          <Suspense fallback={<LazyFallback label="Loading live preview…" />}>
+            <LivePreviewView projectPath={tab.livePreviewProjectPath ?? ''} />
           </Suspense>
         </RouteErrorBoundary>
       ) : tab.kind === 'image' ? (

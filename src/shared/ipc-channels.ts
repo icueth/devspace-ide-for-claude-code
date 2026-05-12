@@ -143,6 +143,27 @@ export const IPC = {
   // previous index.html into history/ + writes the new one atomically.
   DESIGN_SAVE_EDITS: 'design:save-edits',
 
+  // Phase C: Live preview against a real project dev-server. Main detects
+  // the framework (Vite / Next / Astro / Remix), spawns the dev script
+  // through PtyPool, parses the emitted URL, and exposes lifecycle events.
+  // Renderer mounts a <webview> at that URL and injects a bridge script
+  // via webview.executeJavaScript.
+  DEVSERVER_DETECT: 'devserver:detect',
+  DEVSERVER_START: 'devserver:start',
+  DEVSERVER_STOP: 'devserver:stop',
+  DEVSERVER_STATUS: 'devserver:status',
+  DEVSERVER_SUBSCRIBE: 'devserver:subscribe',
+  DEVSERVER_UNSUBSCRIBE: 'devserver:unsubscribe',
+  DEVSERVER_EVENT: 'devserver:event',
+
+  // Phase 0.8+: source-aware write-back. Main resolves each edit through
+  // the appropriate StyleAdapter (Tailwind / vanilla CSS / styled / CSS
+  // Modules) and writes atomically. Pre-flight `DETECT_ADAPTER` returns
+  // the preferred adapter for the project so the UI can label the
+  // confirmation toast accordingly.
+  DESIGN_DETECT_ADAPTER: 'design:detect-adapter',
+  DESIGN_WRITE_BACK: 'design:write-back',
+
   // Codeflow — codebase visualization + Claude-generated architecture docs
   CODEFLOW_GET_STATUS: 'codeflow:get-status',
   CODEFLOW_ANALYZE: 'codeflow:analyze',

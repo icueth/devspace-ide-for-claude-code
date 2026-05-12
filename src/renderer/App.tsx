@@ -2,6 +2,7 @@ import {
   Eye,
   EyeOff,
   GitBranch,
+  Globe,
   Maximize2,
   Minimize2,
   Paintbrush,
@@ -45,6 +46,7 @@ export default function App() {
   const openFile = useEditorStore((s) => s.open);
   const openCodeflow = useEditorStore((s) => s.openCodeflow);
   const openDesign = useEditorStore((s) => s.openDesign);
+  const openLivePreview = useEditorStore((s) => s.openLivePreview);
 
   const sidebarWidth = useLayoutStore((s) => s.sidebarWidth);
   const dockWidth = useLayoutStore((s) => s.dockWidth);
@@ -290,6 +292,22 @@ export default function App() {
           >
             <Paintbrush size={11} />
             <span>Design</span>
+          </button>
+          <button
+            onClick={() => {
+              if (activeProject) openLivePreview(activeProject.path, activeProject.name);
+            }}
+            disabled={!activeProject}
+            className={cn(
+              'inline-flex h-[26px] items-center gap-1.5 rounded-[7px] border px-2.5 text-[11px] transition',
+              !activeProject
+                ? 'cursor-not-allowed border-border-subtle bg-surface-3 text-text-muted opacity-40'
+                : 'border-border-subtle bg-surface-3 text-text-secondary hover:border-border-hi hover:bg-surface-4 hover:text-text',
+            )}
+            title="Live Preview — auto-detect dev server and view the running app inline"
+          >
+            <Globe size={11} />
+            <span>Live Preview</span>
           </button>
           <button
             onClick={() => {

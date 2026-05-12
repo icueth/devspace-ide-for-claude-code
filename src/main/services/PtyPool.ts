@@ -38,10 +38,19 @@ const BUFFER_CAP = 256 * 1024; // 256KB rolling buffer per session
 const BATCH_MS = 16; // Coalesce up to one frame of PTY output per flush.
 const BATCH_BYTES_CAP = 64 * 1024; // Force-flush if we hit this many bytes.
 
+// Programmatic data listener — used by main-side services (e.g.
+// DevServerService) that need to react to PTY output without going
+// through the WebContents/IPC fan-out. Listeners fire on every chunk
+// AND on PTY exit (with `exitCode` set, `data` empty).
+export type PtyDataListener = (chunk: string) => void;
+export type PtyExitListener = (exitCode: number) => void;
+
 interface PoolEntry {
   session: PtySession;
   pty: IPty;
   subscribers: Set<WebContents>;
+  dataListeners: Set<PtyDataListener>;
+  exitListeners: Set<PtyExitListener>;
   // Rolling output buffer — replayed to new subscribers so remounted panes
   // don't show an empty terminal when the PTY already wrote its prompt.
   buffer: string;
@@ -105,6 +114,8 @@ export async function createPty(opts: PtyCreateOptions): Promise<PtySession> {
     session,
     pty: proc,
     subscribers: new Set(),
+    dataListeners: new Set(),
+    exitListeners: new Set(),
     buffer: '',
     pending: '',
     flushTimer: null,
@@ -135,11 +146,28 @@ export async function createPty(opts: PtyCreateOptions): Promise<PtySession> {
     } else if (!entry.flushTimer) {
       entry.flushTimer = setTimeout(flush, BATCH_MS);
     }
+    // Programmatic listeners get every chunk immediately (no batching) —
+    // they're used for line-oriented parsing (URL extraction) where
+    // latency matters more than IPC throughput.
+    for (const fn of entry.dataListeners) {
+      try {
+        fn(data);
+      } catch (err) {
+        logger.warn(`data listener threw on ${key}: ${(err as Error).message}`);
+      }
+    }
   });
   proc.onExit(({ exitCode }) => {
     flush();
     for (const wc of entry.subscribers) {
       if (!wc.isDestroyed()) wc.send(`${IPC.PTY_EXIT}:${key}`, exitCode);
+    }
+    for (const fn of entry.exitListeners) {
+      try {
+        fn(exitCode);
+      } catch (err) {
+        logger.warn(`exit listener threw on ${key}: ${(err as Error).message}`);
+      }
     }
     entries.delete(key);
     logger.info(`session ${key} exited (code=${exitCode})`);
@@ -177,6 +205,35 @@ export function unsubscribe(key: string, wc: WebContents): void {
 
 export function writeToPty(key: string, data: string): void {
   entries.get(key)?.pty.write(data);
+}
+
+/**
+ * Register a programmatic listener for PTY stdout/stderr chunks. Returns an
+ * unsubscribe function. Used by main-process services (e.g. DevServerService)
+ * that need to parse PTY output without involving the renderer. Returns a
+ * no-op if the session doesn't exist.
+ */
+export function subscribeData(key: string, fn: PtyDataListener): () => void {
+  const entry = entries.get(key);
+  if (!entry) return () => undefined;
+  entry.dataListeners.add(fn);
+  return () => {
+    entries.get(key)?.dataListeners.delete(fn);
+  };
+}
+
+/**
+ * Register a programmatic listener for PTY exit. Returns an unsubscribe
+ * function. Fires once with the exit code, then the listener is removed
+ * automatically when the entry is deleted.
+ */
+export function subscribeExit(key: string, fn: PtyExitListener): () => void {
+  const entry = entries.get(key);
+  if (!entry) return () => undefined;
+  entry.exitListeners.add(fn);
+  return () => {
+    entries.get(key)?.exitListeners.delete(fn);
+  };
 }
 
 export function resizePty(key: string, cols: number, rows: number): void {

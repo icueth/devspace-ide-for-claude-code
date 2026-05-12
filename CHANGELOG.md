@@ -5,6 +5,41 @@ All notable changes to DevSpace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.7.0] — 2026-05-12
+
+### Added — Design Studio Phase C1+C2 (Live Preview)
+
+- **New "Live Preview" editor tab.** Sidebar gains a Globe button next to Design that opens an Electron `<webview>` pointed at a locally-spawned dev server. Supported frameworks: Vite, Next, Astro, Remix.
+- **Dev-server lifecycle service.** Detects framework from `package.json` + config files, picks the right `dev`/`start` script, picks the user's package manager from lockfiles (`pnpm`/`yarn`/`bun`/`npm`), spawns through `PtyPool` with kind `dev-server`, parses the localhost URL out of stdout, and exposes `idle / starting / running / stopped / error` lifecycle events. Survives multi-window opens for the same project (idempotent start).
+- **Inspect bridge.** Click on any element in the live page to see its tag, classes, computed styles, and — when available from React DevTools fiber `_debugSource` — the originating `file:line:column`. Source-pointer display is the headline 0.7 value; full source write-back lands in 0.8 (Tailwind) and 0.9 (vanilla CSS / styled-components / CSS Modules).
+- **Per-project session isolation.** Each project gets its own webview partition (`persist:devspace-live:<projectPath>`) so cookies/localStorage/service-workers from one project's dev server can't bleed into another.
+- **Bundled `webviewTag: true`** on the host BrowserWindow with strict webview defaults: `contextIsolation=yes`, `nodeIntegration=no`, `sandbox=yes`, `webSecurity=yes`, no preload script. `will-navigate` is gated to localhost, `new-window` is routed through the system browser.
+- **Anti-forgery bridge handshake.** Each `dom-ready` mints a fresh secret that the bridge stamps on every envelope; the host rejects anything missing the current secret. Prevents a malicious dev-server page from forging `elementSelect` payloads with attacker-controlled source refs once 0.8 write-back ships.
+- **`DesignElementSource` schema extended** with `ownerRef`, `className`, `classOrigin`, `styledComponent`, `cssModuleClasses` so 0.8/0.9 adapters can land without a protocol bump.
+
+### Reviews applied before commit (3 reviewers, 33 findings)
+
+- 🔒 **SEC-CRITICAL**: webview `partition`/`webpreferences` moved to JSX attributes so they apply on element-attach (was being set after mount via `setAttribute`, which Electron ignores for the first navigation — silent regression to default partition).
+- 🔒 **SEC-HIGH**: `parseLocalUrl` rewritten to validate through `new URL()` and accept only `localhost` with no userinfo and port ≥ 1 (was a loose regex that could accept `localhost:0`, `localhost:80@evil.com`, etc.).
+- 🔒 **SEC-HIGH**: `scriptName` whitelisted against `package.json.scripts` keys before spawn; `packageManager` and `kind` validated against allowlists in the service entry point.
+- 🔒 **SEC-HIGH**: `projectPath` must be absolute, contain no `..` segments, and resolves through `path.resolve` before the service ever sees it. All five `DEVSERVER_*` IPC handlers enforce.
+- 🔒 **SEC-HIGH**: Bridge sentinel must START with the prefix (not "contain") AND carry the per-session secret. Page code that tries to forge bridge envelopes via `console.log` is silently dropped.
+- 🐛 **BUG-CRITICAL**: Mount guard on async webview event handlers so console-message arriving after unmount can't trigger setState.
+- 🐛 **BUG-HIGH**: `pickScriptName` no longer picks `{ build: "vite build" }` as a dev script — last-resort scan requires a `dev/serve/start/watch` token in name or body.
+- 🐛 **BUG-HIGH**: Fallback timer promotes `starting → running` after 30s when no URL is parsed, so scripts that don't print a localhost URL no longer pin the UI forever.
+- 🐛 **BUG-HIGH**: `DevServerService.shutdownAll` wired into `before-quit` BEFORE `PtyPool.shutdownAll`, so dev-server states transition to `'stopped'` before processes are killed — eliminates spurious `crashed` events during quit.
+- 🐛 **BUG-HIGH**: ANSI stripped exactly once (main-side); the renderer log pane no longer re-strips with a weaker regex.
+- 🔁 **ARCH**: `DEVSERVER_UNSUBSCRIBE` IPC + matching `unsubscribeDevServerEvents` so tab close cleans up the subscriber set without waiting for full WebContents destroy. `ensureDestroyHook` keeps each WebContents at one `destroyed` listener total.
+- 🔁 **ARCH**: `crashed` is now the canonical unexpected-exit event; we no longer emit a duplicate `status_changed` for the same transition.
+- 🔁 **ARCH**: `DEVSERVER_DETECT` and `DEVSERVER_STATUS` are pure reads — no longer auto-subscribe the sender.
+- 🔁 **ARCH**: `startDevServer` is idempotent — calling Start while already running returns the live info instead of throwing, so multi-window opens don't surface a scary error.
+
+### Verification
+
+- 95/95 vitest tests pass (1 new + 43 backend + 12 design prompt + 9 idTagger + 8 bridgeScript + 8 chat transcript + 10 chat line handler + 4 design discovery)
+- Typecheck clean
+- arm64 dmg build clean
+
 ## [0.6.3] — 2026-05-12
 
 ### Fixed

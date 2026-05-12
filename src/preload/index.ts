@@ -285,6 +285,36 @@ const api = {
       return () => ipcRenderer.off(IPC.DESIGN_EVENT, listener);
     },
   },
+  devServer: {
+    detect: (projectPath: string) =>
+      ipcRenderer.invoke(IPC.DEVSERVER_DETECT, projectPath),
+    start: (input: import('@shared/design').DevServerStartInput) =>
+      ipcRenderer.invoke(IPC.DEVSERVER_START, input),
+    stop: (projectPath: string) =>
+      ipcRenderer.invoke(IPC.DEVSERVER_STOP, projectPath),
+    status: (projectPath: string) =>
+      ipcRenderer.invoke(IPC.DEVSERVER_STATUS, projectPath),
+    subscribe: (projectPath: string) =>
+      ipcRenderer.invoke(IPC.DEVSERVER_SUBSCRIBE, projectPath),
+    unsubscribe: (projectPath: string) =>
+      ipcRenderer.invoke(IPC.DEVSERVER_UNSUBSCRIBE, projectPath),
+    onEvent: (
+      projectPath: string,
+      cb: (event: import('@shared/design').DevServerEvent) => void,
+    ) => {
+      const listener = (
+        _e: unknown,
+        ev: {
+          projectPath: string;
+          event: import('@shared/design').DevServerEvent;
+        },
+      ) => {
+        if (ev.projectPath === projectPath) cb(ev.event);
+      };
+      ipcRenderer.on(IPC.DEVSERVER_EVENT, listener);
+      return () => ipcRenderer.off(IPC.DEVSERVER_EVENT, listener);
+    },
+  },
   codeflow: {
     getStatus: (projectPath: string) =>
       ipcRenderer.invoke(IPC.CODEFLOW_GET_STATUS, projectPath),

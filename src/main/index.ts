@@ -29,6 +29,7 @@ import { registerAppIpc } from '@main/ipc/app';
 import { registerChatIpc } from '@main/ipc/chat';
 import { registerCodeflowIpc } from '@main/ipc/codeflow';
 import { registerDesignIpc } from '@main/ipc/design';
+import { registerDevServerIpc } from '@main/ipc/devserver';
 import { registerFsIpc } from '@main/ipc/fs';
 import { registerGitIpc } from '@main/ipc/git';
 import { registerLlmIpc } from '@main/ipc/llm';
@@ -44,6 +45,7 @@ import {
   resolveTmuxBinary,
   tmuxSocketArgs,
 } from '@main/services/ClaudeCliLauncher';
+import { shutdownAll as shutdownDevServers } from '@main/services/DevServerService';
 import { shutdownWatchers } from '@main/services/FileWatcherService';
 import { shutdownAll as shutdownPtyPool } from '@main/services/PtyPool';
 import { getTmuxConfigSync } from '@main/services/TmuxConfigService';
@@ -84,6 +86,12 @@ async function createWindow(): Promise<void> {
       backgroundThrottling: false,
       // v8 code cache reduces JS compile on second+ launch (boot 5-15% faster).
       v8CacheOptions: 'code',
+      // Phase C: the Live Preview tab uses `<webview>` to host a sandboxed
+      // pointer at a locally-spawned dev server (Vite/Next/etc). The
+      // webview gets its own webPreferences (set on the element) so this
+      // does NOT relax the host renderer — only enables <webview> tag
+      // recognition in the React tree.
+      webviewTag: true,
     },
   });
 
@@ -250,6 +258,7 @@ app.whenReady().then(async () => {
   registerSkillsIpc();
   registerTeamsIpc();
   registerDesignIpc();
+  registerDevServerIpc();
 
   await createWindow();
 
@@ -271,6 +280,10 @@ app.on('before-quit', (event) => {
   exiting = true;
   event.preventDefault();
   try {
+    // Mark each dev-server state as 'stopped' BEFORE the PTY pool kills
+    // the underlying processes so the resulting onExit handlers
+    // short-circuit instead of firing spurious 'crashed' events on quit.
+    shutdownDevServers();
     shutdownPtyPool();
     shutdownWatchers();
     // Optionally tear down our tmux server when the user opts in. Safe — we

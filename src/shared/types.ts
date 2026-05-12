@@ -514,7 +514,7 @@ export interface DirEntry {
   isSymlink?: boolean;
 }
 
-export type PtySessionKind = 'claude-cli' | 'shell' | 'agent';
+export type PtySessionKind = 'claude-cli' | 'shell' | 'agent' | 'dev-server';
 
 export interface PtyCreateOptions {
   projectId: string;

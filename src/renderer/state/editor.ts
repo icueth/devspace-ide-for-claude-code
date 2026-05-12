@@ -4,7 +4,14 @@ import { api } from '@renderer/lib/api';
 import { useGitStore } from '@renderer/state/git';
 import { useWorkspaceStore } from '@renderer/state/workspace';
 
-export type EditorTabKind = 'text' | 'image' | 'diff' | 'pdf' | 'codeflow' | 'design';
+export type EditorTabKind =
+  | 'text'
+  | 'image'
+  | 'diff'
+  | 'pdf'
+  | 'codeflow'
+  | 'design'
+  | 'live-preview';
 
 export interface EditorTab {
   path: string;
@@ -33,6 +40,10 @@ export interface EditorTab {
   // whose .devspace/design/ workspace should be shown. Tab `path` is the
   // synthetic key "design:<projectPath>" used for tab dedup.
   designProjectPath?: string;
+  // Populated when kind === 'live-preview' — drives LivePreviewView with
+  // the project whose dev-server should be detected/started/observed.
+  // Tab `path` is the synthetic key "live-preview:<projectPath>".
+  livePreviewProjectPath?: string;
 }
 
 export interface OpenOptions {
@@ -75,6 +86,7 @@ interface EditorState {
   openDiff: (cwd: string, relPath: string, absPath: string) => Promise<void>;
   openCodeflow: (projectPath: string, projectName: string) => void;
   openDesign: (projectPath: string, projectName: string) => void;
+  openLivePreview: (projectPath: string, projectName: string) => void;
   close: (path: string, pane?: PaneId) => void;
   closeOthers: (path: string, pane?: PaneId) => void;
   closeToRight: (path: string, pane?: PaneId) => void;
@@ -251,6 +263,25 @@ export const useEditorStore = create<
       savedContent: '',
       loading: false,
       designProjectPath: projectPath,
+    };
+    set((s) => ({ tabs: [...s.tabs, tab], activeTabPath: tabPath }));
+  },
+
+  openLivePreview(projectPath, projectName) {
+    const tabPath = `live-preview:${projectPath}`;
+    const existing = get().tabs.find((t) => t.path === tabPath);
+    if (existing) {
+      set({ activeTabPath: tabPath });
+      return;
+    }
+    const tab: EditorTab = {
+      path: tabPath,
+      name: `${projectName} · Live`,
+      kind: 'live-preview',
+      content: '',
+      savedContent: '',
+      loading: false,
+      livePreviewProjectPath: projectPath,
     };
     set((s) => ({ tabs: [...s.tabs, tab], activeTabPath: tabPath }));
   },
