@@ -40,6 +40,14 @@ import type {
   TmuxSession,
   Workspace,
 } from '@shared/types';
+import type {
+  CreateDesignInput,
+  DesignEvent,
+  DesignScreen,
+  DesignSkill,
+  DesignSystem,
+  RegenerateDesignInput,
+} from '@shared/design';
 
 export interface DevspaceApi {
   app: {
@@ -212,6 +220,22 @@ export interface DevspaceApi {
       server: McpServer,
     ) => Promise<McpServerEntry>;
   };
+  design: {
+    list: (projectPath: string) => Promise<DesignScreen[]>;
+    get: (projectPath: string, screenId: string) => Promise<DesignScreen | null>;
+    create: (input: CreateDesignInput) => Promise<DesignScreen>;
+    regenerate: (input: RegenerateDesignInput) => Promise<DesignScreen>;
+    delete: (projectPath: string, screenId: string) => Promise<void>;
+    cancel: (projectPath: string, screenId: string) => Promise<void>;
+    listSkills: (projectPath: string | null) => Promise<DesignSkill[]>;
+    listSystems: (projectPath: string | null) => Promise<DesignSystem[]>;
+    readHtml: (projectPath: string, screenId: string, versionId?: string) => Promise<string>;
+    subscribe: (projectPath: string) => Promise<void>;
+    onEvent: (
+      projectPath: string,
+      cb: (event: DesignEvent) => void,
+    ) => () => void;
+  };
   codeflow: {
     getStatus: (projectPath: string) => Promise<CodeflowStatus>;
     analyze: (projectPath: string, opts?: { force?: boolean }) => Promise<void>;
@@ -379,6 +403,19 @@ function makeStubApi(): DevspaceApi {
       get: () => Promise.resolve(null),
       save: notWired('teams.save'),
       delete: notWired('teams.delete'),
+    },
+    design: {
+      list: () => Promise.resolve([]),
+      get: () => Promise.resolve(null),
+      create: notWired('design.create'),
+      regenerate: notWired('design.regenerate'),
+      delete: notWired('design.delete'),
+      cancel: notWired('design.cancel'),
+      listSkills: () => Promise.resolve([]),
+      listSystems: () => Promise.resolve([]),
+      readHtml: notWired('design.readHtml'),
+      subscribe: notWired('design.subscribe'),
+      onEvent: () => () => undefined,
     },
     codeflow: {
       getStatus: notWired('codeflow.getStatus'),

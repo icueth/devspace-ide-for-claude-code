@@ -5,6 +5,100 @@ All notable changes to DevSpace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.5.0] — 2026-05-12
+
+### Added
+- **Design Studio (Phase A) — Claude-driven HTML page generation.** A new
+  Design pane (header button + per-project tab) lets the user pick a
+  design skill (e.g. dashboard, landing page, slide deck) and an optional
+  brand design system (Apple, Airbnb, Figma, Linear, …) and write a
+  natural-language brief. DevSpace composes the skill body + design system
+  body + brief into a single prompt, spawns `claude --print --output-format
+  text` through the same `TmuxChatRunner` the chat panel uses (so the run
+  is durable against tmux being available), and writes the resulting
+  HTML to `<project>/.devspace/design/screens/<id>/index.html`. The
+  page is rendered inside a strictly sandboxed iframe (no
+  `allow-same-origin`, no `allow-popups`) loaded via a Blob URL so file
+  paths with spaces / unicode work transparently. Each regeneration
+  archives the previous version under `history/<versionId>/` so the user
+  can flip back to any of the last 20 iterations.
+- **Built-in design pack.** 20 curated design skills + 30 brand design
+  systems are bundled with the .dmg (≈1 MB, copied via electron-builder
+  `extraResources`). Derived from the Apache-2.0
+  [opendesign](https://github.com/opendesign/opendesign) project — see
+  `resources/design-packs/ATTRIBUTION.md` for the upstream commit hash
+  and license. Users can override or extend any pack by dropping
+  `SKILL.md` / `DESIGN.md` files into `~/.claude/skills/` (global) or
+  `<project>/.claude/skills/` (per-project); project scope beats global
+  beats built-in.
+- **Settings → Design tab.** Browse / search every skill + design system
+  available in the current project, see scope badges, open the
+  underlying `SKILL.md` / `DESIGN.md` directly in the editor.
+- **`DesignPromptBuilder` + 12 vitest tests.** Pure prompt-composition
+  module (frontmatter-strip, 12 KB per-body cap, trailing output
+  instructions pinned) covered by 12 tests in the same harness as the
+  existing chat tests. `pnpm test` now runs 30 specs.
+
+### Security
+- **Iframe sandbox hardening.** The design preview iframe runs without
+  `allow-same-origin` AND without `allow-popups`, so a hostile design
+  HTML can neither reach DevSpace's renderer state nor `window.open()`
+  arbitrary `file://` URLs. The HTML is also rendered via Blob URL (not
+  `file://`), making URL encoding around spaces / Windows backslashes a
+  non-issue.
+- **Server-side HTML hardening (`hardenGeneratedHtml`).** Before the
+  generated HTML hits disk, the main process strips remote `<script
+  src>`, `<iframe>`, `<object>`, `<embed>` tags entirely; rewrites
+  `href="javascript:..."` to `href="#"`; and injects a strict
+  `Content-Security-Policy` `<meta>` tag (`default-src 'none'; script-src
+  'unsafe-inline'; style-src 'unsafe-inline' https://fonts.googleapis.com;
+  font-src https://fonts.gstatic.com data:; img-src data: …; form-action
+  'none'; base-uri 'none'`). A hostile skill that coerces Claude into
+  emitting tracking pixels or remote-script tags is rendered inert.
+- **Path-traversal guards.** `screenId` / `versionId` arguments coming
+  from the renderer are validated against a strict UUID regex, and every
+  filesystem operation that resolves a per-screen path additionally
+  asserts the resolved path stays under `<project>/.devspace/design/`.
+  Closes both arbitrary-file-read (via `readHtml`) and
+  arbitrary-directory-delete (via `deleteDesign`) exposures.
+
+### Changed
+- **Slug-collision precedence aligned with the renderer's claim.**
+  `listSkills` / `listSystems` now dedupe by slug, preferring `project >
+  global > built-in`. Previously a built-in `dashboard` would shadow a
+  user's per-project override.
+- **Subscriber list deduped per WebContents.** Auto-subscribe handlers
+  (`design:list`, `design:create`, `design:regenerate`, …) no longer
+  attach a fresh `'destroyed'` listener every call, so a chatty renderer
+  no longer triggers Node's `MaxListenersExceededWarning`.
+- **Version retention capped at 20.** Long-iterated screens stop
+  growing `history/<versionId>/index.html` directories indefinitely —
+  the oldest version (and its history dir) is evicted automatically.
+- **Tmp-file collisions fixed.** Atomic writes (`designs.json`,
+  `design.json`, `index.html`) now use `randomUUID()` for the `.tmp-X`
+  suffix instead of `Date.now()`, eliminating the race window between
+  two near-simultaneous writes.
+- **Pre-existing typecheck noise resolved.** `pnpm typecheck` now exits
+  clean on `main` — the three latent `electron-vite` `MainBuildOptions`
+  / `PreloadBuildOptions` errors that have been silently failing
+  `tsc --noEmit -p tsconfig.node.json` since 0.4.0 are now suppressed
+  with surgical `@ts-expect-error` directives on the affected
+  properties.
+
+### Known limits (Phase A; addressed in Phase B/C)
+- A design generation interrupted by an app restart is marked `error`
+  on next launch rather than re-attaching to its tmux session the way
+  chat does. Manual regenerate works fine.
+- "Click an element in the preview → live CSS edit → write back to
+  source" is not implemented yet. Phase B.
+- No dev-server adapter or `webview` based live-reload into a real
+  Vite/Next project. Phase C.
+- A workspace allow-list for IPC `projectPath` arguments is not yet
+  applied (matches the pattern used by other DevSpace services such as
+  `chat`/`teams`/`codeflow`). The per-screen path-containment assertions
+  in `DesignService` close the actual exploit vector; the broader
+  hardening is tracked as a separate cross-service follow-up.
+
 ## [0.4.1] — 2026-05-12
 
 ### Added

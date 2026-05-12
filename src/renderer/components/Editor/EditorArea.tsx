@@ -26,6 +26,11 @@ const CodeflowView = lazy(() =>
     default: m.CodeflowView,
   })),
 );
+const DesignView = lazy(() =>
+  import('@renderer/components/Design/DesignView').then((m) => ({
+    default: m.DesignView,
+  })),
+);
 import { api } from '@renderer/lib/api';
 import { cn } from '@renderer/lib/utils';
 import { useEditorStore, type PaneId } from '@renderer/state/editor';
@@ -219,6 +224,10 @@ function EditorBody({ tab, onChange, onSave, onNavDone, mdMode }: EditorBodyProp
       {tab.kind === 'codeflow' ? (
         <Suspense fallback={<LazyFallback label="Loading codeflow…" />}>
           <CodeflowView projectPath={tab.codeflowProjectPath ?? ''} />
+        </Suspense>
+      ) : tab.kind === 'design' ? (
+        <Suspense fallback={<LazyFallback label="Loading design studio…" />}>
+          <DesignView projectPath={tab.designProjectPath ?? ''} />
         </Suspense>
       ) : tab.kind === 'image' ? (
         <ImagePreview tab={tab} />

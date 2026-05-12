@@ -28,6 +28,7 @@ import {
   FileText,
   KeyRound,
   Lightbulb,
+  Paintbrush,
   Plug,
   Save,
   Server,
@@ -38,6 +39,7 @@ import { useEffect, useRef, useState } from 'react';
 
 import { AccountSettings } from '@renderer/components/Settings/AccountSettings';
 import { AgentsSettings } from '@renderer/components/Settings/AgentsSettings';
+import { DesignSettings } from '@renderer/components/Settings/DesignSettings';
 import { LlmSettings } from '@renderer/components/Settings/LlmSettings';
 import { McpSettings } from '@renderer/components/Settings/McpSettings';
 import { SkillsSettings } from '@renderer/components/Settings/SkillsSettings';
@@ -49,7 +51,16 @@ import { baseEditorTheme } from '@renderer/utils/codemirrorTheme';
 import { useWorkspaceStore } from '@renderer/state/workspace';
 import type { SettingsCategory, SettingsFile } from '@shared/types';
 
-type Tab = 'account' | 'files' | 'tmux' | 'llm' | 'agents' | 'mcp' | 'skills' | 'teams';
+type Tab =
+  | 'account'
+  | 'files'
+  | 'tmux'
+  | 'llm'
+  | 'agents'
+  | 'mcp'
+  | 'skills'
+  | 'teams'
+  | 'design';
 
 interface SettingsPageProps {
   onClose: () => void;
@@ -112,6 +123,7 @@ export function SettingsPage({ onClose, initialTab = 'account' }: SettingsPagePr
         {tab === 'mcp' && <McpSettings />}
         {tab === 'skills' && <SkillsSettings />}
         {tab === 'teams' && <TeamsSettings />}
+        {tab === 'design' && <DesignSettings />}
       </div>
     </section>
   );
@@ -123,6 +135,7 @@ function TabSwitch({ tab, onChange }: { tab: Tab; onChange: (t: Tab) => void }) 
     { id: 'agents', label: 'Agents', icon: <Bot size={11} /> },
     { id: 'teams', label: 'Teams', icon: <Users size={11} /> },
     { id: 'skills', label: 'Skills', icon: <Lightbulb size={11} /> },
+    { id: 'design', label: 'Design', icon: <Paintbrush size={11} /> },
     { id: 'mcp', label: 'MCP', icon: <Plug size={11} /> },
     { id: 'files', label: 'Files', icon: <FileText size={11} /> },
     { id: 'tmux', label: 'tmux', icon: <Server size={11} /> },

@@ -28,6 +28,7 @@ import { registerAgentsIpc } from '@main/ipc/agents';
 import { registerAppIpc } from '@main/ipc/app';
 import { registerChatIpc } from '@main/ipc/chat';
 import { registerCodeflowIpc } from '@main/ipc/codeflow';
+import { registerDesignIpc } from '@main/ipc/design';
 import { registerFsIpc } from '@main/ipc/fs';
 import { registerGitIpc } from '@main/ipc/git';
 import { registerLlmIpc } from '@main/ipc/llm';
@@ -248,6 +249,7 @@ app.whenReady().then(async () => {
   registerMcpIpc();
   registerSkillsIpc();
   registerTeamsIpc();
+  registerDesignIpc();
 
   await createWindow();
 

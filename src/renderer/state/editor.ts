@@ -4,7 +4,7 @@ import { api } from '@renderer/lib/api';
 import { useGitStore } from '@renderer/state/git';
 import { useWorkspaceStore } from '@renderer/state/workspace';
 
-export type EditorTabKind = 'text' | 'image' | 'diff' | 'pdf' | 'codeflow';
+export type EditorTabKind = 'text' | 'image' | 'diff' | 'pdf' | 'codeflow' | 'design';
 
 export interface EditorTab {
   path: string;
@@ -29,6 +29,10 @@ export interface EditorTab {
   // analysis should run against. Stored separately from `path` because `path`
   // is the synthetic "codeflow:<projectPath>" key used for tab dedup.
   codeflowProjectPath?: string;
+  // Populated when kind === 'design' — drives DesignView with the project
+  // whose .devspace/design/ workspace should be shown. Tab `path` is the
+  // synthetic key "design:<projectPath>" used for tab dedup.
+  designProjectPath?: string;
 }
 
 export interface OpenOptions {
@@ -70,6 +74,7 @@ interface EditorState {
   open: (path: string, opts?: OpenOptions) => Promise<void>;
   openDiff: (cwd: string, relPath: string, absPath: string) => Promise<void>;
   openCodeflow: (projectPath: string, projectName: string) => void;
+  openDesign: (projectPath: string, projectName: string) => void;
   close: (path: string, pane?: PaneId) => void;
   closeOthers: (path: string, pane?: PaneId) => void;
   closeToRight: (path: string, pane?: PaneId) => void;
@@ -227,6 +232,25 @@ export const useEditorStore = create<
       savedContent: '',
       loading: false,
       codeflowProjectPath: projectPath,
+    };
+    set((s) => ({ tabs: [...s.tabs, tab], activeTabPath: tabPath }));
+  },
+
+  openDesign(projectPath, projectName) {
+    const tabPath = `design:${projectPath}`;
+    const existing = get().tabs.find((t) => t.path === tabPath);
+    if (existing) {
+      set({ activeTabPath: tabPath });
+      return;
+    }
+    const tab: EditorTab = {
+      path: tabPath,
+      name: `${projectName} · Design`,
+      kind: 'design',
+      content: '',
+      savedContent: '',
+      loading: false,
+      designProjectPath: projectPath,
     };
     set((s) => ({ tabs: [...s.tabs, tab], activeTabPath: tabPath }));
   },

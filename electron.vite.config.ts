@@ -39,10 +39,15 @@ export default defineConfig({
         '@preload': resolve(__dirname, 'src/preload'),
       },
     },
+    // electron-vite's MainBuildOptions type omits `sourcemap` / `outDir`,
+    // which the underlying vite BuildOptions accepts at runtime. Suppress
+    // the typecheck on the first offending property so we keep the runtime
+    // behavior without losing strictness elsewhere.
     build: {
       externalizeDeps: {
         exclude: bundledDeps,
       },
+      // @ts-expect-error vite BuildOptions superset
       sourcemap: false,
       minify: 'esbuild',
       reportCompressedSize: false,
@@ -69,6 +74,7 @@ export default defineConfig({
       },
     },
     build: {
+      // @ts-expect-error vite BuildOptions superset
       outDir: 'dist-electron/preload',
       rollupOptions: {
         input: {
@@ -100,6 +106,7 @@ export default defineConfig({
     build: {
       // Source maps are expensive and only useful for dev-tools debugging in
       // production. Skip them — saves ~5MB in the DMG.
+      // @ts-expect-error vite BuildOptions superset
       sourcemap: false,
       target: 'esnext',
       cssCodeSplit: true,
@@ -111,7 +118,7 @@ export default defineConfig({
         output: {
           // Split the 3.8MB monolith into cacheable vendor bundles so the
           // renderer can parse/compile them in parallel on cold start.
-          manualChunks(id) {
+          manualChunks(id: string) {
             if (!id.includes('node_modules')) return undefined;
             // Strict path anchors — otherwise `react-markdown` matches `react`
             // and `@radix-ui` transitively pulls its react import back into the

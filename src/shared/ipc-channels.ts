@@ -123,6 +123,21 @@ export const IPC = {
   TEAMS_SAVE: 'teams:save',
   TEAMS_DELETE: 'teams:delete',
 
+  // Design Studio — Claude-driven HTML/JSX generation per project. State
+  // lives under <project>/.devspace/design/. Generation reuses
+  // TmuxChatRunner for the actual claude spawn so runs survive restart.
+  DESIGN_LIST: 'design:list',
+  DESIGN_GET: 'design:get',
+  DESIGN_CREATE: 'design:create',
+  DESIGN_REGENERATE: 'design:regenerate',
+  DESIGN_DELETE: 'design:delete',
+  DESIGN_CANCEL: 'design:cancel',
+  DESIGN_LIST_SKILLS: 'design:list-skills',
+  DESIGN_LIST_SYSTEMS: 'design:list-systems',
+  DESIGN_READ_HTML: 'design:read-html',
+  DESIGN_SUBSCRIBE: 'design:subscribe',
+  DESIGN_EVENT: 'design:event',
+
   // Codeflow — codebase visualization + Claude-generated architecture docs
   CODEFLOW_GET_STATUS: 'codeflow:get-status',
   CODEFLOW_ANALYZE: 'codeflow:analyze',

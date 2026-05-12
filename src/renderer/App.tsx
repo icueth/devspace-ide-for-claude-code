@@ -4,6 +4,7 @@ import {
   GitBranch,
   Maximize2,
   Minimize2,
+  Paintbrush,
   Terminal as TerminalIcon,
   Users,
   Workflow,
@@ -43,6 +44,7 @@ export default function App() {
   const openedProjectIds = useWorkspaceStore((s) => s.openedProjectIds);
   const openFile = useEditorStore((s) => s.open);
   const openCodeflow = useEditorStore((s) => s.openCodeflow);
+  const openDesign = useEditorStore((s) => s.openDesign);
 
   const sidebarWidth = useLayoutStore((s) => s.sidebarWidth);
   const dockWidth = useLayoutStore((s) => s.dockWidth);
@@ -55,7 +57,15 @@ export default function App() {
   const [goToLine, setGoToLine] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsInitialTab, setSettingsInitialTab] = useState<
-    'account' | 'files' | 'tmux' | 'llm' | 'agents' | 'mcp' | 'skills' | 'teams'
+    | 'account'
+    | 'files'
+    | 'tmux'
+    | 'llm'
+    | 'agents'
+    | 'mcp'
+    | 'skills'
+    | 'teams'
+    | 'design'
   >('account');
 
   useEffect(() => {
@@ -70,7 +80,8 @@ export default function App() {
             | 'agents'
             | 'mcp'
             | 'skills'
-            | 'teams';
+            | 'teams'
+            | 'design';
         }>
       ).detail;
       if (detail?.tab) setSettingsInitialTab(detail.tab);
@@ -263,6 +274,22 @@ export default function App() {
           >
             <Workflow size={11} />
             <span>Codeflow</span>
+          </button>
+          <button
+            onClick={() => {
+              if (activeProject) openDesign(activeProject.path, activeProject.name);
+            }}
+            disabled={!activeProject}
+            className={cn(
+              'inline-flex h-[26px] items-center gap-1.5 rounded-[7px] border px-2.5 text-[11px] transition',
+              !activeProject
+                ? 'cursor-not-allowed border-border-subtle bg-surface-3 text-text-muted opacity-40'
+                : 'border-border-subtle bg-surface-3 text-text-secondary hover:border-border-hi hover:bg-surface-4 hover:text-text',
+            )}
+            title="Design Studio — Claude-powered HTML mockups per project"
+          >
+            <Paintbrush size={11} />
+            <span>Design</span>
           </button>
           <button
             onClick={() => {

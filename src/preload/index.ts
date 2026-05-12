@@ -245,6 +245,44 @@ const api = {
     ) =>
       ipcRenderer.invoke(IPC.MCP_CREATE, scope, projectPath, name, server),
   },
+  design: {
+    list: (projectPath: string) =>
+      ipcRenderer.invoke(IPC.DESIGN_LIST, projectPath),
+    get: (projectPath: string, screenId: string) =>
+      ipcRenderer.invoke(IPC.DESIGN_GET, projectPath, screenId),
+    create: (input: unknown) =>
+      ipcRenderer.invoke(IPC.DESIGN_CREATE, input),
+    regenerate: (input: unknown) =>
+      ipcRenderer.invoke(IPC.DESIGN_REGENERATE, input),
+    delete: (projectPath: string, screenId: string) =>
+      ipcRenderer.invoke(IPC.DESIGN_DELETE, projectPath, screenId),
+    cancel: (projectPath: string, screenId: string) =>
+      ipcRenderer.invoke(IPC.DESIGN_CANCEL, projectPath, screenId),
+    listSkills: (projectPath: string | null) =>
+      ipcRenderer.invoke(IPC.DESIGN_LIST_SKILLS, projectPath),
+    listSystems: (projectPath: string | null) =>
+      ipcRenderer.invoke(IPC.DESIGN_LIST_SYSTEMS, projectPath),
+    readHtml: (projectPath: string, screenId: string, versionId?: string) =>
+      ipcRenderer.invoke(IPC.DESIGN_READ_HTML, projectPath, screenId, versionId),
+    subscribe: (projectPath: string) =>
+      ipcRenderer.invoke(IPC.DESIGN_SUBSCRIBE, projectPath),
+    onEvent: (
+      projectPath: string,
+      cb: (event: import('@shared/design').DesignEvent) => void,
+    ) => {
+      const listener = (
+        _e: unknown,
+        ev: {
+          projectPath: string;
+          event: import('@shared/design').DesignEvent;
+        },
+      ) => {
+        if (ev.projectPath === projectPath) cb(ev.event);
+      };
+      ipcRenderer.on(IPC.DESIGN_EVENT, listener);
+      return () => ipcRenderer.off(IPC.DESIGN_EVENT, listener);
+    },
+  },
   codeflow: {
     getStatus: (projectPath: string) =>
       ipcRenderer.invoke(IPC.CODEFLOW_GET_STATUS, projectPath),
