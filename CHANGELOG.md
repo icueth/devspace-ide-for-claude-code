@@ -5,6 +5,124 @@ All notable changes to DevSpace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.13.0] — 2026-05-13
+
+Design Studio polish + understanding-your-project release. Closes the
+audit findings from the v0.12 review of Design generation: the studio
+now actually understands the project it's designing for (framework
+variant, design tokens, component library, icon library, README intent),
+the chat transcript renders prose answers as prose instead of code,
+broken `window.prompt`/`window.confirm` calls are replaced with real
+dialogs (they were no-ops since Electron 28), and the generator now
+spawns claude under the read-only `plan` permission mode with an explicit
+denylist for write-class tools.
+
+### Added
+
+- **Project-aware design generation (P1a–P1g).** `ProjectProfileBuilder`
+  now detects the framework VARIANT (Next.js App vs Pages Router,
+  Vite-electron vs Vite-web, Astro, Remix), reads `package.json#name`
+  and `description`, pulls a 600-char prose excerpt from `README.md`,
+  scans deps for component libraries (Radix, shadcn/ui-on-Radix+CVA,
+  MUI, Chakra, antd, Mantine, daisyUI, NextUI) and icon libraries
+  (lucide, Heroicons, react-icons, Tabler, Phosphor, Radix Icons),
+  parses up to 12 colors / fonts / spacing entries from
+  `tailwind.config.{js,ts,mjs,cjs}` (regex-only — no `eval`, no JS
+  parser), falls back to CSS custom-property extraction from
+  `globals.css`, and walks `src/components/` (depth 3, 50-file cap)
+  building a PascalCase component inventory. Every signal becomes
+  evidence in the profile and lands in the generation prompt's
+  "## Project Context" section. Cache invalidation is now an mtime
+  fingerprint across every file the builder actually read — v0.12 only
+  watched `package.json`, so editing `tailwind.config.ts` left the
+  context stale.
+- **Welcome empty-state with example briefs (U1).** A blank Design
+  Studio (no screens yet) now shows four clickable starter briefs
+  (SaaS landing page / admin dashboard / mobile onboarding / pricing
+  page) that pre-fill the toolbar and auto-select a matching skill when
+  one's installed. Replaces the previous 12px "No designs yet" tagline
+  that gave no hint where to start.
+- **Chat transcript classifies prose vs HTML (F2).** Assistant turns
+  whose first 512 chars look like HTML render in monospace (so you can
+  watch the page being built); prose answers ("I'd restructure the
+  hero…") render in the default UI font and are actually readable.
+  Classification is sticky — once an answer is identified as HTML, the
+  font stays mono even if the streamed text starts with prose.
+- **Version history badges + note priority (U7).** Each version row
+  shows whether it came from a fresh generation (sparkle badge) or a
+  manual CSS edit save (pencil badge with edit-op count), and prefers
+  the user's note over a brief excerpt when one's been set.
+- **Inspect-mode tooltips + first-time hint banner (U3).** The three
+  mode buttons (view/inspect/edit) gained verbose `title` attributes
+  describing what each does. The first time a user enters Inspect mode
+  on a machine, a dismissible banner appears above the iframe
+  explaining "Click any element in the preview to see its details."
+  Auto-hides after 8 seconds; the seen flag is stored in `localStorage`.
+- **Keyboard shortcuts in Design (U5).** Cmd/Ctrl+S saves edits when
+  in edit mode with pending edits (matches the rest of the app's save
+  semantics). Escape drops out of inspect/edit back to view. Both
+  shortcuts respect open dialogs — a 250ms cooldown after dialog
+  dismiss prevents key-repeat from also flipping the mode.
+- **Responsive Design layout for laptops (U6).** Brief panel
+  auto-collapses on the rising edge of `window.innerWidth < 1400px`.
+  Once the user manually opens the panel back, their explicit choice
+  sticks for the rest of the mount — the auto-collapse doesn't re-fire
+  on every wide→narrow oscillation.
+- **Auto-expand chat panel when generation starts (U2).** Clicking
+  Generate opens the brief panel so users can see Claude's progress
+  stream in real-time instead of staring at a placeholder iframe.
+
+### Fixed
+
+- **Save Edits dialog now actually appears (F1).** `window.prompt` /
+  `window.confirm` are no-ops in Electron 28+, so the "Save edits as
+  new version" flow silently failed: the user clicked Save, nothing
+  happened, edits stayed pending. Replaced all three call sites in
+  `DesignView` (save note, discard-on-screen-switch, delete-screen) with
+  Radix `Dialog.Root` portals using the existing project pattern. The
+  delete-design and discard-edits confirmations now render with a
+  destructive style so the irreversible action is unmistakable.
+- **`extractHtml` no longer merges two HTML documents (S3).** When
+  Claude emitted a fenced example doc plus a real one in prose, the
+  v0.10 extractor used `firstDoctype … lastClose` and stitched them
+  into a Frankenstein document. v0.13 prefers a complete fenced ```html
+  block (one that has both an opener AND a `</html>`) and takes the
+  LAST such fence — typically Claude's final answer. Falls back to the
+  longest fence body when none are complete; outside fences, uses
+  `indexOf('</html>', start)` so it can't merge documents at all.
+- **Misleading component inventory entries (MED #2).** The regex
+  parser for `export default function Foo` matched commented-out and
+  stringified exports too, polluting the inventory shown to Claude
+  with ghost components. A `stripCommentsAndStrings` pre-pass now
+  drops line comments, block comments, and string literals before
+  scanning. Five regression tests added.
+
+### Security
+
+- **Design generations are now sandboxed at the CLI permission level
+  (S1+S2).** v0.12 spawned `claude` with the user's `~/.claude`
+  allowlist intact — a hostile design brief could ask Claude to `Bash`,
+  `WebFetch`, `Read` arbitrary paths, etc. v0.13 spawns with
+  `--permission-mode plan` (read-only by spec, ignores user
+  allowlist), `--allowed-tools Glob,Grep` (limited inspection surface;
+  Read intentionally OMITTED because `--add-dir` doesn't actually
+  scope Read to a subtree), and `--disallowed-tools
+  Bash,WebFetch,WebSearch,Edit,Write,NotebookEdit,Task,Read` as
+  explicit defense-in-depth. Project file content reaches the prompt
+  via `ProjectProfileBuilder`'s in-process extraction, not via Claude's
+  Read tool.
+
+### Tests
+
+- **280 vitest tests pass** (+27 new this release: 27 in
+  `ProjectProfileBuilder.test.ts` covering variants, README extraction,
+  Tailwind token regex, CSS-var fallback, component-export regex
+  including the stripCommentsAndStrings regression, fingerprint
+  invalidation, and v0.10 cache backwards-compat; 10 in new
+  `DesignGenerator.test.ts` for `extractHtml` corner cases including
+  fence preference, two-document merging defense, and uppercase
+  language tags).
+
 ## [0.12.0] — 2026-05-13
 
 Deferred-cleanup release. Closes the remaining items flagged in the 0.11.2

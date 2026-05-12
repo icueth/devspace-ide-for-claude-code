@@ -154,16 +154,64 @@ export interface DesignFollowUpInput {
 // already building. Cached on disk under `.devspace/design/profile.json`
 // with an mtime check against `package.json` for cheap invalidation.
 
+// Framework variant — distinguishes e.g. Next.js App Router vs Pages
+// Router, Vite-web vs Vite-electron, etc. Helps the model emit code
+// that fits the actual project shape rather than guessing.
+export type FrameworkVariant =
+  | 'next-app-router'
+  | 'next-pages-router'
+  | 'vite-electron'
+  | 'vite-web'
+  | 'astro-static'
+  | 'remix-classic'
+  | 'unknown';
+
+// Design tokens extracted from tailwind.config.* or CSS variables. Caps
+// each list to keep prompt size predictable. Empty arrays = "no signal".
+export interface DesignTokens {
+  colors: string[];       // e.g. ['brand: #4c8dff', 'accent: var(--accent)']
+  fonts: string[];        // e.g. ['sans: Inter', 'mono: JetBrains Mono']
+  spacing: string[];      // notable custom scale entries
+  source: 'tailwind-config' | 'css-vars' | 'mixed' | 'none';
+}
+
+// Inventory of components the project already exposes — so Claude can
+// reuse them instead of inventing parallel ones. Best-effort: walks
+// `src/components/` (and a couple of common variants) for `.tsx/.jsx`
+// files at limited depth.
+export interface ComponentInventoryEntry {
+  name: string;           // PascalCase component name
+  relPath: string;        // path relative to projectPath
+  exportKind: 'default' | 'named' | 'both';
+}
+
 export interface ProjectDesignProfile {
   projectPath: string;
   // Framework detection — reuses DevServerKind from Phase C.
   framework: DevServerKind;
+  // Variant within the framework (App vs Pages Router, Vite-electron, ...).
+  // Optional for backwards compat with v0.10 profiles.
+  frameworkVariant?: FrameworkVariant;
   // Primary styling stack — reuses StyleAdapterKind so the profile can
   // hint write-back ergonomics later.
   styling: StyleAdapterKind | 'unknown';
   packageManager: 'pnpm' | 'yarn' | 'npm' | 'bun';
   // Whether the project is TypeScript (tsconfig.json present).
   typescript: boolean;
+  // ── v0.13 extensions (all optional for backwards compat) ──────────
+  // Project's package.json#name + description.
+  projectName?: string;
+  projectDescription?: string;
+  // First ~600 chars of README.md (first non-badge prose section).
+  readmeExcerpt?: string;
+  // Detected component libraries (radix, shadcn, mui, chakra, antd, etc.).
+  componentLibraries?: string[];
+  // Detected icon libraries (lucide, heroicons, react-icons, etc.).
+  iconLibraries?: string[];
+  // Design tokens extracted from tailwind config or CSS vars.
+  designTokens?: DesignTokens;
+  // Up to 30 PascalCase components found under src/components.
+  componentInventory?: ComponentInventoryEntry[];
   // Markdown blob the prompt builder injects under "## Project Context".
   // Pre-rendered so the renderer can show + edit it without re-walking
   // the project on every keystroke.
@@ -171,6 +219,11 @@ export interface ProjectDesignProfile {
   // Files / signals the detector used. Surfaced in a tooltip.
   evidence: string[];
   builtAt: number;
+  // ── v0.13: cache-invalidation fingerprint ────────────────────────
+  // Concatenated mtime stamps of files the builder read. v0.10 only
+  // checked package.json mtime, missing tailwind/tsconfig/README edits.
+  // Optional for backwards compat with v0.10 caches.
+  fingerprint?: string;
 }
 
 export interface ProjectProfileBuildInput {

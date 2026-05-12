@@ -1,10 +1,13 @@
+import * as Dialog from '@radix-ui/react-dialog';
 import {
   ChevronDown,
   ChevronRight,
   FolderOpen,
+  Info,
   Paintbrush,
   Plus,
   Trash2,
+  X,
 } from 'lucide-react';
 import {
   useCallback,
@@ -40,6 +43,15 @@ import type {
   DesignSkill,
   DesignSystem,
 } from '@shared/design';
+
+// localStorage key for the inspect-mode first-time hint banner. Stored
+// globally (not per-screen) — once the user dismisses it on this machine
+// we never show it again across any project.
+const INSPECT_HINT_LS_KEY = 'devspace:design:inspect-hint-seen';
+
+// Responsive layout breakpoints. The brief panel is 360px wide; below
+// 1400px it overlaps the iframe too much, so we auto-collapse it.
+const NARROW_BREAKPOINT = 1400;
 
 // Map a kebab-case CSS property name (the form the bridge speaks) to the
 // camelCase key under `DesignElementInfo.computedStyles`. Returns null
@@ -128,6 +140,46 @@ export function DesignView({ projectPath }: DesignViewProps) {
     reject: (err: Error) => void;
     timer: ReturnType<typeof setTimeout>;
   } | null>(null);
+
+  // ─── F1 dialog state ────────────────────────────────────────────────
+  // window.prompt() / window.confirm() are NO-OPs in Electron 28+, so we
+  // route all three sites (save-note, discard-confirm, delete-confirm)
+  // through controlled Radix dialogs whose results resolve into a Promise.
+  // A single nullable state object per dialog guarantees only one is open
+  // at a time and prevents stacking when the user spam-clicks.
+  const [saveNoteRequest, setSaveNoteRequest] = useState<{
+    resolve: (note: string | null) => void;
+  } | null>(null);
+  const [confirmRequest, setConfirmRequest] = useState<{
+    title: string;
+    body: string;
+    confirmLabel?: string;
+    danger?: boolean;
+    resolve: (ok: boolean) => void;
+  } | null>(null);
+
+  // ─── U3: inspect-mode first-time hint ───────────────────────────────
+  // Visible only the first time a user enters Inspect mode on this
+  // machine. Persists "seen" in localStorage so it never reappears once
+  // dismissed (manually or by 8s auto-hide).
+  const [showInspectHint, setShowInspectHint] = useState(false);
+
+  // ─── U6: responsive narrow-window auto-collapse ─────────────────────
+  // We watch window.innerWidth via a debounced resize listener. When the
+  // window crosses from wide → narrow we override briefPanelOpen to false
+  // ONCE so the user isn't stuck with a squashed iframe. We only touch
+  // their open state on the falling edge — going wide doesn't auto-open,
+  // so the user's intent ("I closed this") is respected.
+  const wasNarrowRef = useRef<boolean>(false);
+  // v0.13 LOW #3: once the user opens the brief panel after an
+  // auto-collapse, suppress further auto-collapse for the lifetime of
+  // this mount. They've expressed intent — stop fighting them on every
+  // resize-edge crossing.
+  const userOverrideRef = useRef<boolean>(false);
+  // v0.13 MED #1: tracks the moment a dialog dismissed itself, so a
+  // held-Esc (key-repeat) doesn't also trigger our doc-level mode→view
+  // handler one tick later. Cleared after a short cooldown.
+  const dialogJustClosedAtRef = useRef<number>(0);
 
   // ─── Initial load ────────────────────────────────────────────────────
   useEffect(() => {
@@ -334,6 +386,18 @@ export function DesignView({ projectPath }: DesignViewProps) {
     !busy &&
     skills.length > 0;
 
+  // ─── U2: auto-expand brief panel on generation start ────────────────
+  // Force the panel open on the RISING edge of `busy` so the user can see
+  // the live transcript without manually unhiding it. We never auto-close
+  // it on completion — once the user has the panel up, that's their call.
+  const prevBusyRef = useRef<boolean>(busy);
+  useEffect(() => {
+    if (!prevBusyRef.current && busy) {
+      setBriefPanelOpen(true);
+    }
+    prevBusyRef.current = busy;
+  }, [busy]);
+
   // ─── Handlers ───────────────────────────────────────────────────────
   const handleGenerate = useCallback(async () => {
     if (!canGenerate || !skillSlug) return;
@@ -497,6 +561,44 @@ export function DesignView({ projectPath }: DesignViewProps) {
     }
   }, [mode]);
 
+  // U3: show the inspect-mode hint banner the first time the user enters
+  // Inspect mode on this machine. Read from localStorage at the rising
+  // edge of mode === 'inspect' so we don't pay the cost on every render.
+  useEffect(() => {
+    if (mode !== 'inspect') return;
+    let seen = false;
+    try {
+      seen = localStorage.getItem(INSPECT_HINT_LS_KEY) === '1';
+    } catch {
+      // localStorage may throw in restricted contexts (e.g. private mode
+      // in some browsers). Treat as "seen" — the hint is a nice-to-have,
+      // not worth crashing for.
+      seen = true;
+    }
+    if (seen) return;
+    setShowInspectHint(true);
+    // Auto-dismiss after 8 seconds. Cleanup nukes the timer if the user
+    // leaves inspect mode or the component unmounts before the timeout.
+    const timer = setTimeout(() => {
+      setShowInspectHint(false);
+      try {
+        localStorage.setItem(INSPECT_HINT_LS_KEY, '1');
+      } catch {
+        // ignore — non-critical
+      }
+    }, 8000);
+    return () => clearTimeout(timer);
+  }, [mode]);
+
+  const dismissInspectHint = useCallback(() => {
+    setShowInspectHint(false);
+    try {
+      localStorage.setItem(INSPECT_HINT_LS_KEY, '1');
+    } catch {
+      // ignore
+    }
+  }, []);
+
   // Reset edit state on screen switch so we don't bleed selections /
   // pending edits across screens. We DON'T confirm here because the
   // switch comes from a list-row click that already happened — the
@@ -542,6 +644,42 @@ export function DesignView({ projectPath }: DesignViewProps) {
     setPendingEdits([]);
   }, []);
 
+  // F1: request an optional save-note via the dialog. Returns null if
+  // the user cancels, '' if they hit Save with an empty field, or the
+  // trimmed string otherwise. Wrapping the dialog as a promise keeps
+  // the existing save-flow control flow readable.
+  const promptSaveNote = useCallback((): Promise<string | null> => {
+    return new Promise((resolve) => {
+      // Defensive: if a prior request is still pending (shouldn't be —
+      // the save button is gated on `saving`), resolve it as cancelled
+      // so we never strand the upstream awaiter.
+      setSaveNoteRequest((prev) => {
+        if (prev) prev.resolve(null);
+        return { resolve };
+      });
+    });
+  }, []);
+
+  // F1: a single-shot Promise-based confirm. Same re-entrancy guard as
+  // promptSaveNote — opening twice in quick succession cancels the
+  // first dialog instead of stacking them.
+  const requestConfirm = useCallback(
+    (opts: {
+      title: string;
+      body: string;
+      confirmLabel?: string;
+      danger?: boolean;
+    }): Promise<boolean> => {
+      return new Promise((resolve) => {
+        setConfirmRequest((prev) => {
+          if (prev) prev.resolve(false);
+          return { ...opts, resolve };
+        });
+      });
+    },
+    [],
+  );
+
   const handleSaveEdits = useCallback(async () => {
     if (!activeScreen || pendingEdits.length === 0 || saving) return;
     setSaving(true);
@@ -556,10 +694,10 @@ export function DesignView({ projectPath }: DesignViewProps) {
     // never starts, and there's nothing to clean up. (The original
     // flow opened the prompt AFTER the snapshot arrived, which leaked
     // the still-armed 10s timer on cancel.)
-    const note = window.prompt(
-      'Save edits as a new version. Optional note:',
-      '',
-    );
+    //
+    // F1: replaces window.prompt (no-op in Electron 28+) with our Radix
+    // dialog. Returns null on cancel, the (possibly empty) string on save.
+    const note = await promptSaveNote();
     if (note === null) {
       setSaving(false);
       return;
@@ -615,7 +753,7 @@ export function DesignView({ projectPath }: DesignViewProps) {
       }
       setSaving(false);
     }
-  }, [activeScreen, pendingEdits, projectPath, saving]);
+  }, [activeScreen, pendingEdits, projectPath, promptSaveNote, saving]);
 
   // Wraps setActiveScreenId with a confirm dialog when there are unsaved
   // pending edits, so a stray sidebar click doesn't silently discard the
@@ -633,7 +771,7 @@ export function DesignView({ projectPath }: DesignViewProps) {
   //   • same id + no override → genuine no-op.
   //   • different id → existing confirm-dialog + switch path.
   const handleSelectScreen = useCallback(
-    (id: string | null) => {
+    async (id: string | null) => {
       if (id === activeScreenId) {
         if (preview && preview.screenId === activeScreenId) {
           // User clicked the screen header while viewing an old version
@@ -645,23 +783,35 @@ export function DesignView({ projectPath }: DesignViewProps) {
         return;
       }
       if (pendingEdits.length > 0) {
-        const ok = window.confirm(
-          `Discard ${pendingEdits.length} unsaved edit${pendingEdits.length > 1 ? 's' : ''}?`,
-        );
+        // F1: replaces window.confirm (no-op in Electron 28+).
+        const ok = await requestConfirm({
+          title: 'Discard unsaved edits?',
+          body: `You have ${pendingEdits.length} unsaved edit${
+            pendingEdits.length === 1 ? '' : 's'
+          }. Switching screens will discard them — there's no undo.`,
+          confirmLabel: 'Discard',
+          // v0.13 LOW #6: this IS destructive (no undo) — render as danger.
+          danger: true,
+        });
         if (!ok) return;
       }
       setActiveScreenId(id);
     },
-    [activeScreenId, pendingEdits.length, preview],
+    [activeScreenId, pendingEdits.length, preview, requestConfirm],
   );
 
   const handleDeleteScreen = useCallback(
     async (id: string) => {
       const screen = screens.find((s) => s.id === id);
       if (!screen) return;
-      const ok = window.confirm(
-        `Delete design "${screen.name}"?\nThis removes its folder under .devspace/design/screens/.`,
-      );
+      // F1: replaces window.confirm (no-op in Electron 28+). Uses the
+      // danger style so the destructive action stands out.
+      const ok = await requestConfirm({
+        title: 'Delete design?',
+        body: `Delete "${screen.name}"? This removes its folder under .devspace/design/screens/.`,
+        confirmLabel: 'Delete',
+        danger: true,
+      });
       if (!ok) return;
       try {
         await api.design.delete(projectPath, id);
@@ -671,8 +821,90 @@ export function DesignView({ projectPath }: DesignViewProps) {
         setToolbarError((err as Error).message);
       }
     },
-    [projectPath, screens],
+    [projectPath, requestConfirm, screens],
   );
+
+  // ─── U5: keyboard shortcuts ─────────────────────────────────────────
+  // DesignView only mounts when the Design tab is active, so a plain
+  // document listener is fine here — no need to disambiguate against
+  // other tabs.
+  //   • Cmd/Ctrl+S: save edits, only when there's something to save and
+  //     we're in edit mode. preventDefault to swallow the browser's
+  //     "save page" dialog.
+  //   • Esc: drop out of inspect/edit back to view. We deliberately
+  //     don't preventDefault when mode === 'view' so dialog Esc handling
+  //     (Radix) stays responsive.
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      const isSave =
+        (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's';
+      if (isSave) {
+        // Only handle when we'd actually save — otherwise let the event
+        // pass so a textarea Cmd+S doesn't silently get eaten.
+        if (mode === 'edit' && pendingEdits.length > 0 && !saving) {
+          event.preventDefault();
+          void handleSaveEdits();
+        }
+        return;
+      }
+      if (event.key === 'Escape') {
+        // Don't fight dialogs — if the save-note or confirm dialog is
+        // open, Radix already handles Esc and we shouldn't double-fire.
+        if (saveNoteRequest || confirmRequest) return;
+        // v0.13 MED #1: also bail for a short cooldown after a dialog
+        // dismissed itself. On macOS key-repeat (~30ms) a held Esc
+        // arrives again AFTER `setState(null)` propagated, so the guard
+        // above is already stale — without this cooldown the second Esc
+        // would silently flip the user out of edit mode mid-dismiss.
+        if (Date.now() - dialogJustClosedAtRef.current < 250) return;
+        if (mode === 'edit' || mode === 'inspect') {
+          setMode('view');
+        }
+        // mode === 'view' → no-op, no preventDefault, so other handlers
+        // (selects, menus, etc.) still see the Escape.
+      }
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [
+    confirmRequest,
+    handleSaveEdits,
+    mode,
+    pendingEdits.length,
+    saveNoteRequest,
+    saving,
+  ]);
+
+  // ─── U6: window-width watcher ───────────────────────────────────────
+  // Debounced resize listener — track `isNarrow` (under 1400px) and
+  // on the rising edge (was wide, now narrow) auto-collapse the brief
+  // panel. Going wide again does NOT auto-open it: the user's explicit
+  // open/close gesture wins until the next narrow→wide→narrow cycle.
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const evaluate = () => {
+      const narrow = window.innerWidth < NARROW_BREAKPOINT;
+      // v0.13 LOW #3: once the user opens the panel after auto-collapse
+      // (`userOverrideRef` set in the toggle handler), we treat their
+      // choice as sticky for this mount. Future wide→narrow crossings
+      // don't re-collapse — they only re-collapse on a fresh mount.
+      if (narrow && !wasNarrowRef.current && !userOverrideRef.current) {
+        setBriefPanelOpen(false);
+      }
+      wasNarrowRef.current = narrow;
+    };
+    const onResize = () => {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(evaluate, 150);
+    };
+    // Seed wasNarrowRef and apply the rule at mount.
+    evaluate();
+    window.addEventListener('resize', onResize);
+    return () => {
+      if (timer) clearTimeout(timer);
+      window.removeEventListener('resize', onResize);
+    };
+  }, []);
 
   // ─── Empty / no project guards ───────────────────────────────────────
   if (!projectPath) {
@@ -727,29 +959,52 @@ export function DesignView({ projectPath }: DesignViewProps) {
         <ScreenSidebar
           screens={screens}
           activeScreenId={activeScreenId}
-          onSelect={handleSelectScreen}
+          onSelect={(id) => void handleSelectScreen(id)}
           onDelete={(id) => void handleDeleteScreen(id)}
         />
 
         <main className="flex min-w-0 flex-1">
           <div className="flex min-w-0 flex-1 flex-col">
-            <DesignPreview
-              projectPath={projectPath}
-              screenId={activeScreenId}
-              versionId={previewVersionId}
-              reloadKey={reloadKey}
-              mode={mode}
-              iframeRef={iframeRef}
-              onBridgeMessage={handleBridgeMessage}
-              emptyLabel={
-                screens.length === 0 ? 'No designs yet' : 'Select a screen'
-              }
-              emptyHint={
-                screens.length === 0
-                  ? 'Pick a skill, write a brief, click Generate.'
-                  : 'Pick a screen from the left to preview it.'
-              }
-            />
+            {/* U3: first-time inspect-mode hint banner. Lives ABOVE the
+                iframe so it never overlaps the preview itself. */}
+            {showInspectHint && (
+              <div className="flex shrink-0 items-center gap-2 border-b border-accent/30 bg-accent/10 px-3 py-1.5 text-[11px] text-accent">
+                <Info size={11} className="shrink-0" />
+                <span className="flex-1">
+                  Click any element in the preview to see its details.
+                </span>
+                <button
+                  type="button"
+                  onClick={dismissInspectHint}
+                  title="Dismiss"
+                  className="rounded p-0.5 transition hover:bg-accent/20"
+                >
+                  <X size={11} />
+                </button>
+              </div>
+            )}
+            {screens.length === 0 && !activeScreenId ? (
+              <WelcomeStarter
+                skills={skills}
+                onApply={(seed) => {
+                  if (seed.skillSlug) setSkillSlug(seed.skillSlug);
+                  setBrief(seed.brief);
+                  setBriefPanelOpen(true);
+                }}
+              />
+            ) : (
+              <DesignPreview
+                projectPath={projectPath}
+                screenId={activeScreenId}
+                versionId={previewVersionId}
+                reloadKey={reloadKey}
+                mode={mode}
+                iframeRef={iframeRef}
+                onBridgeMessage={handleBridgeMessage}
+                emptyLabel="Select a screen"
+                emptyHint="Pick a screen from the left to preview it."
+              />
+            )}
           </div>
 
           {mode !== 'view' && (
@@ -767,7 +1022,13 @@ export function DesignView({ projectPath }: DesignViewProps) {
             screen={activeScreen}
             activeHtmlPath={previewHtmlPath}
             open={briefPanelOpen}
-            onToggle={() => setBriefPanelOpen((v) => !v)}
+            onToggle={() => {
+              // v0.13 LOW #3: user toggled explicitly — record intent so
+              // U6's resize listener stops auto-collapsing on every
+              // wide→narrow crossing this mount.
+              userOverrideRef.current = true;
+              setBriefPanelOpen((v) => !v);
+            }}
             messages={messages}
             onFollowUp={handleFollowUp}
             onCancel={handleCancel}
@@ -776,6 +1037,146 @@ export function DesignView({ projectPath }: DesignViewProps) {
             onSelectVersion={handleSelectVersion}
           />
         </main>
+      </div>
+
+      {/* F1: dialogs live at the bottom of the tree so they can portal
+          out without re-mounting on every state update. Both are
+          controlled by a single nullable object whose resolver is
+          invoked on accept/cancel. */}
+      <SaveNoteDialog
+        request={saveNoteRequest}
+        onClose={(note) => {
+          const req = saveNoteRequest;
+          setSaveNoteRequest(null);
+          // v0.13 MED #1: stamp the cooldown so a held Esc doesn't also
+          // trigger the doc-level mode→view handler.
+          dialogJustClosedAtRef.current = Date.now();
+          req?.resolve(note);
+        }}
+      />
+      <ConfirmDialog
+        open={!!confirmRequest}
+        title={confirmRequest?.title ?? ''}
+        body={confirmRequest?.body ?? ''}
+        confirmLabel={confirmRequest?.confirmLabel}
+        danger={confirmRequest?.danger}
+        onConfirm={() => {
+          const req = confirmRequest;
+          setConfirmRequest(null);
+          dialogJustClosedAtRef.current = Date.now();
+          req?.resolve(true);
+        }}
+        onCancel={() => {
+          const req = confirmRequest;
+          setConfirmRequest(null);
+          dialogJustClosedAtRef.current = Date.now();
+          req?.resolve(false);
+        }}
+      />
+    </div>
+  );
+}
+
+// U1: example briefs shown when the project has zero designs. Each card
+// pre-fills the toolbar's brief field (and skill slug when specified) so
+// the user only has to click Generate to see a result. We intentionally
+// keep the briefs project-stack-agnostic so they make sense before any
+// project context has been auto-detected.
+interface WelcomeStarterProps {
+  skills: DesignSkill[];
+  onApply: (seed: { skillSlug: string | null; brief: string }) => void;
+}
+
+interface ExampleBrief {
+  title: string;
+  desc: string;
+  brief: string;
+  // When the recommended skill is available we'll select it. Falls back
+  // to "use whatever's currently selected" if the slug isn't in the
+  // user's installed skills.
+  preferredSkillSlugs: string[];
+}
+
+const EXAMPLE_BRIEFS: ExampleBrief[] = [
+  {
+    title: 'SaaS landing page',
+    desc: 'Hero, feature grid, social proof, pricing teaser',
+    brief:
+      'Generate a SaaS landing page for a developer tool. Sections: hero with headline + sub + dual CTA, three-column feature grid with icons, a logos strip for social proof, a 3-tier pricing teaser, and a footer with sitemap. Keep it dense and confident, not whitespace-heavy.',
+    preferredSkillSlugs: ['landing-page', 'website', 'web'],
+  },
+  {
+    title: 'Admin dashboard',
+    desc: 'Sidebar + KPI cards + table + activity feed',
+    brief:
+      'Generate an admin dashboard layout. Left sidebar nav with 6 items (Dashboard, Customers, Orders, Products, Reports, Settings). Top bar with search + user menu. Main: 4 KPI cards across the top, then a wide chart card, a recent-orders table, and a right-rail activity feed. Use a calm, professional palette.',
+    preferredSkillSlugs: ['dashboard', 'admin', 'app'],
+  },
+  {
+    title: 'Mobile onboarding',
+    desc: 'Three-step intro carousel with CTA',
+    brief:
+      'Generate a mobile-first onboarding screen at 390px wide. Three swipeable intro cards with illustrations placeholders, page dots, a Skip link top-right, and a primary "Get started" CTA pinned to the bottom. Light, optimistic vibe.',
+    preferredSkillSlugs: ['mobile', 'onboarding', 'app'],
+  },
+  {
+    title: 'Pricing comparison',
+    desc: 'Three plans + feature matrix + FAQ',
+    brief:
+      'Generate a pricing page: three tier cards (Free / Pro highlighted / Team) with bullet feature lists, then a detailed feature-comparison matrix below, and an FAQ accordion of 6 common questions. Use clear hierarchy — the Pro card should feel like the obvious choice.',
+    preferredSkillSlugs: ['pricing', 'landing-page', 'website'],
+  },
+];
+
+function WelcomeStarter({ skills, onApply }: WelcomeStarterProps) {
+  const slugSet = useMemo(() => new Set(skills.map((s) => s.slug)), [skills]);
+  return (
+    <div className="flex flex-1 flex-col items-center overflow-y-auto bg-surface-2 px-6 py-10">
+      <div className="w-full max-w-[760px]">
+        <div className="mb-1 flex items-center gap-2">
+          <Paintbrush size={14} className="text-accent" />
+          <h2 className="text-[15px] font-semibold text-text">
+            Welcome to Design Studio
+          </h2>
+        </div>
+        <p className="mb-6 max-w-[560px] text-[12px] leading-relaxed text-text-muted">
+          Generate full HTML designs from a natural-language brief. Pick a
+          starter below to pre-fill the brief — or write your own in the
+          toolbar above and click Generate.
+        </p>
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+          {EXAMPLE_BRIEFS.map((ex) => {
+            const matchedSkill =
+              ex.preferredSkillSlugs.find((s) => slugSet.has(s)) ?? null;
+            return (
+              <button
+                key={ex.title}
+                type="button"
+                onClick={() =>
+                  onApply({ skillSlug: matchedSkill, brief: ex.brief })
+                }
+                className="group flex flex-col items-start rounded-lg border border-border-subtle bg-surface px-3 py-2.5 text-left transition hover:border-accent/40 hover:bg-surface-3"
+              >
+                <span className="text-[12px] font-semibold text-text group-hover:text-accent">
+                  {ex.title}
+                </span>
+                <span className="mt-0.5 text-[10.5px] leading-snug text-text-muted">
+                  {ex.desc}
+                </span>
+                {matchedSkill && (
+                  <span className="mt-1.5 inline-flex items-center gap-1 rounded bg-surface-3 px-1.5 py-0.5 text-[9.5px] uppercase tracking-wide text-text-dim">
+                    skill: {matchedSkill}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+        <p className="mt-6 text-[10.5px] text-text-dim">
+          Tip — DevSpace auto-detects your framework, styling stack, and
+          component library so generations match your project. View what
+          it's using in Settings → Design.
+        </p>
       </div>
     </div>
   );
@@ -979,5 +1380,168 @@ function StatusDot({ status }: { status: DesignScreen['status'] }) {
       className={cn('h-1.5 w-1.5 shrink-0 rounded-full', color)}
       title={status}
     />
+  );
+}
+
+// ─── F1: dialogs ──────────────────────────────────────────────────────
+//
+// Both dialogs are module-private (never re-used outside DesignView) and
+// share the visual language of `PromptDialog.tsx`: bordered rounded card
+// over a 40% black overlay, muted header bar, footer Cancel/Confirm pair.
+
+interface SaveNoteDialogProps {
+  request: { resolve: (note: string | null) => void } | null;
+  onClose: (note: string | null) => void;
+}
+
+/**
+ * Optional-note prompt shown when saving in-iframe edits as a new
+ * version. Enter submits with the current value (possibly empty), Esc
+ * cancels. `request` being non-null = dialog open; we mirror its
+ * lifecycle into local `value` state on open.
+ */
+function SaveNoteDialog({ request, onClose }: SaveNoteDialogProps) {
+  const [value, setValue] = useState('');
+  const open = !!request;
+  const ref = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    if (request) {
+      setValue('');
+      queueMicrotask(() => ref.current?.focus());
+    }
+  }, [request]);
+
+  const submit = () => {
+    if (!request) return;
+    // Trim happens upstream — pass the raw value so '' means "no note"
+    // but is still a save (vs. null = cancel).
+    onClose(value);
+  };
+
+  return (
+    <Dialog.Root
+      open={open}
+      onOpenChange={(o) => {
+        // Radix calls this for Esc / overlay clicks. Map either to cancel.
+        if (!o) onClose(null);
+      }}
+    >
+      <Dialog.Portal>
+        <Dialog.Overlay className="fixed inset-0 z-40 bg-black/40" />
+        <Dialog.Content className="fixed left-1/2 top-24 z-50 w-[min(480px,85vw)] -translate-x-1/2 overflow-hidden rounded-lg border border-border-emphasis bg-surface-raised shadow-2xl">
+          <Dialog.Title className="border-b border-border-subtle bg-surface-sidebar px-4 py-2 text-[12px] font-medium text-text">
+            Save edits as new version
+          </Dialog.Title>
+          <div className="space-y-2 p-3">
+            <input
+              ref={ref}
+              autoFocus
+              value={value}
+              onChange={(e) => setValue(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  submit();
+                }
+              }}
+              placeholder="Optional note (e.g. 'tightened header spacing')"
+              className="w-full rounded border border-border bg-surface px-2 py-1.5 text-[13px] text-text placeholder:text-text-muted focus:border-accent focus:outline-none"
+            />
+            <div className="text-[10.5px] text-text-dim">
+              Leave blank for no note. Press Enter to save, Esc to cancel.
+            </div>
+          </div>
+          <div className="flex justify-end gap-2 border-t border-border-subtle bg-surface-sidebar px-3 py-2 text-[11px]">
+            <button
+              type="button"
+              onClick={() => onClose(null)}
+              className="rounded px-2 py-1 text-text-secondary hover:bg-surface-overlay hover:text-text"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={submit}
+              className="rounded bg-accent px-3 py-1 text-white hover:opacity-90"
+            >
+              Save
+            </button>
+          </div>
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
+  );
+}
+
+interface ConfirmDialogProps {
+  open: boolean;
+  title: string;
+  body: string;
+  confirmLabel?: string;
+  /**
+   * When true the confirm button uses a destructive style. Used for the
+   * delete-design flow; the discard-edits flow keeps the default style
+   * because it's reversible-ish (the user can re-do their edits).
+   */
+  danger?: boolean;
+  onConfirm: () => void;
+  onCancel: () => void;
+}
+
+/**
+ * Generic confirm dialog kept module-private so it can't drift from the
+ * Design pane's aesthetic. Body is a single string (not children) — this
+ * is intentional, so callers can't sneak in interactive content that
+ * would compete with the action buttons for focus.
+ */
+function ConfirmDialog({
+  open,
+  title,
+  body,
+  confirmLabel,
+  danger,
+  onConfirm,
+  onCancel,
+}: ConfirmDialogProps) {
+  return (
+    <Dialog.Root
+      open={open}
+      onOpenChange={(o) => {
+        if (!o) onCancel();
+      }}
+    >
+      <Dialog.Portal>
+        <Dialog.Overlay className="fixed inset-0 z-40 bg-black/40" />
+        <Dialog.Content className="fixed left-1/2 top-24 z-50 w-[min(420px,85vw)] -translate-x-1/2 overflow-hidden rounded-lg border border-border-emphasis bg-surface-raised shadow-2xl">
+          <Dialog.Title className="border-b border-border-subtle bg-surface-sidebar px-4 py-2 text-[12px] font-medium text-text">
+            {title}
+          </Dialog.Title>
+          <Dialog.Description className="px-4 py-3 text-[12px] text-text-secondary">
+            {body}
+          </Dialog.Description>
+          <div className="flex justify-end gap-2 border-t border-border-subtle bg-surface-sidebar px-3 py-2 text-[11px]">
+            <button
+              type="button"
+              onClick={onCancel}
+              className="rounded px-2 py-1 text-text-secondary hover:bg-surface-overlay hover:text-text"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={onConfirm}
+              autoFocus
+              className={cn(
+                'rounded px-3 py-1 text-white transition hover:opacity-90',
+                danger ? 'bg-red-600 hover:bg-red-700' : 'bg-accent',
+              )}
+            >
+              {confirmLabel ?? 'OK'}
+            </button>
+          </div>
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
   );
 }

@@ -266,18 +266,25 @@ const MODE_OPTIONS: Array<{
   label: string;
   title: string;
 }> = [
-  { value: 'view', icon: <Eye size={11} />, label: 'View', title: 'View only' },
+  {
+    value: 'view',
+    icon: <Eye size={11} />,
+    label: 'View',
+    title: 'View mode (default) — preview the design without modifying it',
+  },
   {
     value: 'inspect',
     icon: <MousePointer size={11} />,
     label: 'Inspect',
-    title: 'Hover to highlight, click to inspect element',
+    title:
+      'Inspect mode — click any element to see its source and style info',
   },
   {
     value: 'edit',
     icon: <Pencil size={11} />,
     label: 'Edit',
-    title: 'Edit element styles inline',
+    title:
+      'Edit mode — drag elements or apply CSS overrides; save to create a new version',
   },
 ];
 

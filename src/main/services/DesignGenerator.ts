@@ -91,7 +91,38 @@ export async function generateDesign(
   // Plain text output — simpler than stream-json for a single HTML blob.
   // The run's `out.jsonl` will just be the raw text in this case (the
   // chat parser only kicks in when it sees JSONL lines).
-  const args = ['--print', '--output-format', 'text'];
+  //
+  // S1+S2 hardening (v0.13): design generations should not be able to
+  // touch the host filesystem outside the project, hit the network, or
+  // run shell commands — the brief is untrusted user input that can ask
+  // Claude to do unsafe things. The lockdown is layered:
+  //
+  //   1. --permission-mode plan  — Claude's "planning" mode is read-only
+  //      by spec; it cannot invoke Edit/Write/Bash/WebFetch regardless
+  //      of the user's ~/.claude/settings.json allowlist. Belt.
+  //   2. --allowed-tools Glob,Grep  — explicit allowlist of the inspection
+  //      tools we actually want (project tree walks). Read is intentionally
+  //      OMITTED because `--add-dir` does NOT scope the Read tool to a
+  //      subtree — it would still resolve absolute paths like
+  //      `/Users/<u>/.aws/credentials`. Suspenders.
+  //   3. --disallowed-tools …  — defense-in-depth explicit denial for
+  //      every write-class and exfil-class tool, so even if a future
+  //      Claude CLI release changes the meaning of `plan` mode the
+  //      hardening doesn't silently weaken. Backup suspenders.
+  //
+  // If we ever need to write back to source code we'll route through
+  // StyleAdapterService, not through Claude. So Write/Edit stay denied.
+  const args = [
+    '--print',
+    '--output-format',
+    'text',
+    '--permission-mode',
+    'plan',
+    '--allowed-tools',
+    'Glob,Grep',
+    '--disallowed-tools',
+    'Bash,WebFetch,WebSearch,Edit,Write,NotebookEdit,Task,Read',
+  ];
 
   let handle: ChatRunHandle;
   try {
@@ -205,31 +236,58 @@ async function safeReadFile(file: string): Promise<string> {
 
 // Tolerant HTML extractor — claude often wraps its output in ```html
 // fences, prefaces with a sentence ("Here's the page:"), or appends
-// closing thoughts. We accept any of those by finding the first
-// `<!DOCTYPE html>` (or bare `<html`) marker and the matching closing
-// `</html>` tag.
+// closing thoughts. We accept any of those.
+//
+// S3 hardening (v0.13): the v0.10 implementation took `firstDoctype …
+// lastClose`, which merged two HTML documents if Claude emitted an
+// example doctype inside a fenced code block AND the real one in
+// prose — bad for both UX (broken page) and security (the merged
+// document might mix two scripts that weren't reviewed together). The
+// new version:
+//   1. Prefer fenced ```html blocks. When SEVERAL are present, prefer
+//      a fence that has BOTH a doctype/<html> opener AND a `</html>`
+//      closer (a complete document); among complete fences, prefer the
+//      LAST one — Claude's final answer is typically the bottom-most.
+//      Falls back to the longest fence body when none look complete.
+//   2. Outside of fences, take the FIRST doctype/html opener and the
+//      FIRST `</html>` AFTER it (not the last) so two documents don't
+//      get merged.
+//   3. If no opener is found, return null instead of guessing.
 export function extractHtml(raw: string): string | null {
   if (!raw) return null;
 
-  // Strip code fences first, including the optional language tag.
-  let text = raw;
-  const fenceMatch = /```(?:html|HTML)?\s*\r?\n([\s\S]*?)\r?\n```/.exec(text);
-  if (fenceMatch && fenceMatch[1]) {
-    text = fenceMatch[1];
+  // 1. Scan for fenced html blocks. Prefer a complete one (has both an
+  //    `<!doctype`/`<html` and a `</html>`); among completes, take the
+  //    last (typically the "final answer"). If none are complete, pick
+  //    the longest body — that's almost certainly the real page.
+  const fenceRe = /```(?:html|HTML)?\s*\r?\n([\s\S]*?)\r?\n```/g;
+  let lastCompleteFence = '';
+  let longestFence = '';
+  let m: RegExpExecArray | null;
+  while ((m = fenceRe.exec(raw)) !== null) {
+    const body = m[1] ?? '';
+    const lower = body.toLowerCase();
+    const hasOpen =
+      lower.includes('<!doctype html') || lower.includes('<html');
+    const hasClose = lower.includes('</html>');
+    if (hasOpen && hasClose) lastCompleteFence = body;
+    if (body.length > longestFence.length) longestFence = body;
   }
 
-  const lower = text.toLowerCase();
+  const candidate = lastCompleteFence || longestFence || raw;
+  const lower = candidate.toLowerCase();
   let start = lower.indexOf('<!doctype html');
   if (start < 0) start = lower.indexOf('<html');
   if (start < 0) return null;
 
   const endTag = '</html>';
-  const endIdx = lower.lastIndexOf(endTag);
-  if (endIdx < 0 || endIdx < start) {
+  // Use FIRST close AFTER start, not last — avoids merging two docs.
+  const endIdx = lower.indexOf(endTag, start);
+  if (endIdx < 0) {
     // Tolerate truncated output — return what we have starting at the
     // doctype/html opener. Better to surface a partial page than fail
     // outright; the user can regenerate if it's broken.
-    return text.slice(start).trim();
+    return candidate.slice(start).trim();
   }
-  return text.slice(start, endIdx + endTag.length).trim();
+  return candidate.slice(start, endIdx + endTag.length).trim();
 }

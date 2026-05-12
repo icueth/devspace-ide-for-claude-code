@@ -1,4 +1,4 @@
-import { Clock, History } from 'lucide-react';
+import { Clock, History, Pencil, Sparkles } from 'lucide-react';
 import { useMemo } from 'react';
 
 import { cn } from '@renderer/lib/utils';
@@ -68,10 +68,21 @@ interface VersionRowProps {
 
 function VersionRow({ version, isActive, isLatest, onClick }: VersionRowProps) {
   const relTime = useMemo(() => formatRelative(version.createdAt), [version.createdAt]);
-  const excerpt = useMemo(() => {
-    const trimmed = version.brief.trim().replace(/\s+/g, ' ');
+  // U7: prefer the user's note when set (it's the most informative
+  // label), otherwise fall back to a brief excerpt. Edit-origin versions
+  // often have a note like "tighter hero" but no brief, so without this
+  // fallback the row would render empty.
+  const summary = useMemo(() => {
+    const noteRaw = (version.note ?? '').trim();
+    if (noteRaw) {
+      const collapsed = noteRaw.replace(/\s+/g, ' ');
+      return collapsed.length > 90 ? `${collapsed.slice(0, 87)}…` : collapsed;
+    }
+    const trimmed = (version.brief ?? '').trim().replace(/\s+/g, ' ');
     return trimmed.length > 90 ? `${trimmed.slice(0, 87)}…` : trimmed;
-  }, [version.brief]);
+  }, [version.brief, version.note]);
+  const isEdit = version.origin === 'edit';
+  const editCount = version.edits?.length ?? 0;
 
   return (
     <li>
@@ -85,7 +96,7 @@ function VersionRow({ version, isActive, isLatest, onClick }: VersionRowProps) {
             : 'border-border-subtle bg-surface-3 hover:border-border-hi hover:bg-surface-4',
         )}
       >
-        <div className="flex items-center gap-1.5">
+        <div className="flex flex-wrap items-center gap-1.5">
           <Clock size={10} className="shrink-0 text-text-dim" />
           <span className="font-mono text-[10px] tabular-nums text-text-secondary">
             {relTime}
@@ -100,9 +111,33 @@ function VersionRow({ version, isActive, isLatest, onClick }: VersionRowProps) {
               viewing
             </span>
           )}
+          {/* U7: origin badge — "edit" rows look visually distinct from
+              fresh generations so users don't confuse a manual CSS save
+              with a re-generated screen. */}
+          {isEdit ? (
+            <span
+              className="inline-flex items-center gap-0.5 rounded-full bg-[rgba(168,85,247,0.18)] px-1.5 text-[8.5px] uppercase tracking-wide text-[#c084fc]"
+              title={
+                editCount > 0
+                  ? `Manual edit save (${editCount} CSS op${editCount > 1 ? 's' : ''})`
+                  : 'Manual edit save'
+              }
+            >
+              <Pencil size={8} />
+              edit{editCount > 0 ? ` · ${editCount}` : ''}
+            </span>
+          ) : (
+            <span
+              className="inline-flex items-center gap-0.5 rounded-full bg-surface-4 px-1.5 text-[8.5px] uppercase tracking-wide text-text-muted"
+              title="Generated from Claude"
+            >
+              <Sparkles size={8} />
+              gen
+            </span>
+          )}
         </div>
         <div className="text-[10.5px] leading-snug text-text">
-          {excerpt || <span className="italic text-text-dim">(no brief)</span>}
+          {summary || <span className="italic text-text-dim">(no brief)</span>}
         </div>
       </button>
     </li>

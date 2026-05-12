@@ -291,8 +291,53 @@ function EmptyState() {
   );
 }
 
+// Heuristic: tag an assistant message as "html-heavy" so we render it
+// in monospace (matches the code that's streaming in). Prose answers
+// ("I'll restructure the hero...") should NOT get mono — that's the F2
+// audit finding. We classify by looking at the first ~512 chars of the
+// trimmed message:
+//   • starts with `<` and contains either a doctype, `<html`, or two+
+//     element tags → html
+//   • >= 6% of the prefix is `<` characters → html
+//   • otherwise → prose
+//
+// During streaming the classification can flip from prose→html as more
+// tokens arrive (Claude often emits a one-line intro before the html
+// dump). We re-classify on each content change; the memo keeps it cheap.
+function classifyAssistantContent(raw: string): 'prose' | 'html' {
+  if (!raw) return 'prose';
+  const trimmed = raw.trimStart();
+  if (trimmed.length === 0) return 'prose';
+  const prefix = trimmed.slice(0, 512);
+  const lower = prefix.toLowerCase();
+  if (
+    lower.startsWith('<!doctype') ||
+    lower.startsWith('<html') ||
+    lower.startsWith('```html')
+  ) {
+    return 'html';
+  }
+  if (prefix[0] === '<') {
+    // count tag-opens in the first 512 chars
+    let tagOpens = 0;
+    for (let i = 0; i < prefix.length; i++) {
+      if (prefix[i] === '<') tagOpens++;
+      if (tagOpens >= 2) return 'html';
+    }
+  }
+  // Density check — html dumps are very `<`-dense.
+  const lt = (prefix.match(/</g) ?? []).length;
+  if (lt / prefix.length >= 0.06) return 'html';
+  return 'prose';
+}
+
 function MessageBubble({ msg, onContentMeasured }: MessageBubbleProps) {
   const [expanded, setExpanded] = useState(false);
+  // v0.13 LOW #4: once a streaming turn flips to 'html', never downgrade
+  // back to 'prose'. The reverse transition would swap the bubble font
+  // mid-stream which looks broken. Cached as a ref so the upgrade is
+  // sticky for the lifetime of this bubble instance.
+  const classificationRef = useRef<'prose' | 'html'>('prose');
 
   const isUser = msg.role === 'user';
   const isSystem = msg.role === 'system';
@@ -312,6 +357,16 @@ function MessageBubble({ msg, onContentMeasured }: MessageBubbleProps) {
       totalLen: raw.length,
     };
   }, [msg.content, expanded]);
+
+  // F2: classify so prose answers don't get monospace. v0.13 LOW #4:
+  // upgrade is sticky — once a turn flips to 'html', don't flicker back.
+  const contentKind = useMemo(() => {
+    if (isUser || isSystem) return 'prose' as const;
+    if (classificationRef.current === 'html') return 'html' as const;
+    const next = classifyAssistantContent(msg.content ?? '');
+    if (next === 'html') classificationRef.current = 'html';
+    return next;
+  }, [msg.content, isUser, isSystem]);
 
   // Notify the parent transcript that our height likely changed so it
   // can re-anchor the scroll if the user is pinned to the bottom.
@@ -361,10 +416,9 @@ function MessageBubble({ msg, onContentMeasured }: MessageBubbleProps) {
             : isSystem
               ? 'border-border-subtle bg-surface-3 italic text-text-dim'
               : 'border-border-subtle bg-surface-3 text-text-secondary',
-          // Assistant content is frequently HTML/code-like — render in a
-          // monospace stack so users can SEE the page being built. User
-          // and system bubbles use the default font for readability.
-          isUser || isSystem ? '' : 'font-mono',
+          // F2: only assistant turns classified as html-heavy get mono.
+          // Prose answers stay in the default font so they're readable.
+          contentKind === 'html' ? 'font-mono' : '',
         )}
       >
         {/*
