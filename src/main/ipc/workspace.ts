@@ -63,7 +63,7 @@ export function registerWorkspaceIpc(): void {
         logger.warn(`stopDevServer failed: ${(err as Error).message}`);
       }
       try {
-        killProjectSessions(projectId);
+        await killProjectSessions(projectId);
       } catch (err) {
         logger.warn(`killProjectSessions failed: ${(err as Error).message}`);
       }

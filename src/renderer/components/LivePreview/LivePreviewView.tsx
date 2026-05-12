@@ -110,10 +110,24 @@ export function LivePreviewView({ projectPath }: LivePreviewViewProps) {
   useEffect(() => {
     modeRef.current = mode;
   }, [mode]);
-  // Anti-forgery secret for the bridge handshake. Fresh on every
+  // Anti-forgery secrets for the bridge handshake. Fresh on every
   // dom-ready (see onDomReady below). The bridge stamps each envelope
-  // with this value; we drop anything else.
-  const bridgeSecretRef = useRef<string>('');
+  // with the current value; we drop anything else.
+  //
+  // The ref holds a small ring of *currently-accepted* secrets so an HMR
+  // reload race (page's old realm fires a final envelope right after we
+  // rotate) doesn't lose those last events. After the grace window the
+  // previous secret is dropped — anything still arriving with it is
+  // either a buggy retained reference or an attempted forgery, and gets
+  // rejected like before.
+  const bridgeSecretsRef = useRef<string[]>([]);
+  const bridgeSecretGraceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Expected origin for the active dev server, derived from `info.url`.
+  // Kept on a ref so the bridge `bridgeReady` handler can read the
+  // latest value without re-attaching every render. An empty string
+  // means "no expectation yet" and disables the check (used before the
+  // first url_resolved event lands).
+  const expectedOriginRef = useRef<string>('');
 
   // ─── Initial detection + status ────────────────────────────────────
   useEffect(() => {
@@ -307,7 +321,21 @@ export function LivePreviewView({ projectPath }: LivePreviewViewProps) {
           return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
         }
       })();
-      bridgeSecretRef.current = newSecret;
+      // Keep the previous secret valid for a short grace period so the
+      // last few envelopes from the page's old realm (which may still
+      // be queued behind a console flush on HMR reload) don't get
+      // rejected. Anything still arriving after the grace is either a
+      // buggy retained reference or a forgery attempt — drop it.
+      const BRIDGE_SECRET_GRACE_MS = 5_000;
+      const previous = bridgeSecretsRef.current[0];
+      bridgeSecretsRef.current = previous ? [newSecret, previous] : [newSecret];
+      if (bridgeSecretGraceTimerRef.current) {
+        clearTimeout(bridgeSecretGraceTimerRef.current);
+      }
+      bridgeSecretGraceTimerRef.current = setTimeout(() => {
+        bridgeSecretsRef.current = bridgeSecretsRef.current.slice(0, 1);
+        bridgeSecretGraceTimerRef.current = null;
+      }, BRIDGE_SECRET_GRACE_MS);
       const script = buildBridgeScript(undefined, newSecret);
       // Inject the bridge once per dom-ready. The script is idempotent
       // (window.__devspaceLivePreviewBridgeInstalled gate), so HMR
@@ -344,7 +372,7 @@ export function LivePreviewView({ projectPath }: LivePreviewViewProps) {
       // strings containing the sentinel substring; only logs whose first
       // characters are the sentinel are accepted as bridge envelopes.
       if (!msg.startsWith(BRIDGE_LOG_PREFIX)) return;
-      const parsed = parseBridgeConsoleLine(msg, bridgeSecretRef.current);
+      const parsed = parseBridgeConsoleLine(msg, bridgeSecretsRef.current);
       if (!parsed || typeof parsed !== 'object') return;
       const type = (parsed as { type?: unknown }).type;
       if (typeof type !== 'string') return;
@@ -352,6 +380,32 @@ export function LivePreviewView({ projectPath }: LivePreviewViewProps) {
       // updates on an unmounted component.
       if (!mountedRef.current) return;
       if (type === 'devspace:dev:bridgeReady') {
+        // Origin check: the bridge stamped its `window.location.origin`
+        // into the handshake. If the webview navigated off the expected
+        // dev-server origin between attach and dom-ready (or a hostile
+        // page slipped through `will-navigate`), drop the bridge so we
+        // don't trust any subsequent envelopes from it. The expected
+        // origin is empty until url_resolved lands — pre-resolution
+        // bridges (rare race) are accepted as-is.
+        const reportedOrigin = (parsed as { origin?: unknown }).origin;
+        const expected = expectedOriginRef.current;
+        if (
+          expected &&
+          typeof reportedOrigin === 'string' &&
+          reportedOrigin !== expected
+        ) {
+          // eslint-disable-next-line no-console
+          console.warn(
+            `[live-preview] bridge origin mismatch: expected ${expected}, got ${reportedOrigin}`,
+          );
+          setLocalError(
+            `Preview origin mismatch — got ${reportedOrigin}, expected ${expected}. Bridge disabled.`,
+          );
+          // Drop secrets so subsequent envelopes from this realm fail
+          // the authenticator. The next dom-ready will mint new ones.
+          bridgeSecretsRef.current = [];
+          return;
+        }
         // Bridge confirmed live — re-pin mode (covers race where
         // dom-ready fires before bridge initialization completes its
         // own setup).
@@ -466,9 +520,33 @@ export function LivePreviewView({ projectPath }: LivePreviewViewProps) {
   useEffect(
     () => () => {
       mountedRef.current = false;
+      // Clear the grace timer so it doesn't fire after unmount and
+      // touch a stale ref through the closure.
+      if (bridgeSecretGraceTimerRef.current) {
+        clearTimeout(bridgeSecretGraceTimerRef.current);
+        bridgeSecretGraceTimerRef.current = null;
+      }
+      bridgeSecretsRef.current = [];
+      expectedOriginRef.current = '';
     },
     [],
   );
+
+  // Sync the expected origin ref from `info.url`. The bridge handshake
+  // checks against this on `bridgeReady` so we never trust a bridge
+  // running in a page whose origin no longer matches our dev server
+  // (e.g. dev server was restarted on a different port between mounts).
+  useEffect(() => {
+    if (info.url) {
+      try {
+        expectedOriginRef.current = new URL(info.url).origin;
+      } catch {
+        expectedOriginRef.current = '';
+      }
+    } else {
+      expectedOriginRef.current = '';
+    }
+  }, [info.url]);
 
   // Push mode changes into the bridge whenever they happen. No-op when
   // the webview isn't mounted yet (`executeJavaScript` would throw).

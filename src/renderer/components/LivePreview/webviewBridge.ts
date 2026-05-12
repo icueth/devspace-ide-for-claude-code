@@ -278,11 +278,24 @@ export function buildBridgeScript(
   };
 
   // Final handshake — host listens for this to know the bridge is live
-  // and may re-pin the current mode.
+  // and may re-pin the current mode. The origin field lets the host
+  // cross-check that the bridge is running inside the expected dev
+  // server origin (not a page that navigated us off-route mid-load).
+  // Defense-in-depth: will-navigate already blocks non-localhost
+  // navigation, so this is the second gate, not the first.
   send({
     type: 'devspace:dev:bridgeReady',
     version: VERSION,
     framework: FRAMEWORK,
+    origin: (function readOrigin() {
+      try {
+        return window.location && window.location.origin
+          ? window.location.origin
+          : '';
+      } catch (_err) {
+        return '';
+      }
+    })(),
   });
 })();
 `;
@@ -310,16 +323,24 @@ export function stripAnsi(line: string): string {
 /**
  * Try to parse a single console-message string back into the inbound
  * protocol envelope. Returns null when the line wasn't ours OR the
- * payload didn't parse OR the secret-key check failed.
+ * payload didn't parse OR the secret-key check failed against EVERY
+ * accepted secret.
  *
  * The line MUST start with the bridge prefix — substring matches are
  * rejected so a user-app log that *contains* the sentinel anywhere is
  * never treated as a bridge envelope. Per-message secret enforces
  * unforgeability against page-side console.log.
+ *
+ * Pass an array of accepted secrets to honour the brief grace window
+ * after a secret rotates on HMR — during the grace, envelopes from the
+ * just-rotated bridge realm are still accepted. Pass a single string
+ * for back-compat (treated as a one-element array). Pass an empty
+ * string / empty array to disable the secret check (used in unit tests
+ * where the bridge string is generated without a secret).
  */
 export function parseBridgeConsoleLine(
   line: string,
-  expectedSecret: string,
+  expectedSecret: string | readonly string[],
 ): unknown | null {
   if (!line.startsWith(BRIDGE_LOG_PREFIX)) return null;
   const raw = line.slice(BRIDGE_LOG_PREFIX.length).trim();
@@ -332,8 +353,15 @@ export function parseBridgeConsoleLine(
   }
   if (!parsed || typeof parsed !== 'object') return null;
   const payload = parsed as Record<string, unknown>;
-  if (expectedSecret) {
-    if (payload.__k !== expectedSecret) return null;
+  const accepted = Array.isArray(expectedSecret)
+    ? expectedSecret.filter((s) => typeof s === 'string' && s.length > 0)
+    : expectedSecret
+      ? [expectedSecret]
+      : [];
+  if (accepted.length > 0) {
+    const k = payload.__k;
+    if (typeof k !== 'string') return null;
+    if (!accepted.includes(k)) return null;
   }
   return payload;
 }

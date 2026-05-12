@@ -274,6 +274,11 @@ app.on('window-all-closed', () => {
 });
 
 let exiting = false;
+// Hard ceiling on how long we'll block app exit waiting for PTY shutdown.
+// Killing the whole tree usually takes <300ms; this is the upper bound
+// before we hard-exit and let the OS reap any survivors.
+const EXIT_TIMEOUT_MS = 2500;
+
 app.on('before-quit', (event) => {
   // node-pty's ThreadSafeFunction races with Node's Environment cleanup on
   // shutdown — the tsfn fires into a destroyed JS context and aborts the
@@ -281,34 +286,49 @@ app.on('before-quit', (event) => {
   if (exiting) return;
   exiting = true;
   event.preventDefault();
-  try {
-    // Mark each dev-server state as 'stopped' BEFORE the PTY pool kills
-    // the underlying processes so the resulting onExit handlers
-    // short-circuit instead of firing spurious 'crashed' events on quit.
-    shutdownDevServers();
-    shutdownPtyPool();
-    shutdownWatchers();
+
+  // Mark each dev-server state as 'stopped' BEFORE the PTY pool kills
+  // the underlying processes so the resulting onExit handlers
+  // short-circuit instead of firing spurious 'crashed' events on quit.
+  // The two shutdowns return promises — we await them so node/vite child
+  // workers are actually gone before app.exit() pulls the rug out.
+  const shutdownTask = (async () => {
+    try {
+      await Promise.all([
+        shutdownDevServers(),
+        shutdownPtyPool(),
+      ]);
+    } catch {
+      /* best-effort during shutdown */
+    }
+    try {
+      shutdownWatchers();
+    } catch {
+      /* best-effort */
+    }
     // Optionally tear down our tmux server when the user opts in. Safe — we
     // run on an isolated socket, so this never touches their other tmux work.
-    const cfg = getTmuxConfigSync();
-    if (cfg.killSessionsOnQuit) {
-      void (async () => {
-        try {
-          const { spawn } = await import('node:child_process');
-          const bin = (await resolveTmuxBinary()) ?? 'tmux';
-          spawn(bin, [...tmuxSocketArgs(), 'kill-server'], {
-            detached: true,
-            stdio: 'ignore',
-          }).unref();
-        } catch {
-          /* best-effort */
-        }
-      })();
+    try {
+      const cfg = getTmuxConfigSync();
+      if (cfg.killSessionsOnQuit) {
+        const { spawn } = await import('node:child_process');
+        const bin = (await resolveTmuxBinary()) ?? 'tmux';
+        spawn(bin, [...tmuxSocketArgs(), 'kill-server'], {
+          detached: true,
+          stdio: 'ignore',
+        }).unref();
+      }
+    } catch {
+      /* best-effort */
     }
-  } catch {
-    /* swallow — nothing to do during shutdown */
-  }
-  setTimeout(() => app.exit(0), 120);
+  })();
+
+  // Race the shutdown task against EXIT_TIMEOUT_MS. Whichever finishes
+  // first triggers app.exit — we never block the user from quitting.
+  Promise.race([
+    shutdownTask,
+    new Promise<void>((r) => setTimeout(r, EXIT_TIMEOUT_MS)),
+  ]).then(() => app.exit(0), () => app.exit(0));
 });
 
 void __APP_VERSION__;

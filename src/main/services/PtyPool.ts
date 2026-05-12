@@ -246,16 +246,100 @@ export function resizePty(key: string, cols: number, rows: number): void {
   }
 }
 
-export function killPty(key: string): void {
-  const entry = entries.get(key);
-  if (!entry) return;
-  if (entry.flushTimer) clearTimeout(entry.flushTimer);
+// Grace period between SIGTERM (graceful) and SIGKILL (force) on the
+// process group. Vite/Next/etc need a few hundred ms to tear down their
+// own child workers cleanly; without the grace they leak orphan workers.
+const KILL_GRACE_MS = 800;
+
+// Cap on the overall awaitable kill — if the child ignores both signals
+// we still want shutdownAll() to return so the app can exit.
+const KILL_TIMEOUT_MS = 2500;
+
+/**
+ * Send a POSIX signal to the entire process group (`-pgid`). node-pty's
+ * `pty.kill(sig)` only signals the direct child shell — when that shell
+ * has spawned `pnpm → node → vite`, the deeper processes survive and
+ * become reparented to PID 1. Signalling the group nukes the whole
+ * subtree in one syscall.
+ *
+ * Best-effort: we never throw out of here. ESRCH (already-dead) is the
+ * normal happy-path; EPERM only happens if we somehow forked across
+ * users, which we don't.
+ */
+function killProcessGroup(pid: number, signal: NodeJS.Signals): void {
+  if (!Number.isInteger(pid) || pid <= 0) return;
   try {
-    entry.pty.kill('SIGKILL');
+    process.kill(-pid, signal);
   } catch (err) {
-    logger.warn(`kill failed on ${key}:`, (err as Error).message);
+    const code = (err as NodeJS.ErrnoException).code;
+    // ESRCH = no such process (already dead). EPERM = wrong user; we'd
+    // hit this only in an exotic setuid scenario, so log + move on.
+    if (code !== 'ESRCH' && code !== 'EPERM') {
+      logger.warn(`killpg(${pid}, ${signal}) failed: ${(err as Error).message}`);
+    }
   }
-  entries.delete(key);
+}
+
+/**
+ * Async kill: signals the process group with SIGTERM, waits up to
+ * KILL_GRACE_MS for a clean exit, then escalates to SIGKILL on the
+ * group. Resolves when the PTY reports exit (via onExit), or when the
+ * outer KILL_TIMEOUT_MS lapses.
+ *
+ * Idempotent and best-effort — calling on an unknown key resolves
+ * immediately. The pool entry is removed exactly once (in the onExit
+ * handler that the spawn site wired up).
+ */
+export function killPty(key: string): Promise<void> {
+  const entry = entries.get(key);
+  if (!entry) return Promise.resolve();
+  if (entry.flushTimer) clearTimeout(entry.flushTimer);
+  const pid = entry.pty.pid;
+  return new Promise<void>((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(graceTimer);
+      clearTimeout(overallTimer);
+      detach();
+      // Drop the entry defensively in case onExit never fires — the
+      // spawn-site onExit handler will also call delete(), which is a
+      // no-op the second time.
+      entries.delete(key);
+      resolve();
+    };
+    // Listen for the PTY's own exit signal — that's the source of truth
+    // for "the process group is gone". Falls back to timeouts below.
+    const detach = subscribeExit(key, () => finish());
+    // 1. SIGTERM on the group — gives Vite/Next time to release ports.
+    killProcessGroup(pid, 'SIGTERM');
+    try {
+      // Belt-and-suspenders: also signal the direct child via node-pty
+      // in case the leader trapped SIGTERM (some shells do). The group
+      // signal usually wins; this just covers the lone-process case.
+      entry.pty.kill('SIGTERM');
+    } catch {
+      /* already dead */
+    }
+    // 2. After grace, escalate to SIGKILL on the group.
+    const graceTimer = setTimeout(() => {
+      if (settled) return;
+      killProcessGroup(pid, 'SIGKILL');
+      try {
+        entry.pty.kill('SIGKILL');
+      } catch {
+        /* already dead */
+      }
+    }, KILL_GRACE_MS);
+    // 3. Hard ceiling — never block forever during shutdown.
+    const overallTimer = setTimeout(() => {
+      if (!settled) {
+        logger.warn(`killPty(${key}): exit never observed within ${KILL_TIMEOUT_MS}ms`);
+        finish();
+      }
+    }, KILL_TIMEOUT_MS);
+  });
 }
 
 export function listSessions(): PtySession[] {
@@ -273,12 +357,15 @@ export function getSession(
 /**
  * Kill every PTY belonging to a project (every kind, every tab). Used when a
  * project is closed/evicted so claude/shell processes don't linger.
+ * Resolves when every session has reported exit (or hit its kill timeout).
  */
-export function killProjectSessions(projectId: string): void {
+export async function killProjectSessions(projectId: string): Promise<void> {
   const prefix = `${projectId}:`;
+  const kills: Array<Promise<void>> = [];
   for (const key of Array.from(entries.keys())) {
-    if (key.startsWith(prefix)) killPty(key);
+    if (key.startsWith(prefix)) kills.push(killPty(key));
   }
+  await Promise.all(kills);
 }
 
 /**
@@ -291,16 +378,10 @@ export async function restartClaudeCli(
   tabId: string = DEFAULT_TAB_ID,
 ): Promise<void> {
   const key = sessionKey(projectId, 'claude-cli', tabId);
-  const entry = entries.get(key);
-  if (entry) {
-    if (entry.flushTimer) clearTimeout(entry.flushTimer);
-    try {
-      entry.pty.kill('SIGKILL');
-    } catch {
-      /* ignore */
-    }
-    entries.delete(key);
-  }
+  // Use the awaitable killPty so we know the process tree is actually
+  // gone before we tear down the tmux session — otherwise tmux can
+  // race with a still-attached pty and refuse to clean up.
+  await killPty(key);
   const tmuxSession = claudeCliTmuxSessionName(projectId, tabId);
   const tmuxBin = (await resolveTmuxBinary()) ?? 'tmux';
   try {
@@ -315,7 +396,16 @@ export async function restartClaudeCli(
   }
 }
 
-/** Kill all sessions — called on app quit. */
-export function shutdownAll(): void {
-  for (const key of entries.keys()) killPty(key);
+/**
+ * Kill all sessions — called on app quit. Returns a promise that
+ * resolves when every PTY has exited (or hit its kill timeout). The
+ * `before-quit` hook should `await` this before calling `app.exit()` so
+ * we don't orphan node/vite/claude children with the app already gone.
+ */
+export async function shutdownAll(): Promise<void> {
+  const kills: Array<Promise<void>> = [];
+  for (const key of Array.from(entries.keys())) {
+    kills.push(killPty(key));
+  }
+  await Promise.all(kills);
 }

@@ -756,7 +756,7 @@ export async function stopDevServer(projectPath: string): Promise<DevServerInfo>
   emit(state, 'status_changed', { status: 'stopped', url: null });
 
   try {
-    killPty(key);
+    await killPty(key);
   } catch (err) {
     logger.warn(`killPty(${key}) failed: ${(err as Error).message}`);
   }
@@ -839,14 +839,21 @@ function ensureDestroyHook(wc: WebContents): void {
 
 /**
  * Kill every dev-server PTY. Called from the main process `before-quit`
- * hook so we don't orphan node/vite processes.
+ * hook so we don't orphan node/vite processes. Awaits each kill so the
+ * caller can block until the entire dev-server tree is gone (or its
+ * per-kill timeout lapses).
  */
-export function shutdownAll(): void {
+export async function shutdownAll(): Promise<void> {
+  const kills: Array<Promise<void>> = [];
   for (const state of states.values()) {
     if (!state.ptyKey) continue;
     const key = state.ptyKey;
     state.info.status = 'stopped';
     state.ptyKey = null;
+    if (state.startTimer) {
+      clearTimeout(state.startTimer);
+      state.startTimer = undefined;
+    }
     for (const off of state.detach) {
       try {
         off();
@@ -855,10 +862,7 @@ export function shutdownAll(): void {
       }
     }
     state.detach = [];
-    try {
-      killPty(key);
-    } catch {
-      /* best-effort during shutdown */
-    }
+    kills.push(killPty(key).catch(() => undefined));
   }
+  await Promise.all(kills);
 }

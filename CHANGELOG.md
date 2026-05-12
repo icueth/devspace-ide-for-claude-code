@@ -5,6 +5,61 @@ All notable changes to DevSpace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.12.0] — 2026-05-13
+
+Deferred-cleanup release. Closes the remaining items flagged in the 0.11.2
+strict audit's "deferred" list, plus tightens the Live Preview bridge so
+HMR rotations don't drop in-flight events and a hostile dev-server page
+can't impersonate the bridge after an unexpected navigation.
+
+### Fixed
+
+- **PtyPool now kills the process group, not just the direct child.** Before
+  this fix, `pty.kill('SIGKILL')` only signalled the immediate shell
+  process; deeper children (`pnpm → node → vite`, claude-cli's tmux session,
+  any spawned worker pool) survived and got reparented to PID 1 on app
+  quit. The new kill path sends SIGTERM to the entire process group (`-pgid`)
+  with a 800ms grace period, then escalates to SIGKILL on the group. Each
+  PTY exit is awaited via the existing `onExit` listener so callers can
+  block until the tree is actually gone. (Deferred audit item H5.)
+- **`killPty`, `killProjectSessions`, and `shutdownAll` are now awaitable.**
+  `before-quit` waits up to 2.5s for the dev-server + PTY trees to exit
+  cleanly before calling `app.exit(0)`. Without this, the app could quit
+  mid-teardown and leak the entire spawned subtree.
+- **Live Preview bridge has a 5s secret grace window.** When the dev server
+  HMR-reloads, the old realm sometimes flushes a final envelope through
+  `console.log` *after* the new bridge has installed and rotated the secret.
+  Those last events used to be dropped silently; they're now accepted for
+  5 seconds after the rotation, then the previous secret is retired and any
+  remaining envelopes with it are rejected like before. (Deferred audit
+  item L1.)
+- **Bridge handshake now carries `origin: window.location.origin`** and the
+  host verifies it matches the expected dev-server origin on `bridgeReady`.
+  Defence-in-depth on top of the existing `will-navigate` localhost gate —
+  if a hostile dev-server page somehow slipped through and is running on
+  a different origin, the bridge is disabled and an error surfaces in the
+  Live Preview tab instead of being silently trusted. (Deferred audit item
+  M4.)
+
+### Tests
+
+- 17 new regression tests:
+  - `webviewBridge.test.ts` — 13 tests covering single-secret, dual-secret
+    grace window, mismatched secret rejection, empty accept-set behaviour,
+    and the new `origin` field round-trip.
+  - `PtyPool.test.ts` — 4 tests covering `killPty` async return shape and
+    idempotency on unknown keys.
+- 253 vitest tests pass (was 236).
+
+### Deferred (still — gated on dedicated session work)
+
+- **M1** channel-string centralization — current usage already routes
+  through `@shared/ipc-channels` (281 occurrences across 23 files); the
+  remaining cosmetic refactor doesn't change runtime behaviour.
+- **Bundle bloat (15–20 MB shavable)** — most wins (`@codemirror/lang-*`
+  lazy-loading, `lucide-react` tree-shake audit) require a dedicated
+  size-optimization pass and aren't trivially safe drive-bys.
+
 ## [0.11.2] — 2026-05-13
 
 Strict 5-surface audit (security + concurrency + error-handling + renderer

@@ -61,6 +61,6 @@ export function registerPtyIpc(): void {
 
   ipcMain.handle(IPC.PTY_KILL, async (_e, sessionId: string) => {
     logger.info(`kill requested for ${sessionId}`);
-    killPty(sessionId);
+    await killPty(sessionId);
   });
 }
