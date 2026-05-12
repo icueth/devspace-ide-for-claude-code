@@ -42,7 +42,7 @@ export function registerChatIpc(): void {
   });
 
   ipcMain.handle(IPC.CHAT_CANCEL, (_event, projectPath: string) => {
-    cancelActive(projectPath);
+    return cancelActive(projectPath);
   });
 
   ipcMain.handle(IPC.CHAT_SUBSCRIBE, (event, projectPath: string) => {

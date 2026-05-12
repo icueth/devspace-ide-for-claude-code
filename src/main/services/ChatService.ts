@@ -151,16 +151,20 @@ export async function setProjectConfig(
   return cfg;
 }
 
-export function cancelActive(projectPath: string): void {
+export async function cancelActive(projectPath: string): Promise<void> {
   const s = lookupState(projectPath);
   if (!s || !s.activeRunHandle) return;
-  // kill() awaits tmux kill-session which we don't need to block on —
-  // the tail loop notices the session disappear and resolves with
-  // cancelled=true, which fires the same finalize path as a normal
-  // exit. Ignore the promise.
-  void s.activeRunHandle.kill().catch((err) => {
+  // Await tmux kill-session so any failure (session already gone, tmux
+  // binary missing) surfaces to the IPC caller and the renderer can
+  // show an error toast. The tail loop still notices the session
+  // disappear and resolves with cancelled=true, which fires the same
+  // finalize path as a normal exit.
+  try {
+    await s.activeRunHandle.kill();
+  } catch (err) {
     logger.warn(`cancel kill failed: ${(err as Error).message}`);
-  });
+    throw err;
+  }
 }
 
 // ─── turn execution ─────────────────────────────────────────────────────────

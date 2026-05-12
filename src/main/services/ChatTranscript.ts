@@ -165,7 +165,18 @@ export async function persistThread(
 ): Promise<void> {
   const file = threadFile(projectPath, thread.id);
   await fs.promises.mkdir(path.dirname(file), { recursive: true });
-  await fs.promises.writeFile(file, JSON.stringify(thread, null, 2));
+  // Atomic write: stream to a unique tmp sibling then rename. A crash
+  // mid-write leaves either the previous valid file or no file — never
+  // a 0-byte / truncated JSON that hydrateFromDisk would silently drop
+  // and wipe the user's chat history on next boot.
+  const tmp = `${file}.${randomUUID()}.tmp`;
+  try {
+    await fs.promises.writeFile(tmp, JSON.stringify(thread, null, 2));
+    await fs.promises.rename(tmp, file);
+  } catch (err) {
+    await fs.promises.unlink(tmp).catch(() => {});
+    throw err;
+  }
 }
 
 export function broadcast(

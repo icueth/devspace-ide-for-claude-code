@@ -152,4 +152,28 @@ describe('ChatTranscript thread CRUD', () => {
     expect(onDisk.messages).toHaveLength(1);
     expect(onDisk.messages[0].content).toBe('hi');
   });
+
+  it('persistThread is atomic — failure leaves prior valid file intact', async () => {
+    // First write a known-good thread, then attempt a write that fails
+    // mid-flight by passing a value JSON.stringify can't serialize. The
+    // tmp+rename pattern means the failed write never replaces the good
+    // file, so listThreads still finds the original.
+    const thread = await createThread(tmpRoot, 'before');
+    thread.title = 'after';
+
+    // Inject an unserialisable value to force JSON.stringify to throw.
+    const bigint = BigInt(1) as unknown as string;
+    const sabotaged = { ...thread, evil: bigint };
+    await expect(persistThread(tmpRoot, sabotaged)).rejects.toBeTruthy();
+
+    // The good file must still be present and readable. No `.tmp` files
+    // should be left behind in the threads dir.
+    const onDisk = JSON.parse(
+      fs.readFileSync(threadFile(tmpRoot, thread.id), 'utf8'),
+    );
+    expect(onDisk.title).toBe('before');
+    const dir = path.dirname(threadFile(tmpRoot, thread.id));
+    const stragglers = fs.readdirSync(dir).filter((f) => f.endsWith('.tmp'));
+    expect(stragglers).toEqual([]);
+  });
 });

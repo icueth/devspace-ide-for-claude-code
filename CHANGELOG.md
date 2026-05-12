@@ -5,6 +5,65 @@ All notable changes to DevSpace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.11.1] — 2026-05-13
+
+Latent-bug hunt across Phase A→C + v0.10/0.11 work. Eight findings from
+parallel architecture / security / code-review audits were fixed before
+release — none were user-reported, but several would have hit users
+eventually (lost chat history, stray design versions, perf regression on
+long chats).
+
+### Fixed
+
+- **Chat transcript writes are now atomic** (`persistThread`). Previous
+  code did a direct `writeFile` — a crash mid-write left a truncated /
+  zero-byte JSON, and `hydrateFromDisk` silently dropped the whole thread
+  on next boot, wiping the user's chat history without warning. Now uses
+  the `tmp + rename` pattern (same as DesignService persistRegistry).
+- **Cancel race on Design generation kick-off** — clicking Cancel during
+  the tmux-spawn window (after Generate, before the run handle landed in
+  `activeRuns`) found no entry and silently dropped the cancel. The
+  tmux/claude session kept running and emitted a stray new version on
+  completion. Now `runGeneration` claims the slot _before_ awaiting
+  `generateDesign`; cancelDesign flags it for cancel-on-arrival.
+- **Symlink ambush via design history files**. `readHtml` did string-path
+  containment but no symlink check, so a hostile project could plant
+  `.devspace/design/screens/x/history/y/index.html → /etc/passwd` and
+  exfiltrate via the iframe / dev-server bridge. Now lstats every read
+  target and rejects non-regular files. Same hardening every style
+  adapter already uses.
+- **History v1→v2 migration durability** — `pruneLegacyVersions` ran on
+  every hydrate when `historyVersion !== 2`, but only mutated in-memory
+  state. A crash before the next write would re-walk migration on next
+  boot, potentially making different decisions if disk state shifted.
+  Now persists immediately when hydrate mutates anything.
+- **`chat.cancel` swallowed kill failures** — IPC handler dropped the
+  return value, so renderer couldn't surface "kill failed" errors. Now
+  awaits and propagates.
+- **Design listener leak across many projects** — `subscribeEvents`
+  registered one `destroyed` listener per project on each WebContents.
+  Opening 11+ projects in a window blew past Node's default
+  MaxListeners and leaked WC references. Switched to the WeakSet pattern
+  DevServerService uses (one destroy hook total per WC).
+- **Monorepo dev scripts rejected** — `SCRIPT_NAME_RE` forbade `/` and
+  `@`, breaking projects with scripts like `apps/web:dev` or
+  `@app/web:dev`. Expanded charset; package.json whitelist remains the
+  real trust boundary.
+
+### Performance
+
+- **Chat segment cards are now memoized**. `TextSegmentCard` and
+  `ToolGroupSegment` were plain function components — every keystroke in
+  a streaming turn re-ran ReactMarkdown + rehype-highlight on _every_
+  segment in the transcript. Wrapped both in `React.memo` (text:
+  default shallow equality on the immutable `text` string; tool-group:
+  custom equality that skips re-render when this group's calls
+  weren't touched). Eliminates the dominant render cost on long chats.
+
+### Tests
+
+- 222 vitest tests pass (1 new: persistThread atomicity regression).
+
 ## [0.11.0] — 2026-05-13
 
 ### Added — bundled built-in agents & skills (never start empty)

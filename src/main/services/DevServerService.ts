@@ -454,7 +454,11 @@ function cloneInfo(info: DevServerInfo): DevServerInfo {
 
 // Allowed shape for a package.json script name. Used to validate
 // caller-supplied overrides before we hand them to the package manager.
-const SCRIPT_NAME_RE = /^[A-Za-z0-9_:.-]{1,80}$/;
+// Permits `/`, `:`, `.`, `@` so monorepo conventions like `apps/web:dev`,
+// `@app/web:dev`, and `web/dev` work. The package.json whitelist below
+// is the real trust boundary — this regex just kills obviously hostile
+// shell metacharacters (spaces, quotes, $, `, ;, |, &, etc.).
+const SCRIPT_NAME_RE = /^[A-Za-z0-9_:.@/-]{1,120}$/;
 const ALLOWED_PACKAGE_MANAGERS = new Set(['pnpm', 'yarn', 'npm', 'bun']);
 const ALLOWED_KINDS = new Set<DevServerKind>([
   'vite',

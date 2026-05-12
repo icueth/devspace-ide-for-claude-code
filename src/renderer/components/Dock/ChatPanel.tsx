@@ -25,6 +25,7 @@ import {
   XCircle,
 } from 'lucide-react';
 import {
+  memo,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -808,20 +809,42 @@ function SegmentedBody({
 // only ever push new ids — never reorder), so the dependency list is
 // safe even though the contents are mutated in applyEvent's spreaded
 // thread copy.
-function ToolGroupSegment({
-  toolUseIds,
-  allCalls,
-}: {
-  toolUseIds: string[];
-  allCalls: ChatMessage['toolCalls'];
-}) {
-  const calls = useMemo(
-    () => resolveCalls(toolUseIds, allCalls),
-    [toolUseIds, allCalls],
-  );
-  if (calls.length === 0) return null;
-  return <ToolCallList calls={calls} />;
-}
+//
+// memo with custom equality: applyEvent rebuilds `allCalls` (new
+// array reference) on every text_delta / tool_result / usage / etc.
+// event, so default shallow memo would re-render every group on every
+// keystroke. We skip the re-render unless the calls THIS group actually
+// references changed identity — for old groups whose tool_uses are
+// long-done, that's never.
+const ToolGroupSegment = memo(
+  function ToolGroupSegmentInner({
+    toolUseIds,
+    allCalls,
+  }: {
+    toolUseIds: string[];
+    allCalls: ChatMessage['toolCalls'];
+  }) {
+    const calls = useMemo(
+      () => resolveCalls(toolUseIds, allCalls),
+      [toolUseIds, allCalls],
+    );
+    if (calls.length === 0) return null;
+    return <ToolCallList calls={calls} />;
+  },
+  (prev, next) => {
+    if (prev.toolUseIds !== next.toolUseIds) return false;
+    if (prev.allCalls === next.allCalls) return true;
+    // allCalls reference changed but the calls referenced by this group's
+    // ids may not have. Only re-render if any of OUR calls changed object
+    // identity (status flip, result populated, etc.).
+    const prevById = new Map(prev.allCalls.map((c) => [c.id, c] as const));
+    const nextById = new Map(next.allCalls.map((c) => [c.id, c] as const));
+    for (const id of next.toolUseIds) {
+      if (prevById.get(id) !== nextById.get(id)) return false;
+    }
+    return true;
+  },
+);
 
 function resolveCalls(
   toolUseIds: string[],
@@ -852,7 +875,16 @@ function isSegmentListEmpty(segments: ChatMessageSegment[]): boolean {
 // difference is each text-chunk gets its own block instead of being
 // concatenated into one giant string. No border / padding wrapper here
 // because the parent bubble already provides space-y-2 between cards.
-function TextSegmentCard({ text }: { text: string }) {
+//
+// memo: default shallow equality compares the single `text` prop.
+// Older finalized segments never change text → memo skips them on every
+// subsequent stream event. Only the actively-streaming last text segment
+// re-runs the (expensive) ReactMarkdown + rehype-highlight pipeline.
+const TextSegmentCard = memo(function TextSegmentCardInner({
+  text,
+}: {
+  text: string;
+}) {
   return (
     <div className="prose prose-invert max-w-none break-words text-[12.5px] leading-relaxed prose-headings:mt-3 prose-headings:mb-1.5 prose-p:my-1.5 prose-ul:my-1.5 prose-ol:my-1.5 prose-li:my-0.5 prose-pre:my-2 prose-pre:overflow-x-auto prose-pre:rounded-md prose-pre:bg-surface-3 prose-pre:p-2.5 prose-pre:text-[11.5px] prose-code:rounded prose-code:bg-surface-3 prose-code:px-1 prose-code:py-0.5 prose-code:text-[11.5px] prose-code:before:content-none prose-code:after:content-none prose-a:text-accent prose-a:no-underline hover:prose-a:underline">
       <ReactMarkdown
@@ -863,7 +895,7 @@ function TextSegmentCard({ text }: { text: string }) {
       </ReactMarkdown>
     </div>
   );
-}
+});
 
 // Live-elapsed footer rendered under every assistant message. Pulsing
 // dot indicates active work; turns static once status leaves
@@ -1516,7 +1548,7 @@ function applyEvent(
     //
     // Important: when extending an existing segment we REPLACE it with a
     // new object (not mutate `lastSeg.text += ...`). That gives each
-    // event a fresh segment identity so any downstream `React.memo` on
+    // event a fresh segment identity so any downstream `memo` on
     // segment-keyed children can safely fast-path. Same goes for
     // `target.segments = [...]` — we rebuild the array reference per
     // event rather than `.push()` so memoized children re-render.

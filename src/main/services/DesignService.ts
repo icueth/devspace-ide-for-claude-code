@@ -129,6 +129,28 @@ function assertInsideDesignDir(projectPath: string, target: string): void {
   }
 }
 
+// Defeats symlink ambushes: assertInsideDesignDir does string comparison
+// only, so a hostile project can plant `.devspace/design/screens/x/
+// history/y/index.html` as a symlink to `/etc/passwd` and exfiltrate
+// arbitrary files into the iframe / dev-server bridge. We lstat the
+// target before any read and reject any non-regular-file (symlink,
+// socket, device, etc.). All style adapters do this — DesignService
+// must too. Returns false if the file simply doesn't exist, so callers
+// can still distinguish "missing" (ENOENT) from "hostile" (throws).
+async function assertRegularFile(target: string): Promise<boolean> {
+  let st: fs.Stats;
+  try {
+    st = await fs.promises.lstat(target);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    throw err;
+  }
+  if (!st.isFile()) {
+    throw new Error(`refusing to read non-regular file: ${target}`);
+  }
+  return true;
+}
+
 // Hardens claude-generated HTML before it lands on disk. Belt-and-
 // suspenders on top of the iframe sandbox: a hostile skill could coerce
 // the model into emitting `<script src=https://attacker/x.js>` or an
@@ -260,6 +282,7 @@ async function hydrateFromDisk(state: ProjectState): Promise<void> {
     }
     return;
   }
+  let mutated = false;
   try {
     const parsed = JSON.parse(raw) as { screens?: DesignScreen[] };
     const arr = Array.isArray(parsed.screens) ? parsed.screens : [];
@@ -276,9 +299,16 @@ async function hydrateFromDisk(state: ProjectState): Promise<void> {
         // boot. The actual `index.html` + history dirs created by v0.10+
         // generations are correctly self-contained; older screens just
         // had the off-by-one issue this prune corrects.
-        const cleaned: DesignScreen = s.historyVersion === 2
-          ? s
-          : { ...(await pruneLegacyVersions(state.projectPath, s)), historyVersion: 2 };
+        let cleaned: DesignScreen;
+        if (s.historyVersion === 2) {
+          cleaned = s;
+        } else {
+          cleaned = {
+            ...(await pruneLegacyVersions(state.projectPath, s)),
+            historyVersion: 2,
+          };
+          mutated = true;
+        }
 
         // Any screen left mid-generation across a restart is reset to
         // 'error' — Phase A doesn't resume design runs the way chat does
@@ -290,6 +320,7 @@ async function hydrateFromDisk(state: ProjectState): Promise<void> {
             errorMessage: 'Generation interrupted by app restart',
             activeRun: undefined,
           });
+          mutated = true;
         } else {
           state.screens.set(cleaned.id, cleaned);
         }
@@ -297,6 +328,19 @@ async function hydrateFromDisk(state: ProjectState): Promise<void> {
     }
   } catch (err) {
     logger.warn(`registry parse failed: ${(err as Error).message}`);
+  }
+  // Persist any mutations from migration / interrupted-generation reset
+  // before any other op runs. Without this, a crash between hydrate and
+  // the next write would re-walk pruneLegacyVersions on next boot — and
+  // because pruneLegacyVersions does I/O (fs.stat per version dir), it
+  // could make different decisions on the next run if the disk state
+  // changed in the meantime. Persist once, then trust the v2 stamp.
+  if (mutated) {
+    await persistRegistry(state).catch((err) => {
+      logger.warn(
+        `hydrate persist failed (migration not durable): ${(err as Error).message}`,
+      );
+    });
   }
 }
 
@@ -714,7 +758,17 @@ export async function deleteDesign(
 // Active run handles keyed by `${projectPath}::${screenId}` so cancel
 // can find them. Memory-only — generation isn't designed to survive an
 // app restart in Phase A.
-const activeRuns = new Map<string, { kill: () => Promise<void> }>();
+// `kill` is undefined during the window between runGeneration claiming
+// the slot and generateDesign() resolving with a tmux handle. During
+// that window cancelDesign sets `cancelRequested=true` and runGeneration
+// honours it as soon as the handle arrives. This closes the race where
+// a user clicked Cancel before tmux finished spawning — previously the
+// kill handle landed too late and a stray version was committed.
+interface ActiveRunEntry {
+  kill?: () => Promise<void>;
+  cancelRequested?: boolean;
+}
+const activeRuns = new Map<string, ActiveRunEntry>();
 
 function runKey(projectPath: string, screenId: string): string {
   return `${path.resolve(projectPath)}::${screenId}`;
@@ -727,12 +781,19 @@ export async function cancelDesign(
   assertValidScreenId(screenId);
   const s = getState(projectPath);
   await s.hydrationPromise;
-  const handle = activeRuns.get(runKey(projectPath, screenId));
-  if (handle) {
-    await handle.kill().catch((err) => {
-      logger.warn(`cancel kill failed: ${(err as Error).message}`);
-    });
-    activeRuns.delete(runKey(projectPath, screenId));
+  const key = runKey(projectPath, screenId);
+  const entry = activeRuns.get(key);
+  if (entry) {
+    if (entry.kill) {
+      await entry.kill().catch((err) => {
+        logger.warn(`cancel kill failed: ${(err as Error).message}`);
+      });
+      activeRuns.delete(key);
+    } else {
+      // Run hasn't received its kill handle yet — flag for cancel-on-arrival.
+      // runGeneration will call kill() as soon as generateDesign resolves.
+      entry.cancelRequested = true;
+    }
   }
   const screen = s.screens.get(screenId);
   if (screen && screen.status === 'generating') {
@@ -760,39 +821,54 @@ export async function readHtml(
       'index.html',
     );
     assertInsideDesignDir(s.projectPath, histFile);
-    try {
-      return await fs.promises.readFile(histFile, 'utf8');
-    } catch (err) {
-      const code = (err as NodeJS.ErrnoException).code;
-      if (code !== 'ENOENT') throw err;
-      // Fallback for legacy (v1) screens whose latest version row never
-      // got a history file written. If `versionId` refers to the LAST
-      // version on the screen, fall through to `index.html` — it is the
-      // latest content. For older versions there's nothing to serve.
-      const screen = s.screens.get(screenId);
-      const last = screen?.versions[screen.versions.length - 1];
-      if (last && last.id === versionId) {
-        const indexAbs = screenIndexHtml(s.projectPath, screenId);
-        assertInsideDesignDir(s.projectPath, indexAbs);
-        return fs.promises.readFile(indexAbs, 'utf8');
-      }
-      throw err;
+    if (await assertRegularFile(histFile)) {
+      return fs.promises.readFile(histFile, 'utf8');
     }
+    // ENOENT fallback for legacy (v1) screens whose latest version row
+    // never got a history file written. If `versionId` refers to the LAST
+    // version on the screen, fall through to `index.html` — it is the
+    // latest content. For older versions there's nothing to serve.
+    const screen = s.screens.get(screenId);
+    const last = screen?.versions[screen.versions.length - 1];
+    if (last && last.id === versionId) {
+      const indexAbs = screenIndexHtml(s.projectPath, screenId);
+      assertInsideDesignDir(s.projectPath, indexAbs);
+      if (!(await assertRegularFile(indexAbs))) {
+        throw Object.assign(new Error('index.html missing'), {
+          code: 'ENOENT',
+        });
+      }
+      return fs.promises.readFile(indexAbs, 'utf8');
+    }
+    throw Object.assign(new Error('version html missing'), { code: 'ENOENT' });
   }
   const indexAbs = screenIndexHtml(s.projectPath, screenId);
   assertInsideDesignDir(s.projectPath, indexAbs);
+  if (!(await assertRegularFile(indexAbs))) {
+    throw Object.assign(new Error('index.html missing'), { code: 'ENOENT' });
+  }
   return fs.promises.readFile(indexAbs, 'utf8');
 }
 
 export function subscribeEvents(projectPath: string, wc: WebContents): void {
   const s = getState(projectPath);
-  // Only register the cleanup listener once per WebContents — handlers
-  // like DESIGN_LIST / DESIGN_CREATE / DESIGN_REGENERATE all auto-
-  // subscribe, and Node's EventEmitter warns above 10 listeners. Guard
-  // by checking `subscribers.has` before the side-effect.
   if (s.subscribers.has(wc)) return;
   s.subscribers.add(wc);
-  wc.once('destroyed', () => s.subscribers.delete(wc));
+  ensureDestroyHook(wc);
+}
+
+// Ensure each WebContents gets at most one 'destroyed' hook across all
+// projects. Without this guard, every subscribe call registered a fresh
+// listener — opening 11+ projects in a window blew past Node's default
+// MaxListeners cap and leaked WebContents references via the closures.
+// Pattern mirrored from DevServerService.
+const wcDestroyHooks = new WeakSet<WebContents>();
+function ensureDestroyHook(wc: WebContents): void {
+  if (wcDestroyHooks.has(wc)) return;
+  wcDestroyHooks.add(wc);
+  wc.once('destroyed', () => {
+    for (const s of states.values()) s.subscribers.delete(wc);
+  });
 }
 
 // ─── skill + design-system discovery ────────────────────────────────────────
@@ -1097,6 +1173,11 @@ async function runGeneration(
   screen.status = 'generating';
   screen.updatedAt = Date.now();
   screen.errorMessage = undefined;
+  // Claim the activeRuns slot BEFORE any await so cancelDesign called
+  // during tmux spawn / prompt build can register its intent on this
+  // entry. `kill` lands once generateDesign resolves; until then,
+  // cancel sets `cancelRequested=true` and we honour it post-await.
+  activeRuns.set(key, {});
   await persistScreenMeta(state.projectPath, screen);
   await persistRegistry(state);
   emit(state, 'generation_started', screen.id, { screen });
@@ -1175,7 +1256,19 @@ async function runGeneration(
         emit(state, 'screen_updated', screen.id, { screen });
       },
     });
+    // If the user pressed Cancel during the await above (tmux spawn /
+    // prompt build), the pre-claimed entry now has cancelRequested=true.
+    // Kill the freshly-spawned handle immediately so we don't waste a
+    // generation cycle. The handle's tail loop will resolve with
+    // cancelled=true and we fall into the cancel finalize branch below.
+    const pending = activeRuns.get(key);
+    const cancelPending = pending?.cancelRequested === true;
     activeRuns.set(key, { kill: handle.kill });
+    if (cancelPending) {
+      await handle.kill().catch((err) => {
+        logger.warn(`pending cancel kill failed: ${(err as Error).message}`);
+      });
+    }
     const result = await handle.completion;
     activeRuns.delete(key);
 
