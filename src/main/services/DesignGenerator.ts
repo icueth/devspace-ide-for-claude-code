@@ -24,7 +24,12 @@ import {
 } from '@main/services/TmuxChatRunner';
 import { resolveInteractiveShellEnv } from '@main/utils/shellEnv';
 import { createLogger } from '@shared/logger';
-import type { DesignSkill, DesignSystem } from '@shared/design';
+import type {
+  DesignMessage,
+  DesignSkill,
+  DesignSystem,
+  ProjectDesignProfile,
+} from '@shared/design';
 
 const logger = createLogger('DesignGenerator');
 
@@ -43,6 +48,14 @@ export interface GenerateDesignOptions {
   brief: string;
   onProgress?: (message: string) => void;
   onActiveRun?: (info: GenerateActiveRunInfo) => void | Promise<void>;
+  // v0.10: when set, supersedes `brief` for prompt assembly. The builder
+  // renders the transcript as `## Conversation` and uses the LAST user
+  // turn as the active request. `brief` is still passed for back-compat
+  // and ignored when messages is non-empty.
+  messages?: DesignMessage[];
+  // v0.10: pre-rendered project context (framework/styling/TS/pm).
+  // Injected under `## Project Context` before the brief/conversation.
+  projectProfile?: ProjectDesignProfile | null;
 }
 
 export interface GenerateDesignResult {
@@ -174,6 +187,8 @@ async function buildPrompt(opts: GenerateDesignOptions): Promise<string> {
     brief: opts.brief,
     skillBody,
     designSystemBody,
+    messages: opts.messages,
+    projectProfile: opts.projectProfile ?? null,
   });
 }
 

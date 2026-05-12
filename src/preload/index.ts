@@ -266,6 +266,14 @@ const api = {
       ipcRenderer.invoke(IPC.DESIGN_LIST_SYSTEMS, projectPath),
     readHtml: (projectPath: string, screenId: string, versionId?: string) =>
       ipcRenderer.invoke(IPC.DESIGN_READ_HTML, projectPath, screenId, versionId),
+    followUp: (input: import('@shared/design').DesignFollowUpInput) =>
+      ipcRenderer.invoke(IPC.DESIGN_FOLLOW_UP, input),
+    listMessages: (projectPath: string, screenId: string) =>
+      ipcRenderer.invoke(IPC.DESIGN_LIST_MESSAGES, projectPath, screenId),
+    getProfile: (projectPath: string) =>
+      ipcRenderer.invoke(IPC.DESIGN_GET_PROFILE, projectPath),
+    rebuildProfile: (projectPath: string) =>
+      ipcRenderer.invoke(IPC.DESIGN_REBUILD_PROFILE, projectPath),
     subscribe: (projectPath: string) =>
       ipcRenderer.invoke(IPC.DESIGN_SUBSCRIBE, projectPath),
     onEvent: (

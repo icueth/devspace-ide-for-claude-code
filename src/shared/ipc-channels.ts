@@ -142,6 +142,11 @@ export const IPC = {
   // bridge) plus the op log for provenance. Main hardens + archives the
   // previous index.html into history/ + writes the new one atomically.
   DESIGN_SAVE_EDITS: 'design:save-edits',
+  // v0.10: chat-style transcript + project profile
+  DESIGN_FOLLOW_UP: 'design:follow-up',
+  DESIGN_LIST_MESSAGES: 'design:list-messages',
+  DESIGN_GET_PROFILE: 'design:get-profile',
+  DESIGN_REBUILD_PROFILE: 'design:rebuild-profile',
 
   // Phase C: Live preview against a real project dev-server. Main detects
   // the framework (Vite / Next / Astro / Remix), spawns the dev script

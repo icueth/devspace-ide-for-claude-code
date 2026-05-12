@@ -2,11 +2,14 @@ import {
   ChevronDown,
   ChevronRight,
   ExternalLink,
+  FileCode,
   Folder,
   Globe,
+  Loader2,
   Lock,
   Package,
   Paintbrush,
+  RefreshCw,
   Search,
   Sparkles,
 } from 'lucide-react';
@@ -16,9 +19,14 @@ import { api } from '@renderer/lib/api';
 import { cn } from '@renderer/lib/utils';
 import { useEditorStore } from '@renderer/state/editor';
 import { useWorkspaceStore } from '@renderer/state/workspace';
-import type { DesignScope, DesignSkill, DesignSystem } from '@shared/design';
+import type {
+  DesignScope,
+  DesignSkill,
+  DesignSystem,
+  ProjectDesignProfile,
+} from '@shared/design';
 
-type SubTab = 'skills' | 'systems';
+type SubTab = 'context' | 'skills' | 'systems';
 
 /**
  * Settings tab listing every design skill + design system DevSpace can
@@ -35,11 +43,21 @@ type SubTab = 'skills' | 'systems';
  *     discovery + provenance.
  */
 export function DesignSettings() {
-  const [tab, setTab] = useState<SubTab>('skills');
+  // Project Context is the most valuable v0.10 surface — it shows the user
+  // exactly what DevSpace will inject into the next generation prompt and is
+  // the only tab they can act on without leaving Settings. So we open here
+  // by default; Skills / Systems are still one click away.
+  const [tab, setTab] = useState<SubTab>('context');
 
   return (
     <div className="flex h-full flex-col">
       <div className="flex shrink-0 items-center gap-2 border-b border-border bg-surface-2/40 px-4 py-2">
+        <SubTabButton
+          active={tab === 'context'}
+          onClick={() => setTab('context')}
+          icon={<FileCode size={11} />}
+          label="Project context"
+        />
         <SubTabButton
           active={tab === 'skills'}
           onClick={() => setTab('skills')}
@@ -53,13 +71,26 @@ export function DesignSettings() {
           label="Design systems"
         />
         <div className="flex-1" />
-        <span className="text-[10.5px] text-text-muted">
-          Sources: <code className="font-mono">~/.claude/skills</code> ·{' '}
-          <code className="font-mono">.claude/skills</code> · built-in pack
-        </span>
+        {tab === 'context' ? (
+          <span className="text-[10.5px] text-text-muted">
+            Source:{' '}
+            <code className="font-mono">.devspace/design/profile.json</code>
+          </span>
+        ) : (
+          <span className="text-[10.5px] text-text-muted">
+            Sources: <code className="font-mono">~/.claude/skills</code> ·{' '}
+            <code className="font-mono">.claude/skills</code> · built-in pack
+          </span>
+        )}
       </div>
       <div className="min-h-0 flex-1 overflow-hidden">
-        {tab === 'skills' ? <SkillsBrowser /> : <SystemsBrowser />}
+        {tab === 'context' ? (
+          <ProjectContextBrowser />
+        ) : tab === 'skills' ? (
+          <SkillsBrowser />
+        ) : (
+          <SystemsBrowser />
+        )}
       </div>
     </div>
   );
@@ -88,6 +119,329 @@ function SubTabButton({ active, onClick, icon, label }: SubTabButtonProps) {
       {label}
     </button>
   );
+}
+
+// ─── Project context browser ────────────────────────────────────────
+//
+// Surfaces the auto-detected ProjectDesignProfile that main builds via
+// ProjectProfileBuilder.ts. The profile is injected into every design
+// generation prompt under "## Project Context" so output matches the
+// host project's framework / styling stack / brand cues. Users land here
+// to (a) confirm DevSpace detected what they expected, (b) hit Refresh
+// after editing package.json so the next generation picks up the change.
+
+function ProjectContextBrowser() {
+  const activeProject = useWorkspaceStore((s) => {
+    const id = s.activeProjectId;
+    return s.projects.find((p) => p.id === id) ?? null;
+  });
+
+  const [profile, setProfile] = useState<ProjectDesignProfile | null>(null);
+  // `loading` is the initial mount / project-switch fetch. We split it
+  // from `refreshing` so the refresh button can spin without blowing
+  // away the currently-rendered profile (which would feel jarring).
+  const [loading, setLoading] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  // Bumps every minute so "Last built: N minutes ago" updates without
+  // refetching the profile. Cheap rerender — the component is mounted
+  // only when this tab is visible.
+  const [, setTick] = useState(0);
+
+  const projectPath = activeProject?.path ?? null;
+
+  useEffect(() => {
+    if (!projectPath) {
+      setProfile(null);
+      setError(null);
+      setLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    void api.design
+      .getProfile(projectPath)
+      .then((p) => {
+        if (!cancelled) setProfile(p);
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setError((err as Error).message);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [projectPath]);
+
+  // Keep "Last built: …" relative timestamps fresh without re-fetching.
+  useEffect(() => {
+    const id = window.setInterval(() => setTick((t) => t + 1), 60_000);
+    return () => window.clearInterval(id);
+  }, []);
+
+  const onRefresh = useCallback(async () => {
+    if (!projectPath || refreshing) return;
+    setRefreshing(true);
+    setError(null);
+    try {
+      const next = await api.design.rebuildProfile(projectPath);
+      setProfile(next);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setRefreshing(false);
+    }
+  }, [projectPath, refreshing]);
+
+  return (
+    <div className="flex h-full min-h-0 flex-col overflow-y-auto">
+      <div className="mx-auto w-full max-w-[820px] px-6 py-5">
+        <div className="mb-4 flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <h3 className="text-[14px] font-semibold text-text">
+              Project context
+            </h3>
+            <p className="mt-1 text-[11.5px] leading-snug text-text-muted">
+              DevSpace inspects your project and injects this profile into
+              every design generation so the output matches your framework,
+              styling stack, and conventions.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => void onRefresh()}
+            disabled={!projectPath || refreshing || loading}
+            title="Re-scan package.json and refresh the cached profile"
+            className={cn(
+              'inline-flex shrink-0 items-center gap-1.5 rounded-[6px] border px-3 py-[6px] text-[11px] font-medium transition',
+              !projectPath || refreshing || loading
+                ? 'pointer-events-none border-border bg-surface-3 text-text-muted opacity-50'
+                : 'border-border-subtle bg-surface-3 text-text hover:border-border-hi hover:bg-surface-4',
+            )}
+          >
+            {refreshing ? (
+              <Loader2 size={11} className="animate-spin" />
+            ) : (
+              <RefreshCw size={11} />
+            )}
+            {refreshing ? 'Refreshing…' : 'Refresh project context'}
+          </button>
+        </div>
+
+        {error && (
+          <div className="mb-3 rounded-[6px] border border-semantic-error/30 bg-semantic-error/10 px-3 py-2 text-[11px] text-semantic-error">
+            {error}
+          </div>
+        )}
+
+        {!projectPath ? (
+          <ProjectContextEmpty
+            title="No project open"
+            hint="Open a project from the workspace tree to detect its design profile."
+          />
+        ) : loading && !profile ? (
+          <ProjectContextLoading />
+        ) : !profile ? (
+          <ProjectContextEmpty
+            title="No project context available"
+            hint="Open a project with a package.json to enable project-aware design generation."
+          />
+        ) : (
+          <ProjectContextCard profile={profile} projectPath={projectPath} />
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ProjectContextLoading() {
+  return (
+    <div className="flex h-[200px] items-center justify-center rounded-[8px] border border-border-subtle bg-surface-2">
+      <div className="flex items-center gap-2 text-[11.5px] text-text-muted">
+        <Loader2 size={13} className="animate-spin text-accent" />
+        Detecting project profile…
+      </div>
+    </div>
+  );
+}
+
+function ProjectContextEmpty({ title, hint }: { title: string; hint: string }) {
+  return (
+    <div className="flex flex-col items-center justify-center gap-2 rounded-[8px] border border-dashed border-border bg-surface-2/40 px-6 py-10 text-center">
+      <FileCode size={22} className="text-text-dim" />
+      <div className="text-[12px] font-medium text-text-secondary">{title}</div>
+      <div className="max-w-[420px] text-[10.5px] leading-relaxed text-text-dim">
+        {hint}
+      </div>
+    </div>
+  );
+}
+
+interface ProjectContextCardProps {
+  profile: ProjectDesignProfile;
+  projectPath: string;
+}
+
+function ProjectContextCard({ profile, projectPath }: ProjectContextCardProps) {
+  // Chip values are user-facing labels — capitalize where the union value
+  // is lowercased. Keep the raw union value for the title attr so power
+  // users can grep their config.
+  const chips: Array<{ label: string; value: string; title: string }> = [
+    {
+      label: 'Framework',
+      value: prettyFramework(profile.framework),
+      title: profile.framework,
+    },
+    {
+      label: 'Styling',
+      value: prettyStyling(profile.styling),
+      title: profile.styling,
+    },
+    {
+      label: 'Package manager',
+      value: profile.packageManager,
+      title: profile.packageManager,
+    },
+    {
+      label: 'Language',
+      value: profile.typescript ? 'TypeScript' : 'JavaScript',
+      title: profile.typescript ? 'tsconfig.json present' : 'no tsconfig.json',
+    },
+  ];
+
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+        {chips.map((c) => (
+          <Chip
+            key={c.label}
+            label={c.label}
+            value={c.value}
+            title={c.title}
+          />
+        ))}
+      </div>
+
+      <div className="flex flex-col gap-1">
+        <div className="text-[10px] font-semibold uppercase tracking-wide text-text-muted">
+          Summary
+        </div>
+        <pre className="max-h-[360px] overflow-auto whitespace-pre-wrap rounded-[6px] border border-border-subtle bg-surface-3 px-3 py-2 font-mono text-[10.5px] leading-relaxed text-text-secondary">
+          {profile.summary || '(empty)'}
+        </pre>
+      </div>
+
+      {profile.evidence.length > 0 && (
+        <div className="flex flex-col gap-1">
+          <div className="text-[10px] font-semibold uppercase tracking-wide text-text-muted">
+            Evidence
+          </div>
+          <div className="text-[10.5px] leading-relaxed text-text-dim">
+            Detected from:{' '}
+            {profile.evidence.map((file, i) => (
+              <span key={file}>
+                <code className="font-mono text-text-secondary">{file}</code>
+                {i < profile.evidence.length - 1 ? ', ' : ''}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-border-subtle pt-3 text-[10.5px] text-text-dim">
+        <span>
+          Last built:{' '}
+          <span className="text-text-secondary">
+            {formatRelativeTime(profile.builtAt)}
+          </span>
+        </span>
+        <span className="text-text-dim/60">·</span>
+        <span className="truncate font-mono">
+          {projectPath.replace(/^\/Users\/[^/]+/, '~')}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function Chip({
+  label,
+  value,
+  title,
+}: {
+  label: string;
+  value: string;
+  title?: string;
+}) {
+  return (
+    <div
+      className="rounded-[6px] border border-border-subtle bg-surface-3 px-2.5 py-1.5"
+      title={title}
+    >
+      <div className="text-[9.5px] font-semibold uppercase tracking-wide text-text-muted">
+        {label}
+      </div>
+      <div className="mt-0.5 truncate text-[11.5px] font-medium text-text">
+        {value}
+      </div>
+    </div>
+  );
+}
+
+function prettyFramework(kind: ProjectDesignProfile['framework']): string {
+  switch (kind) {
+    case 'vite':
+      return 'Vite';
+    case 'next':
+      return 'Next.js';
+    case 'astro':
+      return 'Astro';
+    case 'remix':
+      return 'Remix';
+    case 'unknown':
+      return 'Unknown';
+  }
+}
+
+function prettyStyling(kind: ProjectDesignProfile['styling']): string {
+  switch (kind) {
+    case 'tailwind':
+      return 'Tailwind';
+    case 'vanilla-css':
+      return 'Vanilla CSS';
+    case 'styled-components':
+      return 'styled-components';
+    case 'css-modules':
+      return 'CSS Modules';
+    case 'unknown':
+      return 'Unknown';
+  }
+}
+
+function formatRelativeTime(ts: number): string {
+  const diff = Date.now() - ts;
+  if (diff < 0) return 'just now';
+  const sec = Math.floor(diff / 1000);
+  if (sec < 45) return 'just now';
+  const min = Math.floor(sec / 60);
+  if (min < 1) return `${sec} seconds ago`;
+  if (min === 1) return '1 minute ago';
+  if (min < 60) return `${min} minutes ago`;
+  const hr = Math.floor(min / 60);
+  if (hr === 1) return '1 hour ago';
+  if (hr < 24) return `${hr} hours ago`;
+  const day = Math.floor(hr / 24);
+  if (day === 1) return 'yesterday';
+  if (day < 30) return `${day} days ago`;
+  const month = Math.floor(day / 30);
+  if (month === 1) return '1 month ago';
+  if (month < 12) return `${month} months ago`;
+  const year = Math.floor(day / 365);
+  if (year === 1) return '1 year ago';
+  return `${year} years ago`;
 }
 
 // ─── Skills browser ──────────────────────────────────────────────────

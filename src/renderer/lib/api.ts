@@ -44,6 +44,8 @@ import type {
   CreateDesignInput,
   DesignAdapterDetectResult,
   DesignEvent,
+  DesignFollowUpInput,
+  DesignMessage,
   DesignSaveEditsInput,
   DesignScreen,
   DesignSkill,
@@ -53,6 +55,7 @@ import type {
   DevServerEvent,
   DevServerInfo,
   DevServerStartInput,
+  ProjectDesignProfile,
   RegenerateDesignInput,
 } from '@shared/design';
 
@@ -238,6 +241,23 @@ export interface DevspaceApi {
     listSkills: (projectPath: string | null) => Promise<DesignSkill[]>;
     listSystems: (projectPath: string | null) => Promise<DesignSystem[]>;
     readHtml: (projectPath: string, screenId: string, versionId?: string) => Promise<string>;
+    // v0.10: follow-up turn on an existing screen. Resolves once the
+    // generation has been queued — the actual streaming + final
+    // assistant message arrive via DesignEvent ('message_appended',
+    // 'message_updated', 'message_finalized', 'generation_complete').
+    followUp: (input: DesignFollowUpInput) => Promise<DesignScreen>;
+    // Eager read of the transcript for a screen. Backward-compat: when
+    // the persisted screen has no messages, returns the synthetic
+    // `[{role:'user', content: brief}]` seed so the UI can render
+    // without special-casing legacy screens.
+    listMessages: (projectPath: string, screenId: string) => Promise<DesignMessage[]>;
+    // v0.10: read the cached project profile. Returns null when no
+    // package.json is present. Lazily builds on first call.
+    getProfile: (projectPath: string) => Promise<ProjectDesignProfile | null>;
+    // Force-refresh the cached profile (user clicked "Refresh project
+    // context" in DesignSettings, or just edited package.json and wants
+    // the next generation to pick it up immediately).
+    rebuildProfile: (projectPath: string) => Promise<ProjectDesignProfile | null>;
     subscribe: (projectPath: string) => Promise<void>;
     onEvent: (
       projectPath: string,
@@ -463,6 +483,10 @@ function makeStubApi(): DevspaceApi {
       listSkills: () => Promise.resolve([]),
       listSystems: () => Promise.resolve([]),
       readHtml: notWired('design.readHtml'),
+      followUp: notWired('design.followUp'),
+      listMessages: () => Promise.resolve([]),
+      getProfile: () => Promise.resolve(null),
+      rebuildProfile: () => Promise.resolve(null),
       subscribe: notWired('design.subscribe'),
       onEvent: () => () => undefined,
     },

@@ -33,6 +33,7 @@ import type {
   DesignEditOp,
   DesignElementInfo,
   DesignEvent,
+  DesignMessage,
   DesignSaveEditsInput,
   DesignScreen,
   DesignScreenVersion,
@@ -103,6 +104,12 @@ export function DesignView({ projectPath }: DesignViewProps) {
   const [reloadKey, setReloadKey] = useState(0);
   const [toolbarError, setToolbarError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
+  // v0.10: chat-style transcript for the active screen. Owned here (not
+  // in DesignBriefPanel) because the event stream feeds into it and the
+  // follow-up handler lives on this component. Reset whenever the
+  // active screen changes; eagerly loaded via api.design.listMessages
+  // so legacy screens get a synthetic seed without renderer logic.
+  const [messages, setMessages] = useState<DesignMessage[]>([]);
   const onEventRef = useRef<((ev: DesignEvent) => void) | null>(null);
 
   // ─── Phase B inspect/edit state ─────────────────────────────────────
@@ -211,6 +218,40 @@ export function DesignView({ projectPath }: DesignViewProps) {
         }
         return prev;
       });
+      // v0.10: transcript event fan-out. We only mutate the local
+      // `messages` buffer when the event targets the currently-active
+      // screen — other screens' transcripts stay on disk and reload
+      // lazily on switch. This keeps the buffer bounded and avoids the
+      // memory cost of holding every project transcript in memory.
+      if (
+        (ev.kind === 'message_appended' ||
+          ev.kind === 'message_updated' ||
+          ev.kind === 'message_finalized') &&
+        ev.designMessage &&
+        ev.screenId === activeScreenIdRef.current
+      ) {
+        const next = ev.designMessage;
+        setMessages((prev) => {
+          if (ev.kind === 'message_appended') {
+            // Race-safe append: backend MIGHT have already emitted an
+            // update that snuck in first (rare, but the IPC ordering
+            // isn't strictly guaranteed). Dedupe by id.
+            if (prev.some((m) => m.id === next.id)) {
+              return prev.map((m) => (m.id === next.id ? next : m));
+            }
+            return [...prev, next];
+          }
+          // updated / finalized: patch in place. If the id hasn't been
+          // appended yet (race with a fast-streaming first chunk that
+          // arrived before its `message_appended`), fall through and
+          // append so we never silently drop content.
+          const idx = prev.findIndex((m) => m.id === next.id);
+          if (idx === -1) return [...prev, next];
+          const out = prev.slice();
+          out[idx] = next;
+          return out;
+        });
+      }
       // Bump the iframe cache buster ONLY on terminal completion. We
       // intentionally exclude `screen_updated` because mid-generation
       // status pings carry the previous `htmlPath` and would force the
@@ -224,6 +265,44 @@ export function DesignView({ projectPath }: DesignViewProps) {
       }
     };
   });
+
+  // Mirror the active screen id into a ref so the event handler can
+  // route message_* events without re-binding on every screen switch.
+  // Refs are read at event-fire time, which is exactly the staleness
+  // window we need to dodge.
+  const activeScreenIdRef = useRef<string | null>(activeScreenId);
+  useEffect(() => {
+    activeScreenIdRef.current = activeScreenId;
+  }, [activeScreenId]);
+
+  // ─── Transcript: load on screen change ──────────────────────────────
+  //
+  // The backend synthesizes a `[{role:'user', content: brief}]` seed
+  // for legacy screens that predate v0.10, so this call always returns
+  // something renderable for a screen that exists. Empty array is fine
+  // (and expected) before the first follow-up turn streams in.
+  useEffect(() => {
+    if (!projectPath || !activeScreenId) {
+      setMessages([]);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const msgs = await api.design.listMessages(projectPath, activeScreenId);
+        if (!cancelled) setMessages(msgs);
+      } catch (err) {
+        // Legacy / pre-wired backend may not implement listMessages.
+        // Fall back to an empty transcript so the UI renders the empty
+        // state instead of crashing.
+        console.warn('[design] listMessages failed:', err);
+        if (!cancelled) setMessages([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [projectPath, activeScreenId]);
 
   // ─── Derived state ──────────────────────────────────────────────────
   const activeScreen = useMemo(
@@ -300,20 +379,22 @@ export function DesignView({ projectPath }: DesignViewProps) {
     }
   }, [activeScreenId, projectPath]);
 
-  const handleRegenerate = useCallback(
-    async (nextBrief: string) => {
+  // v0.10: replaces handleRegenerate. Every follow-up appends to the
+  // transcript (rather than wholesale-replacing the screen's brief)
+  // and feeds prior conversation back into the next prompt. The
+  // backend streams the assistant reply through `message_*` events,
+  // which the local handler routes into `messages` state.
+  const handleFollowUp = useCallback(
+    async (text: string) => {
       if (!activeScreenId) return;
       setToolbarError(null);
       try {
-        const updated = await api.design.regenerate({
+        await api.design.followUp({
           projectPath,
           screenId: activeScreenId,
-          brief: nextBrief,
+          message: text,
           designSystemSlug: systemSlug ?? undefined,
         });
-        setScreens((prev) =>
-          prev.map((s) => (s.id === updated.id ? updated : s)),
-        );
       } catch (err) {
         setToolbarError((err as Error).message);
       }
@@ -538,10 +619,31 @@ export function DesignView({ projectPath }: DesignViewProps) {
 
   // Wraps setActiveScreenId with a confirm dialog when there are unsaved
   // pending edits, so a stray sidebar click doesn't silently discard the
-  // user's work. No-op if the user clicks the row that's already active.
+  // user's work.
+  //
+  // v0.10 bug fix: clicking the already-active screen used to early-
+  // return unconditionally, which trapped the user when they had
+  // clicked a historical version (preview override set) and wanted to
+  // get back to the latest render — the sidebar row was the obvious
+  // "home" affordance but it did nothing. Now:
+  //   • same id + a preview override is active → clear the override
+  //     (returns to latest version). No confirm dialog because there
+  //     are no pending iframe edits to discard (preview overrides are
+  //     read-only).
+  //   • same id + no override → genuine no-op.
+  //   • different id → existing confirm-dialog + switch path.
   const handleSelectScreen = useCallback(
     (id: string | null) => {
-      if (id === activeScreenId) return;
+      if (id === activeScreenId) {
+        if (preview && preview.screenId === activeScreenId) {
+          // User clicked the screen header while viewing an old version
+          // — interpret as "take me back to the latest". Bump reloadKey
+          // so DesignPreview re-fetches and the iframe re-mounts cleanly.
+          setPreview(null);
+          setReloadKey((k) => k + 1);
+        }
+        return;
+      }
       if (pendingEdits.length > 0) {
         const ok = window.confirm(
           `Discard ${pendingEdits.length} unsaved edit${pendingEdits.length > 1 ? 's' : ''}?`,
@@ -550,7 +652,7 @@ export function DesignView({ projectPath }: DesignViewProps) {
       }
       setActiveScreenId(id);
     },
-    [activeScreenId, pendingEdits.length],
+    [activeScreenId, pendingEdits.length, preview],
   );
 
   const handleDeleteScreen = useCallback(
@@ -666,7 +768,11 @@ export function DesignView({ projectPath }: DesignViewProps) {
             activeHtmlPath={previewHtmlPath}
             open={briefPanelOpen}
             onToggle={() => setBriefPanelOpen((v) => !v)}
-            onRegenerate={handleRegenerate}
+            messages={messages}
+            onFollowUp={handleFollowUp}
+            onCancel={handleCancel}
+            busy={busy}
+            error={toolbarError}
             onSelectVersion={handleSelectVersion}
           />
         </main>

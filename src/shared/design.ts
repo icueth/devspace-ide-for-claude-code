@@ -102,6 +102,84 @@ export interface DesignSaveEditsInput {
   note?: string;
 }
 
+// ─── v0.10: chat-style transcript ───────────────────────────────────────────
+//
+// Phase A/B used a single `brief` string per screen and re-rendered the
+// design from scratch on every regenerate. v0.10 turns the brief field
+// into an append-only transcript so each generation is a follow-up turn
+// that carries prior conversation as context — same UX shape as
+// opendesign's chat surface, but bound to a screen instead of a thread.
+//
+// Backward compat: screens persisted before v0.10 have no `messages`
+// field. The renderer falls back to `brief` when `messages` is absent;
+// the backend lazily upgrades on first follow-up by seeding a synthetic
+// `{role:'user', content: brief}` message.
+
+export type DesignMessageRole = 'user' | 'assistant' | 'system';
+
+export interface DesignMessage {
+  id: string;
+  role: DesignMessageRole;
+  // For user/system messages: the raw text.
+  // For assistant messages: the streaming + final text claude emitted
+  // (raw — UI is responsible for stripping HTML if rendering as text).
+  content: string;
+  // True while a streaming generation is still appending tokens. The
+  // backend emits `message_updated` events with `streaming: true` until
+  // generation_complete fires, at which point the final message is sent
+  // with `streaming: false`.
+  streaming?: boolean;
+  // For assistant messages produced by a successful generation, links
+  // back to the version row that was created. Lets the UI jump from a
+  // transcript turn into the version's preview.
+  versionId?: string;
+  ts: number;
+}
+
+export interface DesignFollowUpInput {
+  projectPath: string;
+  screenId: string;
+  // The new user message. Generation context = prior transcript + this.
+  message: string;
+  // When set, replaces the screen's design system (e.g. user picked a
+  // different brand mid-conversation). Unchanged when omitted.
+  designSystemSlug?: string;
+}
+
+// ─── v0.10: project design profile ──────────────────────────────────────────
+//
+// Auto-detected snapshot of the project's design surface (framework,
+// styling stack, brand cues). Injected into every generation prompt so
+// the model produces output that visually matches what the user is
+// already building. Cached on disk under `.devspace/design/profile.json`
+// with an mtime check against `package.json` for cheap invalidation.
+
+export interface ProjectDesignProfile {
+  projectPath: string;
+  // Framework detection — reuses DevServerKind from Phase C.
+  framework: DevServerKind;
+  // Primary styling stack — reuses StyleAdapterKind so the profile can
+  // hint write-back ergonomics later.
+  styling: StyleAdapterKind | 'unknown';
+  packageManager: 'pnpm' | 'yarn' | 'npm' | 'bun';
+  // Whether the project is TypeScript (tsconfig.json present).
+  typescript: boolean;
+  // Markdown blob the prompt builder injects under "## Project Context".
+  // Pre-rendered so the renderer can show + edit it without re-walking
+  // the project on every keystroke.
+  summary: string;
+  // Files / signals the detector used. Surfaced in a tooltip.
+  evidence: string[];
+  builtAt: number;
+}
+
+export interface ProjectProfileBuildInput {
+  projectPath: string;
+  // Force a fresh rebuild even when cache is valid. Used by the
+  // "Refresh project context" button in DesignSettings.
+  force?: boolean;
+}
+
 export interface DesignScreen {
   id: string;
   name: string;
@@ -126,6 +204,17 @@ export interface DesignScreen {
     runDir: string;
     startedAt: number;
   };
+  // v0.10: chat-style transcript. Optional for backward compat — screens
+  // persisted before 0.10 have only `brief`; the renderer falls back to
+  // `[{role:'user', content: brief}]` for display until the user sends a
+  // follow-up (at which point the backend seeds the array properly).
+  messages?: DesignMessage[];
+  // v0.10: registry-format marker. Absent on v1 screens (pre-0.10
+  // history layout where `history/<id>/` was off-by-one). v2 screens
+  // write `history/<id>/index.html` at gen time, eliminating the
+  // mislabel bug. Hydration tolerates v1 by falling back to `index.html`
+  // for the *latest* version and treating older versions as best-effort.
+  historyVersion?: 1 | 2;
 }
 
 export interface DesignProject {
@@ -160,7 +249,14 @@ export type DesignEventKind =
   | 'generation_started'
   | 'generation_progress'   // free-form status line (tail of stdout)
   | 'generation_complete'
-  | 'generation_error';
+  | 'generation_error'
+  // v0.10: streamed transcript turn deltas. `message_appended` fires when
+  // a new assistant message is created (turn started). `message_updated`
+  // carries the cumulative streaming content. `message_finalized` fires
+  // once the turn settles (success OR cancel) with the final content.
+  | 'message_appended'
+  | 'message_updated'
+  | 'message_finalized';
 
 export interface DesignEvent {
   kind: DesignEventKind;
@@ -170,6 +266,9 @@ export interface DesignEvent {
   screen?: DesignScreen;
   // Free-form progress / error text.
   message?: string;
+  // v0.10: populated on message_* events. The renderer routes by id
+  // (append → push; updated → patch in place; finalized → mark complete).
+  designMessage?: DesignMessage;
   ts: number;
 }
 

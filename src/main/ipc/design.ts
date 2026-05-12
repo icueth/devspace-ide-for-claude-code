@@ -4,11 +4,15 @@ import {
   cancelDesign,
   createDesign,
   deleteDesign,
+  followUp,
+  getProfile,
   getScreen,
+  listMessages,
   listScreens,
   listSkills,
   listSystems,
   readHtml,
+  rebuildProfile,
   regenerateDesign,
   saveEdits,
   subscribeEvents,
@@ -16,6 +20,7 @@ import {
 import { IPC } from '@shared/ipc-channels';
 import type {
   CreateDesignInput,
+  DesignFollowUpInput,
   DesignSaveEditsInput,
   RegenerateDesignInput,
 } from '@shared/design';
@@ -90,4 +95,28 @@ export function registerDesignIpc(): void {
   ipcMain.handle(IPC.DESIGN_SUBSCRIBE, (event, projectPath: string) => {
     subscribeEvents(projectPath, event.sender);
   });
+
+  // ─── v0.10: chat-style transcript + project profile ──────────────────────
+  ipcMain.handle(IPC.DESIGN_FOLLOW_UP, (event, input: DesignFollowUpInput) => {
+    // Auto-subscribe so the renderer reliably receives the streaming
+    // message_* events emitted while the follow-up generates.
+    subscribeEvents(input.projectPath, event.sender);
+    return followUp(input);
+  });
+
+  ipcMain.handle(
+    IPC.DESIGN_LIST_MESSAGES,
+    (_event, projectPath: string, screenId: string) =>
+      listMessages(projectPath, screenId),
+  );
+
+  ipcMain.handle(
+    IPC.DESIGN_GET_PROFILE,
+    (_event, projectPath: string) => getProfile(projectPath),
+  );
+
+  ipcMain.handle(
+    IPC.DESIGN_REBUILD_PROFILE,
+    (_event, projectPath: string) => rebuildProfile(projectPath),
+  );
 }

@@ -26,6 +26,10 @@ import type { WebContents } from 'electron';
 import { generateDesign } from '@main/services/DesignGenerator';
 import { DEVSPACE_BRIDGE_SCRIPT } from '@main/services/design/bridgeScript';
 import { tagDevspaceIds } from '@main/services/design/idTagger';
+import {
+  buildProjectProfile,
+  loadCachedOrBuild,
+} from '@main/services/ProjectProfileBuilder';
 import { readSkill } from '@main/services/SkillsService';
 import { getBuiltinDesignPacksDir } from '@main/utils/designResourcePaths';
 import { IPC } from '@shared/ipc-channels';
@@ -34,12 +38,15 @@ import type {
   CreateDesignInput,
   DesignEvent,
   DesignEventKind,
+  DesignFollowUpInput,
+  DesignMessage,
   DesignProject,
   DesignSaveEditsInput,
   DesignScope,
   DesignScreen,
   DesignSkill,
   DesignSystem,
+  ProjectDesignProfile,
   RegenerateDesignInput,
 } from '@shared/design';
 import type { SkillDef } from '@shared/types';
@@ -51,6 +58,25 @@ const logger = createLogger('Design');
 // oldest version is evicted (and its history dir removed) once a new
 // generation pushes past the cap.
 const MAX_VERSIONS = 20;
+
+// v0.10: hard cap on persisted DesignMessage.content size. The HTML
+// file on disk is the source of truth for assistant output; the message
+// content is purely for UI display. Trim anything past this with a
+// `[truncated]` marker so the registry stays readable + bounded.
+const MESSAGE_CONTENT_MAX_BYTES = 200 * 1024;
+const MESSAGE_TRUNCATION_MARKER = '\n[truncated]';
+
+function truncateMessageContent(raw: string): string {
+  const bytes = Buffer.byteLength(raw, 'utf8');
+  if (bytes <= MESSAGE_CONTENT_MAX_BYTES) return raw;
+  // Slice by UTF-8 byte budget. Buffer.slice gives us a byte-correct
+  // cut; back off to character boundary by re-encoding.
+  const buf = Buffer.from(raw, 'utf8').slice(
+    0,
+    MESSAGE_CONTENT_MAX_BYTES - Buffer.byteLength(MESSAGE_TRUNCATION_MARKER, 'utf8'),
+  );
+  return buf.toString('utf8') + MESSAGE_TRUNCATION_MARKER;
+}
 
 // ─── filesystem layout ──────────────────────────────────────────────────────
 
@@ -239,24 +265,74 @@ async function hydrateFromDisk(state: ProjectState): Promise<void> {
     const arr = Array.isArray(parsed.screens) ? parsed.screens : [];
     for (const s of arr) {
       if (s && typeof s.id === 'string') {
+        // v0.10: prune legacy version rows whose history dir is missing.
+        // Pre-v0.10 generations archived the PREVIOUS index.html under
+        // the NEW versionId — so the very first generation had no
+        // history dir at all, and clicking that row in the version list
+        // produced ENOENT and a blank preview. We drop those rows on
+        // hydrate; the latest version (the live index.html) still works
+        // via readHtml's fallback path.
+        // Stamp historyVersion=2 after prune so we don't re-walk every
+        // boot. The actual `index.html` + history dirs created by v0.10+
+        // generations are correctly self-contained; older screens just
+        // had the off-by-one issue this prune corrects.
+        const cleaned: DesignScreen = s.historyVersion === 2
+          ? s
+          : { ...(await pruneLegacyVersions(state.projectPath, s)), historyVersion: 2 };
+
         // Any screen left mid-generation across a restart is reset to
         // 'error' — Phase A doesn't resume design runs the way chat does
         // since there's no streaming UI to reattach to.
-        if (s.status === 'generating') {
-          state.screens.set(s.id, {
-            ...s,
+        if (cleaned.status === 'generating') {
+          state.screens.set(cleaned.id, {
+            ...cleaned,
             status: 'error',
             errorMessage: 'Generation interrupted by app restart',
             activeRun: undefined,
           });
         } else {
-          state.screens.set(s.id, s);
+          state.screens.set(cleaned.id, cleaned);
         }
       }
     }
   } catch (err) {
     logger.warn(`registry parse failed: ${(err as Error).message}`);
   }
+}
+
+// Drop versions whose `history/<id>/index.html` is missing — these are
+// the v1 (pre-v0.10) layout artifacts where `runGeneration` archived
+// the PREVIOUS html under the NEW versionId. The first-ever generation
+// of every screen had no archive at all, so its v1 row points at a dir
+// that never existed. Keep the version rows whose dirs DO exist (best
+// effort — content may be misaligned but at least readable).
+async function pruneLegacyVersions(
+  projectPath: string,
+  screen: DesignScreen,
+): Promise<DesignScreen> {
+  if (!Array.isArray(screen.versions) || screen.versions.length === 0) {
+    return screen;
+  }
+  const survivors: typeof screen.versions = [];
+  for (const v of screen.versions) {
+    // Validate v.id before composing a filesystem path. A tampered
+    // designs.json with `v.id = "../../../etc"` would otherwise probe
+    // arbitrary filesystem locations via fs.access.
+    if (typeof v.id !== 'string' || !SCREEN_ID_RE.test(v.id)) {
+      logger.warn(`dropping malformed version id on screen ${screen.id}`);
+      continue;
+    }
+    const file = path.join(historyDir(projectPath, screen.id, v.id), 'index.html');
+    try {
+      await fs.promises.access(file);
+      survivors.push(v);
+    } catch {
+      logger.warn(
+        `dropping legacy version ${v.id} for screen ${screen.id} (missing history file)`,
+      );
+    }
+  }
+  return { ...screen, versions: survivors };
 }
 
 async function persistRegistry(state: ProjectState): Promise<void> {
@@ -340,17 +416,39 @@ export async function createDesign(input: CreateDesignInput): Promise<DesignScre
   }
 
   const now = Date.now();
+  // Cap user-supplied brief size at the same limit as assistant content
+  // — paste-bomb defence + bounds the eventual prompt.
+  const cappedBrief =
+    typeof input.brief === 'string' ? truncateMessageContent(input.brief) : '';
+  // v0.10: seed the chat transcript from the initial brief so every
+  // generation, including the first, has a user turn in `messages`.
+  // The renderer can still synthesize a transcript for legacy screens
+  // via listMessages, but new screens carry it natively.
+  const initialMessages: DesignMessage[] =
+    cappedBrief.trim().length > 0
+      ? [
+          {
+            id: randomUUID(),
+            role: 'user',
+            content: cappedBrief,
+            ts: now,
+          },
+        ]
+      : [];
+
   const screen: DesignScreen = {
     id: randomUUID(),
     name: input.name.trim() || 'Untitled screen',
     skillSlug: input.skillSlug,
     designSystemSlug: input.designSystemSlug,
-    brief: input.brief,
+    brief: cappedBrief,
     status: 'pending',
     htmlPath: null,
     createdAt: now,
     updatedAt: now,
     versions: [],
+    messages: initialMessages,
+    historyVersion: 2,
   };
 
   s.screens.set(screen.id, screen);
@@ -377,8 +475,37 @@ export async function regenerateDesign(
   if (screen.status === 'generating') {
     throw new Error(`screen ${input.screenId} is already generating`);
   }
+  // Claim the generating slot synchronously, BEFORE any await. Without
+  // this, two quick double-submits both pass the status check, both
+  // await disk reads, both invoke runGeneration — the second orphans
+  // the first's tmux session.
+  screen.status = 'generating';
+  // Clear stale error / activeRun state before kicking a new run so the
+  // toolbar banner doesn't reappear for a frame and a dead activeRun
+  // pill doesn't resurrect between screen_updated and generation_started.
+  screen.errorMessage = undefined;
+  screen.activeRun = undefined;
 
-  if (typeof input.brief === 'string') screen.brief = input.brief;
+  if (typeof input.brief === 'string') {
+    // v0.10: a fresh brief turns into a new user turn so the transcript
+    // pane shows it as part of the conversation. Legacy renderers that
+    // only call `regenerate` still get backward-compatible behaviour
+    // because we keep `screen.brief` in sync with the latest user turn.
+    ensureMessagesSeeded(screen);
+    // Cap the user-supplied brief size before persisting — the same
+    // hard cap that protects assistant-streamed content also protects
+    // user-supplied content from disk-fill and prompt blow-up.
+    screen.brief = truncateMessageContent(input.brief);
+    if (input.brief.trim().length > 0) {
+      const userTurn: DesignMessage = {
+        id: randomUUID(),
+        role: 'user',
+        content: truncateMessageContent(input.brief),
+        ts: Date.now(),
+      };
+      screen.messages = [...(screen.messages ?? []), userTurn];
+    }
+  }
   if (typeof input.designSystemSlug === 'string') {
     screen.designSystemSlug = input.designSystemSlug;
   }
@@ -473,28 +600,14 @@ export async function saveEdits(
 
   const versionId = randomUUID();
 
-  // Archive the current index.html into history/<versionId>/ before
-  // overwriting. Mirrors runGeneration's success path so version rows
-  // remain consistently retrievable via readHtml(..., versionId).
+  // v0.10 history layout v2: write the NEW content to BOTH `index.html`
+  // AND `history/<newVersionId>/index.html`. Each version row gets its
+  // own self-contained dir at write time — no more off-by-one between
+  // version id and its archived html.
   const indexAbs = screenIndexHtml(s.projectPath, screen.id);
   assertInsideDesignDir(s.projectPath, indexAbs);
   const histDir = historyDir(s.projectPath, screen.id, versionId);
   assertInsideDesignDir(s.projectPath, histDir);
-  try {
-    const prev = await fs.promises.readFile(indexAbs);
-    await fs.promises.mkdir(histDir, { recursive: true });
-    await fs.promises.writeFile(path.join(histDir, 'index.html'), prev);
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code;
-    if (code !== 'ENOENT') {
-      logger.warn(
-        `failed to archive previous html on save: ${(err as Error).message}`,
-      );
-    }
-    // If there's no prior index.html we still proceed — the screen may
-    // have been created but never generated; saving edits anyway is a
-    // valid Phase B operation.
-  }
 
   // Strip ALL inline <script> first — this neutralises the bridge-
   // spoofing attack where a hostile inline script in the original
@@ -512,12 +625,22 @@ export async function saveEdits(
   const hardened = hardenGeneratedHtml(scriptStripped);
 
   await fs.promises.mkdir(path.dirname(indexAbs), { recursive: true });
+  // History file FIRST (same write-order invariant as runGeneration).
+  // A crash between the two writes leaves the OLD index.html in place
+  // and an orphaned history dir — harmless, swept by eviction.
+  await fs.promises.mkdir(histDir, { recursive: true });
+  const histAbs = path.join(histDir, 'index.html');
+  const histTmp = `${histAbs}.tmp-${randomUUID()}`;
+  await fs.promises.writeFile(histTmp, hardened);
+  await fs.promises.rename(histTmp, histAbs);
+  // Then atomically replace index.html.
   const tmp = `${indexAbs}.tmp-${randomUUID()}`;
   await fs.promises.writeFile(tmp, hardened);
   await fs.promises.rename(tmp, indexAbs);
 
   const relHtml = path.relative(designDir(s.projectPath), indexAbs);
   screen.htmlPath = relHtml;
+  screen.historyVersion = 2;
 
   const nextVersions = [
     ...screen.versions,
@@ -574,6 +697,9 @@ export async function deleteDesign(
     await cancelDesign(projectPath, screenId).catch(() => undefined);
   }
   s.screens.delete(screenId);
+  // Drop the rate-limit entry so deleted screens don't accumulate in
+  // the lastSaveAt map across long-running sessions.
+  lastSaveAt.delete(`${s.projectPath}::${screenId}`);
   const target = screenDir(s.projectPath, screenId);
   assertInsideDesignDir(s.projectPath, target);
   try {
@@ -626,15 +752,36 @@ export async function readHtml(
 ): Promise<string> {
   assertValidScreenId(screenId);
   const s = getState(projectPath);
-  let file: string;
+  await s.hydrationPromise;
   if (versionId) {
     assertValidScreenId(versionId);
-    file = path.join(historyDir(s.projectPath, screenId, versionId), 'index.html');
-  } else {
-    file = screenIndexHtml(s.projectPath, screenId);
+    const histFile = path.join(
+      historyDir(s.projectPath, screenId, versionId),
+      'index.html',
+    );
+    assertInsideDesignDir(s.projectPath, histFile);
+    try {
+      return await fs.promises.readFile(histFile, 'utf8');
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code !== 'ENOENT') throw err;
+      // Fallback for legacy (v1) screens whose latest version row never
+      // got a history file written. If `versionId` refers to the LAST
+      // version on the screen, fall through to `index.html` — it is the
+      // latest content. For older versions there's nothing to serve.
+      const screen = s.screens.get(screenId);
+      const last = screen?.versions[screen.versions.length - 1];
+      if (last && last.id === versionId) {
+        const indexAbs = screenIndexHtml(s.projectPath, screenId);
+        assertInsideDesignDir(s.projectPath, indexAbs);
+        return fs.promises.readFile(indexAbs, 'utf8');
+      }
+      throw err;
+    }
   }
-  assertInsideDesignDir(s.projectPath, file);
-  return fs.promises.readFile(file, 'utf8');
+  const indexAbs = screenIndexHtml(s.projectPath, screenId);
+  assertInsideDesignDir(s.projectPath, indexAbs);
+  return fs.promises.readFile(indexAbs, 'utf8');
 }
 
 export function subscribeEvents(projectPath: string, wc: WebContents): void {
@@ -915,6 +1062,24 @@ function parseFrontmatter(raw: string): {
 
 // ─── generation orchestration ───────────────────────────────────────────────
 
+// Seed the transcript when a screen was created pre-v0.10 (no messages
+// field) but has a brief. Returns the seeded messages array; safe to
+// call multiple times (idempotent — returns existing array when set).
+function ensureMessagesSeeded(screen: DesignScreen): DesignMessage[] {
+  if (Array.isArray(screen.messages)) return screen.messages;
+  const seed: DesignMessage[] = [];
+  if (typeof screen.brief === 'string' && screen.brief.trim().length > 0) {
+    seed.push({
+      id: randomUUID(),
+      role: 'user',
+      content: screen.brief,
+      ts: screen.createdAt,
+    });
+  }
+  screen.messages = seed;
+  return seed;
+}
+
 async function runGeneration(
   state: ProjectState,
   screen: DesignScreen,
@@ -922,12 +1087,61 @@ async function runGeneration(
   designSystem: DesignSystem | undefined,
 ): Promise<void> {
   const key = runKey(state.projectPath, screen.id);
+
+  // v0.10: ensure the screen has a transcript. The active user turn is
+  // the LAST message in `screen.messages` (the caller seeded it via
+  // followUp / createDesign), or — for legacy screens — we seed one
+  // from the stored brief so the generator sees something to render.
+  ensureMessagesSeeded(screen);
+
   screen.status = 'generating';
   screen.updatedAt = Date.now();
   screen.errorMessage = undefined;
   await persistScreenMeta(state.projectPath, screen);
   await persistRegistry(state);
   emit(state, 'generation_started', screen.id, { screen });
+
+  // v0.10: emit the active user turn so the renderer's transcript pane
+  // sees it as soon as generation kicks off. The message is already in
+  // `screen.messages` — this is the streaming notification.
+  const lastUser = [...(screen.messages ?? [])]
+    .reverse()
+    .find((m) => m.role === 'user');
+  if (lastUser) {
+    emit(state, 'message_appended', screen.id, { designMessage: lastUser });
+  }
+
+  // v0.10: create the assistant turn placeholder up front so the
+  // renderer can render the streaming bubble immediately. Tokens
+  // appended by `onProgress` will flow into this message via
+  // `message_updated` events.
+  const assistantId = randomUUID();
+  const assistantMessage: DesignMessage = {
+    id: assistantId,
+    role: 'assistant',
+    content: '',
+    streaming: true,
+    ts: Date.now(),
+  };
+  (screen.messages ??= []).push(assistantMessage);
+  emit(state, 'message_appended', screen.id, { designMessage: assistantMessage });
+
+  // v0.10: load the project profile (cache-first). Detection is
+  // best-effort — a failure here must not block generation; we log and
+  // continue without injecting Project Context.
+  let projectProfile: ProjectDesignProfile | null = null;
+  try {
+    projectProfile = await loadCachedOrBuild(state.projectPath);
+  } catch (err) {
+    logger.warn(
+      `profile load failed (continuing without): ${(err as Error).message}`,
+    );
+  }
+
+  // Buffer streaming output so we cap memory + can mirror the same
+  // truncation logic into the persisted message. The HTML on disk
+  // remains the source of truth — this buffer is purely for UI.
+  let streamingContent = '';
 
   try {
     const handle = await generateDesign({
@@ -936,8 +1150,23 @@ async function runGeneration(
       skill,
       designSystem,
       brief: screen.brief,
+      messages: screen.messages,
+      projectProfile,
       onProgress: (message) => {
         emit(state, 'generation_progress', screen.id, { message });
+
+        // Mirror the streamed line into the assistant message. We
+        // append raw lines (claude streams them line-by-line under
+        // `--output-format text`). Trim to the byte cap so an oversize
+        // response doesn't bloat the in-memory message.
+        const nextContent = streamingContent
+          ? `${streamingContent}\n${message}`
+          : message;
+        streamingContent = truncateMessageContent(nextContent);
+        assistantMessage.content = streamingContent;
+        emit(state, 'message_updated', screen.id, {
+          designMessage: assistantMessage,
+        });
       },
       onActiveRun: async (info) => {
         screen.activeRun = info;
@@ -954,9 +1183,18 @@ async function runGeneration(
       screen.status = screen.versions.length > 0 ? 'ready' : 'pending';
       screen.activeRun = undefined;
       screen.updatedAt = Date.now();
+      // Finalize the assistant turn even on cancel — UI needs to know
+      // the streaming bubble is no longer mutating.
+      assistantMessage.streaming = false;
+      assistantMessage.content = truncateMessageContent(
+        streamingContent || '[cancelled]',
+      );
       await persistScreenMeta(state.projectPath, screen);
       await persistRegistry(state);
       emit(state, 'screen_updated', screen.id, { screen });
+      emit(state, 'message_finalized', screen.id, {
+        designMessage: assistantMessage,
+      });
       return;
     }
 
@@ -965,47 +1203,58 @@ async function runGeneration(
       screen.errorMessage = result.error ?? 'no HTML produced';
       screen.activeRun = undefined;
       screen.updatedAt = Date.now();
+      assistantMessage.streaming = false;
+      assistantMessage.content = truncateMessageContent(
+        streamingContent || `[error] ${screen.errorMessage}`,
+      );
       await persistScreenMeta(state.projectPath, screen);
       await persistRegistry(state);
       emit(state, 'generation_error', screen.id, {
         screen,
         message: screen.errorMessage,
       });
+      emit(state, 'message_finalized', screen.id, {
+        designMessage: assistantMessage,
+      });
       return;
     }
 
-    // Successful generation — archive previous index.html into history
-    // before writing the new one. Each version row carries the runId so
-    // the UI can deep-link back to the tmux log.
+    // Successful generation. v0.10 history layout v2: write the NEW
+    // content to BOTH `index.html` AND `history/<versionId>/index.html`
+    // so every version row has a self-contained dir at write time. No
+    // more off-by-one mislabel between version id and archived html.
     const versionId = randomUUID();
-    const prevHtmlAbs = screenIndexHtml(state.projectPath, screen.id);
-    try {
-      const prev = await fs.promises.readFile(prevHtmlAbs);
-      const histDir = historyDir(state.projectPath, screen.id, versionId);
-      await fs.promises.mkdir(histDir, { recursive: true });
-      await fs.promises.writeFile(path.join(histDir, 'index.html'), prev);
-    } catch (err) {
-      const code = (err as NodeJS.ErrnoException).code;
-      if (code !== 'ENOENT') {
-        logger.warn(
-          `failed to archive previous html: ${(err as Error).message}`,
-        );
-      }
-    }
-    await fs.promises.mkdir(path.dirname(prevHtmlAbs), { recursive: true });
+    const indexAbs = screenIndexHtml(state.projectPath, screen.id);
+    assertInsideDesignDir(state.projectPath, indexAbs);
+    const histDir = historyDir(state.projectPath, screen.id, versionId);
+    assertInsideDesignDir(state.projectPath, histDir);
+
+    await fs.promises.mkdir(path.dirname(indexAbs), { recursive: true });
     // Harden the HTML before persisting: inject a strict CSP, strip
     // remote script/iframe/object/embed tags, and neutralize
     // javascript: hrefs. The iframe sandbox already blocks cookies +
     // same-origin escape; this closes the outbound-fetch + phone-home
     // surface that the sandbox alone cannot.
     const hardened = hardenGeneratedHtml(result.html);
-    // Atomic write: tmp + rename, same pattern as the registry.
-    const tmp = `${prevHtmlAbs}.tmp-${randomUUID()}`;
+    // Write history file FIRST so a partial-write crash leaves the OLD
+    // index.html in place. If we wrote index.html first and crashed
+    // before the history write, version[last]'s history dir would not
+    // exist and the latest index.html would be the NEW content while
+    // the version row still pointed at the OLD — silent corruption.
+    await fs.promises.mkdir(histDir, { recursive: true });
+    const histAbs = path.join(histDir, 'index.html');
+    const histTmp = `${histAbs}.tmp-${randomUUID()}`;
+    await fs.promises.writeFile(histTmp, hardened);
+    await fs.promises.rename(histTmp, histAbs);
+    // Then atomically replace index.html — readers see new content only
+    // after the history dir is fully committed.
+    const tmp = `${indexAbs}.tmp-${randomUUID()}`;
     await fs.promises.writeFile(tmp, hardened);
-    await fs.promises.rename(tmp, prevHtmlAbs);
+    await fs.promises.rename(tmp, indexAbs);
 
-    const relHtml = path.relative(designDir(state.projectPath), prevHtmlAbs);
+    const relHtml = path.relative(designDir(state.projectPath), indexAbs);
     screen.htmlPath = relHtml;
+    screen.historyVersion = 2;
     const nextVersions = [
       ...screen.versions,
       {
@@ -1035,20 +1284,136 @@ async function runGeneration(
     screen.activeRun = undefined;
     screen.errorMessage = undefined;
     screen.updatedAt = Date.now();
+
+    // Finalize the assistant message — link it to the new version so
+    // the UI can jump from the transcript turn into the version's
+    // preview, and flip `streaming` off.
+    assistantMessage.streaming = false;
+    assistantMessage.versionId = versionId;
+    assistantMessage.content = truncateMessageContent(
+      streamingContent.length > 0 ? streamingContent : '',
+    );
+
     await persistScreenMeta(state.projectPath, screen);
     await persistRegistry(state);
     emit(state, 'generation_complete', screen.id, { screen });
+    emit(state, 'message_finalized', screen.id, {
+      designMessage: assistantMessage,
+    });
   } catch (err) {
     activeRuns.delete(key);
     screen.status = 'error';
     screen.errorMessage = (err as Error).message;
     screen.activeRun = undefined;
     screen.updatedAt = Date.now();
+    assistantMessage.streaming = false;
+    assistantMessage.content = truncateMessageContent(
+      streamingContent || `[error] ${screen.errorMessage}`,
+    );
     await persistScreenMeta(state.projectPath, screen).catch(() => undefined);
     await persistRegistry(state).catch(() => undefined);
     emit(state, 'generation_error', screen.id, {
       screen,
       message: screen.errorMessage,
     });
+    emit(state, 'message_finalized', screen.id, {
+      designMessage: assistantMessage,
+    });
   }
+}
+
+// ─── v0.10 public API: followUp / listMessages / profile ────────────────────
+
+export async function followUp(input: DesignFollowUpInput): Promise<DesignScreen> {
+  assertValidScreenId(input.screenId);
+  if (typeof input.message !== 'string' || input.message.trim() === '') {
+    throw new Error('follow-up message is empty');
+  }
+  const s = getState(input.projectPath);
+  await s.hydrationPromise;
+  const screen = s.screens.get(input.screenId);
+  if (!screen) throw new Error(`screen not found: ${input.screenId}`);
+  if (screen.status === 'generating') {
+    throw new Error(`screen ${input.screenId} is already generating`);
+  }
+  // Claim the generating slot synchronously, BEFORE any await. Prevents
+  // re-entrancy when the user double-submits during the IPC roundtrip.
+  screen.status = 'generating';
+  screen.errorMessage = undefined;
+  screen.activeRun = undefined;
+
+  // Optional design-system swap mid-conversation.
+  if (typeof input.designSystemSlug === 'string') {
+    screen.designSystemSlug = input.designSystemSlug;
+  }
+
+  // Seed messages if the screen was created pre-v0.10 (only `brief`
+  // was persisted). Append the new user turn, then update brief so
+  // legacy code paths still see the "current request". Cap the user
+  // content size so a paste-bomb can't bloat disk / future prompts.
+  ensureMessagesSeeded(screen);
+  const cappedMessage = truncateMessageContent(input.message);
+  const userTurn: DesignMessage = {
+    id: randomUUID(),
+    role: 'user',
+    content: cappedMessage,
+    ts: Date.now(),
+  };
+  screen.messages = [...(screen.messages ?? []), userTurn];
+  screen.brief = cappedMessage;
+  screen.updatedAt = Date.now();
+
+  const skills = await listSkills(input.projectPath);
+  const skill = skills.find((k) => k.slug === screen.skillSlug);
+  if (!skill) throw new Error(`design skill not found: ${screen.skillSlug}`);
+
+  const systems = await listSystems(input.projectPath);
+  const designSystem = screen.designSystemSlug
+    ? systems.find((d) => d.slug === screen.designSystemSlug)
+    : undefined;
+
+  await persistScreenMeta(s.projectPath, screen);
+  await persistRegistry(s);
+  emit(s, 'screen_updated', screen.id, { screen });
+  // The user turn is also emitted explicitly so renderers that listen
+  // only for `message_*` (and skip `screen_updated`) still see it.
+  emit(s, 'message_appended', screen.id, { designMessage: userTurn });
+
+  void runGeneration(s, screen, skill, designSystem);
+  return screen;
+}
+
+export async function listMessages(
+  projectPath: string,
+  screenId: string,
+): Promise<DesignMessage[]> {
+  assertValidScreenId(screenId);
+  const s = getState(projectPath);
+  await s.hydrationPromise;
+  const screen = s.screens.get(screenId);
+  if (!screen) return [];
+  if (Array.isArray(screen.messages)) return screen.messages;
+  if (typeof screen.brief === 'string' && screen.brief.trim().length > 0) {
+    return [
+      {
+        id: 'legacy-brief',
+        role: 'user',
+        content: screen.brief,
+        ts: screen.createdAt,
+      },
+    ];
+  }
+  return [];
+}
+
+export async function getProfile(
+  projectPath: string,
+): Promise<ProjectDesignProfile | null> {
+  return loadCachedOrBuild(projectPath);
+}
+
+export async function rebuildProfile(
+  projectPath: string,
+): Promise<ProjectDesignProfile | null> {
+  return buildProjectProfile({ projectPath, force: true });
 }
