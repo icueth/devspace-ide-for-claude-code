@@ -2,13 +2,22 @@ import 'highlight.js/styles/github-dark.css';
 
 import {
   ArrowDown,
+  Brain,
   CheckCircle2,
   Circle,
   CircleSlash,
+  FileText,
+  Folder,
+  Globe,
+  ListChecks,
   Loader2,
   MessageSquarePlus,
   Paperclip,
+  Pencil,
+  Plus,
+  Search,
   Send,
+  Terminal,
   Trash2,
   User,
   Users,
@@ -715,6 +724,7 @@ function MessageBubble({ message }: { message: ChatMessage }) {
         c
       </div>
       <div className="min-w-0 flex-1 select-text space-y-2">
+        {message.thinking && <ThinkingBlock text={message.thinking} />}
         {message.toolCalls.length > 0 && (
           <ToolCallList calls={message.toolCalls} />
         )}
@@ -735,70 +745,415 @@ function MessageBubble({ message }: { message: ChatMessage }) {
               {message.content}
             </ReactMarkdown>
           </div>
-        ) : message.status === 'streaming' ? (
-          <div className="flex items-center gap-1.5 text-[11.5px] text-text-muted">
-            <Loader2 size={11} className="animate-spin" />
-            <span>thinking…</span>
-          </div>
+        ) : message.status === 'streaming' && message.toolCalls.length === 0 ? (
+          <WaitingPill message={message} />
         ) : null}
         {message.status === 'error' && (
           <div className="rounded-[7px] border border-semantic-error/40 bg-semantic-error/10 px-3 py-2 font-mono text-[10.5px] text-semantic-error">
             {message.error ?? 'unknown error'}
           </div>
         )}
-        {message.usage && (
-          <div className="text-[10px] text-text-dim">
-            {message.usage.input} in / {message.usage.output} out tokens
-          </div>
-        )}
+        <AssistantFooter message={message} />
       </div>
     </div>
   );
 }
 
-function ToolCallList({ calls }: { calls: ChatMessage['toolCalls'] }) {
+// Live-elapsed footer rendered under every assistant message. Pulsing
+// dot indicates active work; turns static once status leaves
+// 'streaming'. Elapsed time format matches opendesign's: sub-second
+// precision under 10s, whole seconds 10-60s, "<m>m <s>s" past 1m.
+function AssistantFooter({ message }: { message: ChatMessage }) {
+  const elapsedMs = useLiveElapsed(
+    message.createdAt,
+    message.status === 'streaming',
+  );
+  const usage = message.usage;
+  const label = (() => {
+    if (message.status === 'streaming') return 'Working…';
+    if (message.status === 'cancelled') return 'Cancelled';
+    if (message.status === 'error') return 'Failed';
+    return 'Done';
+  })();
+  const active = message.status === 'streaming';
   return (
-    <div className="space-y-1">
-      {calls.map((c) => (
-        <details
-          key={c.id}
-          className="rounded-[7px] border border-border-subtle bg-surface-2"
-        >
-          <summary className="flex cursor-pointer items-center gap-1.5 px-2.5 py-1.5 text-[11px] text-text-secondary">
-            <Wrench size={10} className="text-accent" />
-            <span className="font-mono">{c.name}</span>
-            <span className="truncate text-text-muted">
-              {summarizeInput(c.input)}
-            </span>
-            {c.result === undefined && (
-              <Loader2 size={10} className="ml-auto shrink-0 animate-spin" />
-            )}
-            {c.isError && (
-              <span className="ml-auto shrink-0 text-semantic-error">!</span>
-            )}
-          </summary>
-          <div className="space-y-1.5 border-t border-border-subtle px-2.5 py-1.5">
-            <pre className="overflow-x-auto whitespace-pre-wrap break-words rounded bg-surface-3 px-2 py-1 font-mono text-[10.5px] text-text-muted">
-              {JSON.stringify(c.input, null, 2)}
-            </pre>
-            {c.result !== undefined && (
-              <pre
-                className={cn(
-                  'overflow-x-auto whitespace-pre-wrap break-words rounded px-2 py-1 font-mono text-[10.5px]',
-                  c.isError
-                    ? 'bg-semantic-error/10 text-semantic-error'
-                    : 'bg-surface-3 text-text-secondary',
-                )}
-              >
-                {(c.result ?? '').slice(0, 2000)}
-                {(c.result ?? '').length > 2000 && '\n…(truncated)'}
-              </pre>
-            )}
-          </div>
-        </details>
-      ))}
+    <div className="flex items-center gap-2 pt-1 text-[10.5px] text-text-dim">
+      <span
+        className={cn(
+          'h-[6px] w-[6px] rounded-full',
+          active ? 'bg-accent' : 'bg-text-dim/60',
+        )}
+        style={active ? { animation: 'pulse-ring 1.4s ease-in-out infinite' } : undefined}
+      />
+      <span>{label}</span>
+      <span>·</span>
+      <span className="font-mono">{formatElapsed(elapsedMs)}</span>
+      {usage && (
+        <>
+          <span>·</span>
+          <span className="font-mono">
+            {usage.input} in / {usage.output} out
+          </span>
+        </>
+      )}
     </div>
   );
+}
+
+// Pre-first-output indicator. Shown when status === 'streaming' AND
+// the assistant message has no text or tool calls yet — i.e. claude
+// just started and we haven't seen anything back. Gives a clearer cue
+// than the previous static "thinking…" by progressing as events fire.
+function WaitingPill({ message }: { message: ChatMessage }) {
+  const elapsedMs = useLiveElapsed(message.createdAt, true);
+  const elapsedSec = Math.floor(elapsedMs / 1000);
+  const status = (() => {
+    if (message.thinking) return 'Thinking';
+    return elapsedSec < 2 ? 'Starting' : 'Waiting for claude';
+  })();
+  return (
+    <div className="flex items-center gap-2 rounded-[8px] border border-border-subtle bg-surface-2/60 px-3 py-1.5 text-[11.5px] text-text-muted">
+      <span
+        className="h-[6px] w-[6px] rounded-full bg-accent"
+        style={{ animation: 'pulse-ring 1.4s ease-in-out infinite' }}
+      />
+      <span>{status}…</span>
+      <span className="ml-auto font-mono text-[10.5px] text-text-dim">
+        {formatElapsed(elapsedMs)}
+      </span>
+      {elapsedSec >= 12 && (
+        <span className="text-[10px] text-text-dim">— hit stop to cancel</span>
+      )}
+    </div>
+  );
+}
+
+// Collapsible reveal for claude's thinking-block text. Closed by
+// default so the bubble stays compact; clicking expands the full body
+// in muted prose. Mirrors opendesign's ThinkingBlock pattern.
+function ThinkingBlock({ text }: { text: string }) {
+  const preview = text.replace(/\s+/g, ' ').slice(0, 140);
+  return (
+    <details className="group rounded-[8px] border border-border-subtle bg-surface-2/40">
+      <summary className="flex cursor-pointer items-center gap-1.5 px-2.5 py-1.5 text-[11px] text-text-muted">
+        <Brain size={11} className="text-accent/80" />
+        <span className="font-medium">Thinking</span>
+        <span className="truncate text-[10.5px] text-text-dim">{preview}</span>
+      </summary>
+      <div className="whitespace-pre-wrap border-t border-border-subtle px-2.5 py-2 text-[11.5px] italic leading-relaxed text-text-secondary">
+        {text}
+      </div>
+    </details>
+  );
+}
+
+// Tick at 1s while active so the footer shows live elapsed time. Once
+// active flips false (turn finished), stop the timer — the message's
+// createdAt + final-time gap is fixed and won't change again.
+function useLiveElapsed(startedAt: number, active: boolean): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!active) return;
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [active]);
+  return Math.max(0, now - startedAt);
+}
+
+// 0–9.9s → "7.3s" (one decimal so the user sees real-time progress on
+// fast turns); 10–59s → "32s"; >=1m → "2m 15s". Matches opendesign's
+// format so the user has consistent eyeball-friendly time formatting.
+function formatElapsed(ms: number): string {
+  if (ms < 10_000) {
+    const s = (ms / 1000).toFixed(1);
+    return `${s}s`;
+  }
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return `${s}s`;
+  return `${Math.floor(s / 60)}m ${s % 60}s`;
+}
+
+function ToolCallList({ calls }: { calls: ChatMessage['toolCalls'] }) {
+  const groups = useMemo(() => groupConsecutiveByName(calls), [calls]);
+  return (
+    <div className="space-y-1">
+      {groups.map((g) =>
+        g.length === 1 ? (
+          <ToolCard key={g[0]!.id} call={g[0]!} />
+        ) : (
+          <ToolGroupCard key={g[0]!.id} calls={g} />
+        ),
+      )}
+    </div>
+  );
+}
+
+// Bucket consecutive calls that share the same tool name into one group
+// so the renderer can collapse them into a single disclosure ("Editing
+// × 3 · Done"). NON-consecutive groups stay separate — interleaving
+// Edit/Bash/Edit produces three rows, not one merged Edit group.
+function groupConsecutiveByName(
+  calls: ChatMessage['toolCalls'],
+): Array<ChatMessage['toolCalls']> {
+  const out: Array<ChatMessage['toolCalls']> = [];
+  for (const c of calls) {
+    const last = out[out.length - 1];
+    if (last && last[0]!.name === c.name) {
+      last.push(c);
+    } else {
+      out.push([c]);
+    }
+  }
+  return out;
+}
+
+// Outer card for a run of same-tool calls. Summary head shows the
+// verb-ing form ("Editing × 3"), count, aggregate status, and the most
+// recent argument (so the user can see at a glance what the latest call
+// touched). Expanding renders each call as a full ToolCard so the user
+// can inspect inputs/results without having to ask claude.
+function ToolGroupCard({ calls }: { calls: ChatMessage['toolCalls'] }) {
+  const meta = toolDisplay(calls[0]!.name, calls[0]!.input);
+  const total = calls.length;
+  const runningCount = calls.filter((c) => c.result === undefined).length;
+  const errorCount = calls.filter((c) => c.isError).length;
+  const doneCount = total - runningCount;
+  const lastArg = toolDisplay(
+    calls[calls.length - 1]!.name,
+    calls[calls.length - 1]!.input,
+  ).summary;
+  const aggregateStatus =
+    runningCount > 0
+      ? `Running · ${doneCount}/${total} done`
+      : errorCount > 0
+        ? `${errorCount} error${errorCount === 1 ? '' : 's'} of ${total}`
+        : `Done · ${total}`;
+  const borderColor =
+    errorCount > 0
+      ? 'border-semantic-error/40'
+      : runningCount > 0
+        ? 'border-accent/30'
+        : 'border-border-subtle';
+  return (
+    <details className={cn('rounded-[7px] border bg-surface-2', borderColor)}>
+      <summary className="flex cursor-pointer items-center gap-1.5 px-2.5 py-1.5 text-[11px] text-text-secondary">
+        <meta.Icon
+          size={11}
+          className={cn(
+            errorCount > 0
+              ? 'text-semantic-error'
+              : runningCount > 0
+                ? 'text-accent'
+                : 'text-accent/80',
+          )}
+        />
+        <span className="font-medium text-text">
+          {gerund(meta.verb)} × {total}
+        </span>
+        <span className="text-text-muted">·</span>
+        <span className="text-text-muted">{aggregateStatus}</span>
+        {lastArg && (
+          <span className="ml-2 truncate font-mono text-[10.5px] text-text-dim">
+            {lastArg}
+          </span>
+        )}
+        {runningCount > 0 && (
+          <Loader2
+            size={10}
+            className="ml-auto shrink-0 animate-spin text-accent"
+          />
+        )}
+      </summary>
+      <div className="space-y-1 border-t border-border-subtle p-1.5">
+        {calls.map((c) => (
+          <ToolCard key={c.id} call={c} />
+        ))}
+      </div>
+    </details>
+  );
+}
+
+// "Edit" → "Editing", "Read" → "Reading", "Bash" → "Running", …
+// Falls back to "<verb>ing" for unknown verbs.
+function gerund(verb: string): string {
+  switch (verb) {
+    case 'Read':
+      return 'Reading';
+    case 'Edit':
+      return 'Editing';
+    case 'Write':
+      return 'Writing';
+    case 'Bash':
+      return 'Running';
+    case 'Glob':
+      return 'Globbing';
+    case 'Grep':
+      return 'Grepping';
+    case 'Todo':
+      return 'Updating todos';
+    case 'Dispatch':
+      return 'Dispatching';
+    case 'Fetch':
+      return 'Fetching';
+    case 'Search':
+      return 'Searching';
+    default:
+      return verb.endsWith('e') ? `${verb.slice(0, -1)}ing` : `${verb}ing`;
+  }
+}
+
+// One card per tool invocation. Head row: tool-specific icon + verb
+// + concise argument summary + status indicator. Expanding shows the
+// full input JSON + tool output. Matches the "per-tool family card"
+// pattern from opendesign while staying within DevSpace's existing
+// details/summary disclosure idiom.
+function ToolCard({ call }: { call: ChatMessage['toolCalls'][number] }) {
+  const meta = toolDisplay(call.name, call.input);
+  const running = call.result === undefined;
+  const errored = !!call.isError;
+  return (
+    <details
+      className={cn(
+        'rounded-[7px] border bg-surface-2',
+        errored
+          ? 'border-semantic-error/40'
+          : running
+            ? 'border-accent/30'
+            : 'border-border-subtle',
+      )}
+    >
+      <summary className="flex cursor-pointer items-center gap-1.5 px-2.5 py-1.5 text-[11px] text-text-secondary">
+        <meta.Icon
+          size={11}
+          className={cn(
+            errored
+              ? 'text-semantic-error'
+              : running
+                ? 'text-accent'
+                : 'text-accent/80',
+          )}
+        />
+        <span className="font-medium text-text">{meta.verb}</span>
+        {meta.summary && (
+          <span
+            className={cn(
+              'truncate font-mono text-[10.5px]',
+              errored ? 'text-semantic-error/80' : 'text-text-muted',
+            )}
+          >
+            {meta.summary}
+          </span>
+        )}
+        {running && (
+          <Loader2 size={10} className="ml-auto shrink-0 animate-spin text-accent" />
+        )}
+        {!running && !errored && (
+          <CheckCircle2
+            size={10}
+            className="ml-auto shrink-0 text-semantic-success/70"
+          />
+        )}
+        {errored && (
+          <XCircle
+            size={10}
+            className="ml-auto shrink-0 text-semantic-error"
+          />
+        )}
+      </summary>
+      <div className="space-y-1.5 border-t border-border-subtle px-2.5 py-1.5">
+        <pre className="overflow-x-auto whitespace-pre-wrap break-words rounded bg-surface-3 px-2 py-1 font-mono text-[10.5px] text-text-muted">
+          {JSON.stringify(call.input, null, 2)}
+        </pre>
+        {call.result !== undefined && (
+          <pre
+            className={cn(
+              'overflow-x-auto whitespace-pre-wrap break-words rounded px-2 py-1 font-mono text-[10.5px]',
+              errored
+                ? 'bg-semantic-error/10 text-semantic-error'
+                : 'bg-surface-3 text-text-secondary',
+            )}
+          >
+            {(call.result ?? '').slice(0, 2000)}
+            {(call.result ?? '').length > 2000 && '\n…(truncated)'}
+          </pre>
+        )}
+      </div>
+    </details>
+  );
+}
+
+// Per-tool display metadata: icon + verb ("Read", "Edit", …) +
+// argument summary tuned per tool. Falling back to <Wrench/> + the
+// raw tool name for tools we don't know about. Keep this table
+// honest — Claude can name tools anything (custom MCP servers,
+// agent.tools allow-lists) so the fallback path runs often.
+function toolDisplay(
+  name: string,
+  input: Record<string, unknown>,
+): {
+  Icon: typeof Wrench;
+  verb: string;
+  summary: string;
+} {
+  switch (name) {
+    case 'Read': {
+      const fp = (input.file_path as string) ?? '';
+      return { Icon: FileText, verb: 'Read', summary: shortPath(fp) };
+    }
+    case 'Edit':
+    case 'MultiEdit': {
+      const fp = (input.file_path as string) ?? '';
+      return { Icon: Pencil, verb: 'Edit', summary: shortPath(fp) };
+    }
+    case 'Write': {
+      const fp = (input.file_path as string) ?? '';
+      return { Icon: Plus, verb: 'Write', summary: shortPath(fp) };
+    }
+    case 'Bash': {
+      const cmd = (input.command as string) ?? '';
+      return { Icon: Terminal, verb: 'Bash', summary: truncate(cmd, 80) };
+    }
+    case 'Glob': {
+      const pat = (input.pattern as string) ?? '';
+      return { Icon: Folder, verb: 'Glob', summary: pat };
+    }
+    case 'Grep': {
+      const pat = (input.pattern as string) ?? '';
+      return { Icon: Search, verb: 'Grep', summary: `"${truncate(pat, 60)}"` };
+    }
+    case 'TodoWrite': {
+      const todos = Array.isArray(input.todos) ? (input.todos as unknown[]) : [];
+      return {
+        Icon: ListChecks,
+        verb: 'Todo',
+        summary: `${todos.length} item${todos.length === 1 ? '' : 's'}`,
+      };
+    }
+    case 'Task': {
+      const subagent = (input.subagent_type as string) ?? 'subagent';
+      const desc = (input.description as string) ?? '';
+      return {
+        Icon: Users,
+        verb: 'Dispatch',
+        summary: desc ? `${subagent} · ${truncate(desc, 50)}` : subagent,
+      };
+    }
+    case 'WebFetch': {
+      const url = (input.url as string) ?? '';
+      return { Icon: Globe, verb: 'Fetch', summary: truncate(url, 80) };
+    }
+    case 'WebSearch': {
+      const q = (input.query as string) ?? '';
+      return { Icon: Search, verb: 'Search', summary: `"${truncate(q, 60)}"` };
+    }
+    default: {
+      return {
+        Icon: Wrench,
+        verb: name,
+        summary: summarizeInput(input),
+      };
+    }
+  }
 }
 
 function TeamRunBubble({ message }: { message: ChatMessage }) {

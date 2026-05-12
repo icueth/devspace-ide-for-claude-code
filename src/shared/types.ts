@@ -218,6 +218,47 @@ export interface ChatThread {
   // from .devspace/chat-config.json is used. Lets the user pin a
   // different model / system prompt / tool set to a specific thread.
   config?: ChatConfig;
+  // Set while a tmux-backed run is in flight for this thread. Persists
+  // across app restarts so on next boot ChatService can re-attach its
+  // watcher to the still-running tmux session and continue streaming
+  // events into the assistant message. Cleared when the run terminates
+  // (done / error / cancelled).
+  activeRun?: ChatActiveRun;
+}
+
+// Metadata describing an in-flight chat run that was spawned inside a
+// detached tmux session. Persisted on disk so the watcher can resume
+// after an app restart — without this, closing the app would orphan the
+// tmux session (still running, still writing to disk) but the renderer
+// would have no way to find it again.
+export interface ChatActiveRun {
+  // Stable identifier (timestamp + randomness) — also the leaf dirname
+  // for runDir and a component of sessionName.
+  runId: string;
+  // Tmux session name. `tmux has-session -t <sessionName>` is how the
+  // watcher decides whether the run is still alive.
+  sessionName: string;
+  // Absolute path to the per-run directory holding prompt.txt /
+  // out.jsonl / stderr.log / done. Reading out.jsonl from offset 0 is
+  // sufficient to reconstruct the assistant's output on resume.
+  runDir: string;
+  // ms-epoch when the run was spawned. Used for stale-run cleanup
+  // heuristics (e.g. a run that's been "active" for >24h is almost
+  // certainly an orphaned record from a crash).
+  startedAt: number;
+  // id of the assistant ChatMessage whose state is being filled by this
+  // run. Solo runs target message.content / message.toolCalls; team
+  // runs target one step inside message.teamRun.steps.
+  assistantMessageId: string;
+  // 'solo'      — single claude --print spawn
+  // 'team-step' — one step inside a sequential pipeline. stepIndex is
+  //               required and points into message.teamRun.steps. After
+  //               this step finishes successfully on resume, the
+  //               pipeline does NOT continue past it (the post-restart
+  //               continuation is intentionally minimal — user can
+  //               always resend if they want more steps).
+  kind: 'solo' | 'team-step';
+  stepIndex?: number;
 }
 
 // Chat-time configuration applied to the claude --print spawn. Every

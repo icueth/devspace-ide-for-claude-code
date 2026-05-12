@@ -1,4 +1,3 @@
-import { type ChildProcess, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -7,10 +6,17 @@ import type { WebContents } from 'electron';
 import { listAgents } from '@main/services/AgentsService';
 import { resolveClaudeBinary } from '@main/services/ClaudeCliLauncher';
 import { getTeam } from '@main/services/TeamsService';
+import {
+  type ChatRunHandle,
+  attachToRun,
+  newRunId,
+  startChatRun,
+} from '@main/services/TmuxChatRunner';
 import { resolveInteractiveShellEnv } from '@main/utils/shellEnv';
 import { createLogger } from '@shared/logger';
 import type {
   AgentDef,
+  ChatActiveRun,
   ChatConfig,
   ChatEvent,
   ChatMessage,
@@ -44,10 +50,11 @@ function chatConfigFile(projectPath: string): string {
 interface ProjectState {
   projectPath: string;
   threads: Map<string, ChatThread>; // by threadId
-  // The live child process for any in-flight turn. One at a time per
-  // project — same model as Claude Code CLI; queuing is the user's
-  // problem if they want multiple turns at once.
-  activeChild: ChildProcess | null;
+  // Live tmux-backed run handle for any in-flight turn. One at a time
+  // per project — same model as Claude Code CLI; queuing is the user's
+  // problem if they want multiple turns at once. The handle is what
+  // cancelActive() reaches for to kill-session the tmux backend.
+  activeRunHandle: ChatRunHandle | null;
   activeThreadId: string | null;
   subscribers: Set<WebContents>;
   // Promise that resolves once the initial disk → memory hydration
@@ -68,15 +75,17 @@ function getState(projectPath: string): ProjectState {
     state = {
       projectPath: key,
       threads: new Map(),
-      activeChild: null,
+      activeRunHandle: null,
       activeThreadId: null,
       subscribers: new Set(),
       hydrationPromise: Promise.resolve(),
     };
     states.set(key, state);
-    state.hydrationPromise = hydrateFromDisk(state).catch((err) => {
-      logger.warn(`hydrate failed for ${key}: ${(err as Error).message}`);
-    });
+    state.hydrationPromise = hydrateFromDisk(state)
+      .then(() => resumeActiveRuns(state!))
+      .catch((err) => {
+        logger.warn(`hydrate failed for ${key}: ${(err as Error).message}`);
+      });
   }
   return state;
 }
@@ -259,12 +268,14 @@ export async function deleteThread(
 
 export function cancelActive(projectPath: string): void {
   const s = states.get(path.resolve(projectPath));
-  if (!s || !s.activeChild) return;
-  try {
-    s.activeChild.kill('SIGTERM');
-  } catch {
-    /* ignore */
-  }
+  if (!s || !s.activeRunHandle) return;
+  // kill() awaits tmux kill-session which we don't need to block on —
+  // the tail loop notices the session disappear and resolves with
+  // cancelled=true, which fires the same finalize path as a normal
+  // exit. Ignore the promise.
+  void s.activeRunHandle.kill().catch((err) => {
+    logger.warn(`cancel kill failed: ${(err as Error).message}`);
+  });
 }
 
 // ─── turn execution ─────────────────────────────────────────────────────────
@@ -275,6 +286,225 @@ function broadcast(state: ProjectState, threadId: string, event: ChatEvent): voi
       wc.send('chat:event', { projectPath: state.projectPath, threadId, event });
     }
   }
+}
+
+// Shape of one JSONL event emitted by `claude --output-format stream-json`.
+// Hoisted so both line-handler factories share the same type.
+interface ClaudeStreamEvent {
+  type?: string;
+  subtype?: string;
+  message?: {
+    content?: Array<
+      | { type: 'text'; text?: string }
+      | { type: 'thinking'; thinking?: string }
+      | {
+          type: 'tool_use';
+          id?: string;
+          name?: string;
+          input?: Record<string, unknown>;
+        }
+      | {
+          type: 'tool_result';
+          tool_use_id?: string;
+          content?: string | { type?: string; text?: string }[];
+          is_error?: boolean;
+        }
+    >;
+  };
+  result?: string;
+  usage?: { input_tokens?: number; output_tokens?: number };
+}
+
+function parseStreamLine(raw: string): ClaudeStreamEvent | null {
+  try {
+    return JSON.parse(raw) as ClaudeStreamEvent;
+  } catch {
+    return null;
+  }
+}
+
+// Build a line-handler that mutates the given assistant message + emits
+// solo-turn events (no stepIndex). Hoisted so the same parser drives
+// both fresh spawns and resume-on-boot.
+function makeSoloLineHandler(
+  state: ProjectState,
+  thread: ChatThread,
+  assistant: ChatMessage,
+): (raw: string) => void {
+  return (raw) => {
+    const e = parseStreamLine(raw);
+    if (!e) return;
+    if (e.type === 'assistant' && e.message?.content) {
+      for (const block of e.message.content) {
+        if (block.type === 'text' && block.text) {
+          assistant.content += block.text;
+          broadcast(state, thread.id, {
+            kind: 'text_delta',
+            text: block.text,
+            ts: Date.now(),
+          });
+        } else if (block.type === 'thinking' && block.thinking) {
+          assistant.thinking = (assistant.thinking ?? '') + block.thinking;
+          broadcast(state, thread.id, {
+            kind: 'thinking_delta',
+            text: block.thinking,
+            ts: Date.now(),
+          });
+        } else if (block.type === 'tool_use') {
+          const id = block.id ?? randomUUID();
+          assistant.toolCalls.push({
+            id,
+            name: block.name ?? 'tool',
+            input: block.input ?? {},
+          });
+          broadcast(state, thread.id, {
+            kind: 'tool_use',
+            toolUseId: id,
+            toolName: block.name,
+            toolInput: block.input,
+            ts: Date.now(),
+          });
+        }
+      }
+    } else if (e.type === 'user' && e.message?.content) {
+      for (const block of e.message.content) {
+        if (block.type === 'tool_result') {
+          const text =
+            typeof block.content === 'string'
+              ? block.content
+              : Array.isArray(block.content)
+                ? block.content
+                    .map((c) =>
+                      typeof c === 'object' && c?.type === 'text'
+                        ? (c.text ?? '')
+                        : '',
+                    )
+                    .join('')
+                : '';
+          const tu = assistant.toolCalls.find(
+            (c) => c.id === block.tool_use_id,
+          );
+          if (tu) {
+            tu.result = text;
+            tu.isError = !!block.is_error;
+          }
+          broadcast(state, thread.id, {
+            kind: 'tool_result',
+            toolUseId: block.tool_use_id,
+            toolResult: text,
+            toolIsError: !!block.is_error,
+            ts: Date.now(),
+          });
+        }
+      }
+    } else if (e.type === 'result' && e.usage) {
+      assistant.usage = {
+        input: e.usage.input_tokens ?? 0,
+        output: e.usage.output_tokens ?? 0,
+      };
+      broadcast(state, thread.id, {
+        kind: 'usage',
+        inputTokens: e.usage.input_tokens,
+        outputTokens: e.usage.output_tokens,
+        ts: Date.now(),
+      });
+    }
+  };
+}
+
+// Same shape as the solo handler but writes into a team step + tags
+// every broadcast event with the step index so the renderer can route
+// it into the right step bubble.
+function makeStepLineHandler(
+  state: ProjectState,
+  thread: ChatThread,
+  stepTarget: TeamStep,
+  stepIndex: number,
+): (raw: string) => void {
+  return (raw) => {
+    const e = parseStreamLine(raw);
+    if (!e) return;
+    if (e.type === 'assistant' && e.message?.content) {
+      for (const block of e.message.content) {
+        if (block.type === 'text' && block.text) {
+          stepTarget.content += block.text;
+          broadcast(state, thread.id, {
+            kind: 'text_delta',
+            text: block.text,
+            stepIndex,
+            ts: Date.now(),
+          });
+        } else if (block.type === 'thinking' && block.thinking) {
+          stepTarget.thinking = (stepTarget.thinking ?? '') + block.thinking;
+          broadcast(state, thread.id, {
+            kind: 'thinking_delta',
+            text: block.thinking,
+            stepIndex,
+            ts: Date.now(),
+          });
+        } else if (block.type === 'tool_use') {
+          const id = block.id ?? randomUUID();
+          stepTarget.toolCalls.push({
+            id,
+            name: block.name ?? 'tool',
+            input: block.input ?? {},
+          });
+          broadcast(state, thread.id, {
+            kind: 'tool_use',
+            toolUseId: id,
+            toolName: block.name,
+            toolInput: block.input,
+            stepIndex,
+            ts: Date.now(),
+          });
+        }
+      }
+    } else if (e.type === 'user' && e.message?.content) {
+      for (const block of e.message.content) {
+        if (block.type === 'tool_result') {
+          const text =
+            typeof block.content === 'string'
+              ? block.content
+              : Array.isArray(block.content)
+                ? block.content
+                    .map((c) =>
+                      typeof c === 'object' && c?.type === 'text'
+                        ? (c.text ?? '')
+                        : '',
+                    )
+                    .join('')
+                : '';
+          const tu = stepTarget.toolCalls.find(
+            (c) => c.id === block.tool_use_id,
+          );
+          if (tu) {
+            tu.result = text;
+            tu.isError = !!block.is_error;
+          }
+          broadcast(state, thread.id, {
+            kind: 'tool_result',
+            toolUseId: block.tool_use_id,
+            toolResult: text,
+            toolIsError: !!block.is_error,
+            stepIndex,
+            ts: Date.now(),
+          });
+        }
+      }
+    } else if (e.type === 'result' && e.usage) {
+      stepTarget.usage = {
+        input: e.usage.input_tokens ?? 0,
+        output: e.usage.output_tokens ?? 0,
+      };
+      broadcast(state, thread.id, {
+        kind: 'usage',
+        inputTokens: e.usage.input_tokens,
+        outputTokens: e.usage.output_tokens,
+        stepIndex,
+        ts: Date.now(),
+      });
+    }
+  };
 }
 
 /**
@@ -288,9 +518,10 @@ function broadcast(state: ProjectState, threadId: string, event: ChatEvent): voi
  */
 export async function sendMessage(req: ChatSendRequest): Promise<{ messageId: string }> {
   const s = getState(req.projectId);
+  await s.hydrationPromise; // wait for resume-on-boot before checking active state
   const thread = s.threads.get(req.threadId);
   if (!thread) throw new Error(`thread not found: ${req.threadId}`);
-  if (s.activeChild) {
+  if (s.activeRunHandle) {
     throw new Error('a chat turn is already running for this project');
   }
 
@@ -453,185 +684,96 @@ async function runClaudeTurn(
   const env = await resolveInteractiveShellEnv();
   const args = buildClaudeArgs(config);
 
+  const handleLine = makeSoloLineHandler(state, thread, assistant);
+
   logger.info(
     `spawn claude (chat) thread=${thread.id.slice(0, 8)} cwd=${state.projectPath} model=${config.model ?? 'default'} tools=${config.allowedTools?.length ?? 'all'}`,
   );
-  const child = spawn(claudeBin, args, {
-    cwd: state.projectPath,
-    env: { ...process.env, ...env },
-    stdio: ['pipe', 'pipe', 'pipe'],
-  });
-  state.activeChild = child;
-  state.activeThreadId = thread.id;
-  child.stdin?.write(prompt);
-  child.stdin?.end();
 
-  broadcast(state, thread.id, {
-    kind: 'status',
-    message: 'running',
-    ts: Date.now(),
-  });
-
-  let lineBuf = '';
-  let stderrBuf = '';
-
-  const handleLine = (raw: string) => {
-    let evt: unknown;
-    try {
-      evt = JSON.parse(raw);
-    } catch {
-      return;
-    }
-    const e = evt as {
-      type?: string;
-      subtype?: string;
-      message?: {
-        content?: Array<
-          | { type: 'text'; text?: string }
-          | { type: 'thinking'; thinking?: string }
-          | {
-              type: 'tool_use';
-              id?: string;
-              name?: string;
-              input?: Record<string, unknown>;
-            }
-          | {
-              type: 'tool_result';
-              tool_use_id?: string;
-              content?: string | { type?: string; text?: string }[];
-              is_error?: boolean;
-            }
-        >;
-      };
-      result?: string;
-      usage?: { input_tokens?: number; output_tokens?: number };
-    };
-
-    if (e.type === 'assistant' && e.message?.content) {
-      for (const block of e.message.content) {
-        if (block.type === 'text' && block.text) {
-          assistant.content += block.text;
-          broadcast(state, thread.id, {
-            kind: 'text_delta',
-            text: block.text,
-            ts: Date.now(),
-          });
-        } else if (block.type === 'thinking' && block.thinking) {
-          assistant.thinking = (assistant.thinking ?? '') + block.thinking;
-          broadcast(state, thread.id, {
-            kind: 'thinking_delta',
-            text: block.thinking,
-            ts: Date.now(),
-          });
-        } else if (block.type === 'tool_use') {
-          const id = block.id ?? randomUUID();
-          assistant.toolCalls.push({
-            id,
-            name: block.name ?? 'tool',
-            input: block.input ?? {},
-          });
-          broadcast(state, thread.id, {
-            kind: 'tool_use',
-            toolUseId: id,
-            toolName: block.name,
-            toolInput: block.input,
-            ts: Date.now(),
-          });
-        }
-      }
-    } else if (e.type === 'user' && e.message?.content) {
-      // user-role events in claude's stream-json carry tool_result blocks
-      // matched back to their tool_use by tool_use_id.
-      for (const block of e.message.content) {
-        if (block.type === 'tool_result') {
-          const text =
-            typeof block.content === 'string'
-              ? block.content
-              : Array.isArray(block.content)
-                ? block.content
-                    .map((c) => (typeof c === 'object' && c?.type === 'text' ? c.text ?? '' : ''))
-                    .join('')
-                : '';
-          const tu = assistant.toolCalls.find(
-            (c) => c.id === block.tool_use_id,
-          );
-          if (tu) {
-            tu.result = text;
-            tu.isError = !!block.is_error;
-          }
-          broadcast(state, thread.id, {
-            kind: 'tool_result',
-            toolUseId: block.tool_use_id,
-            toolResult: text,
-            toolIsError: !!block.is_error,
-            ts: Date.now(),
-          });
-        }
-      }
-    } else if (e.type === 'result') {
-      if (e.usage) {
-        assistant.usage = {
-          input: e.usage.input_tokens ?? 0,
-          output: e.usage.output_tokens ?? 0,
-        };
-        broadcast(state, thread.id, {
-          kind: 'usage',
-          inputTokens: e.usage.input_tokens,
-          outputTokens: e.usage.output_tokens,
-          ts: Date.now(),
-        });
-      }
-    }
-  };
-
-  child.stdout?.on('data', (chunk: Buffer) => {
-    lineBuf += chunk.toString('utf8');
-    let nl: number;
-    while ((nl = lineBuf.indexOf('\n')) >= 0) {
-      const line = lineBuf.slice(0, nl).trim();
-      lineBuf = lineBuf.slice(nl + 1);
-      if (line) handleLine(line);
-    }
-  });
-  child.stderr?.on('data', (chunk: Buffer) => {
-    stderrBuf += chunk.toString('utf8');
-  });
-
-  child.on('error', (err) => {
-    state.activeChild = null;
+  const runId = newRunId();
+  let handle: ChatRunHandle;
+  try {
+    handle = await startChatRun({
+      projectId: state.projectPath,
+      threadId: thread.id,
+      runId,
+      cwd: state.projectPath,
+      claudeBin,
+      args,
+      env: { ...process.env, ...env },
+      prompt,
+      runRoot: path.join(state.projectPath, '.devspace', 'chat'),
+      onLine: handleLine,
+    });
+  } catch (err) {
     assistant.status = 'error';
-    assistant.error = err.message;
+    assistant.error = (err as Error).message;
     broadcast(state, thread.id, {
       kind: 'error',
-      message: err.message,
+      message: assistant.error,
       ts: Date.now(),
     });
     broadcast(state, thread.id, { kind: 'done', ts: Date.now() });
-    void persistThread(state.projectPath, thread);
-  });
-  child.on('exit', (code, signal) => {
-    if (lineBuf.trim()) handleLine(lineBuf.trim());
-    state.activeChild = null;
-    state.activeThreadId = null;
+    await persistThread(state.projectPath, thread);
+    return;
+  }
 
-    if (signal === 'SIGTERM' || signal === 'SIGKILL') {
-      assistant.status = 'cancelled';
-    } else if (code !== 0) {
-      assistant.status = 'error';
-      assistant.error =
-        stderrBuf.trim().slice(-500) || `claude exited ${code}`;
-      broadcast(state, thread.id, {
-        kind: 'error',
-        message: assistant.error,
-        ts: Date.now(),
-      });
-    } else {
-      assistant.status = 'done';
-    }
-    thread.updatedAt = Date.now();
-    broadcast(state, thread.id, { kind: 'done', ts: Date.now() });
-    void persistThread(state.projectPath, thread);
+  state.activeRunHandle = handle;
+  state.activeThreadId = thread.id;
+  thread.activeRun = {
+    runId,
+    sessionName: handle.sessionName,
+    runDir: handle.runDir,
+    startedAt: Date.now(),
+    assistantMessageId: assistant.id,
+    kind: 'solo',
+  };
+  await persistThread(state.projectPath, thread);
+
+  broadcast(state, thread.id, {
+    kind: 'status',
+    message: handle.detached ? 'running (tmux)' : 'running',
+    ts: Date.now(),
   });
+
+  await finalizeSoloRun(state, thread, assistant, handle);
+}
+
+// Wait for the run to terminate, then update the assistant message +
+// thread state. Hoisted out of runClaudeTurn so resumeActiveRuns() can
+// drive the same finalize path when reattaching to an in-flight run.
+async function finalizeSoloRun(
+  state: ProjectState,
+  thread: ChatThread,
+  assistant: ChatMessage,
+  handle: ChatRunHandle,
+): Promise<void> {
+  const result = await handle.promise;
+
+  // Only clear active state if WE are still the owner — defensive
+  // against a race where the user already started another run.
+  if (state.activeRunHandle === handle) {
+    state.activeRunHandle = null;
+    state.activeThreadId = null;
+  }
+  delete thread.activeRun;
+
+  if (result.cancelled) {
+    assistant.status = 'cancelled';
+  } else if (result.error) {
+    assistant.status = 'error';
+    assistant.error = result.error;
+    broadcast(state, thread.id, {
+      kind: 'error',
+      message: assistant.error,
+      ts: Date.now(),
+    });
+  } else {
+    assistant.status = 'done';
+  }
+  thread.updatedAt = Date.now();
+  broadcast(state, thread.id, { kind: 'done', ts: Date.now() });
+  await persistThread(state.projectPath, thread);
 }
 
 // ─── team execution (sequential) ────────────────────────────────────────────
@@ -700,7 +842,8 @@ async function runTeamSequentialTurn(
       .reverse()
       .find((m) => m.role === 'user')?.content ?? '';
 
-  const env = await resolveInteractiveShellEnv();
+  const shellEnv = await resolveInteractiveShellEnv();
+  const env: NodeJS.ProcessEnv = { ...process.env, ...shellEnv };
 
   for (let i = 0; i < team.members.length; i++) {
     const member = team.members[i]!;
@@ -767,6 +910,7 @@ async function runTeamSequentialTurn(
     const result = await runStreamingSpawn({
       state,
       thread,
+      assistant,
       claudeBin,
       args: stepArgs,
       env,
@@ -862,194 +1006,234 @@ function buildSequentialStepPrompt(
 interface StreamingSpawnArgs {
   state: ProjectState;
   thread: ChatThread;
+  assistant: ChatMessage;
   claudeBin: string;
   args: string[];
   env: NodeJS.ProcessEnv;
   prompt: string;
-  // When set, parsed events are routed into the team step at this index
-  // and rebroadcast with the stepIndex field set. When unset, this is a
-  // solo turn (not used today — runClaudeTurn handles its own parsing).
-  stepIndex?: number;
+  stepIndex: number;
   stepTarget: TeamStep;
 }
 
 interface StreamingSpawnResult {
   exitCode: number | null;
-  signal: NodeJS.Signals | null;
   cancelled: boolean;
   error: string | null;
 }
 
 /**
- * Spawn one claude --print invocation, parse its stream-json output, and
- * mirror events into a team step. Returns a promise that resolves when
- * the child exits so the caller can await it in the sequential loop.
- * Each call wires state.activeChild so cancelActive() reaches the right
- * process even mid-pipeline.
+ * Spawn one claude --print invocation INSIDE a detached tmux session,
+ * parse its stream-json output via tail, and mirror events into a team
+ * step. Resolves when the run terminates so the sequential loop can
+ * await it. Persists activeRun on the thread so a mid-pipeline restart
+ * can resume this exact step on next app boot.
  */
-function runStreamingSpawn(
+async function runStreamingSpawn(
   opts: StreamingSpawnArgs,
 ): Promise<StreamingSpawnResult> {
-  const { state, thread, claudeBin, args, env, prompt, stepIndex, stepTarget } =
-    opts;
-  return new Promise<StreamingSpawnResult>((resolve) => {
-    const child = spawn(claudeBin, args, {
+  const {
+    state,
+    thread,
+    assistant,
+    claudeBin,
+    args,
+    env,
+    prompt,
+    stepIndex,
+    stepTarget,
+  } = opts;
+
+  const handleLine = makeStepLineHandler(state, thread, stepTarget, stepIndex);
+  const runId = newRunId();
+
+  let handle: ChatRunHandle;
+  try {
+    handle = await startChatRun({
+      projectId: state.projectPath,
+      threadId: thread.id,
+      runId,
       cwd: state.projectPath,
-      env: { ...process.env, ...env },
-      stdio: ['pipe', 'pipe', 'pipe'],
+      claudeBin,
+      args,
+      env,
+      prompt,
+      runRoot: path.join(state.projectPath, '.devspace', 'chat'),
+      onLine: handleLine,
     });
-    state.activeChild = child;
-    state.activeThreadId = thread.id;
-    child.stdin?.write(prompt);
-    child.stdin?.end();
-
-    let lineBuf = '';
-    let stderrBuf = '';
-
-    const handleLine = (raw: string) => {
-      let evt: unknown;
-      try {
-        evt = JSON.parse(raw);
-      } catch {
-        return;
-      }
-      const e = evt as {
-        type?: string;
-        message?: {
-          content?: Array<
-            | { type: 'text'; text?: string }
-            | { type: 'thinking'; thinking?: string }
-            | {
-                type: 'tool_use';
-                id?: string;
-                name?: string;
-                input?: Record<string, unknown>;
-              }
-            | {
-                type: 'tool_result';
-                tool_use_id?: string;
-                content?: string | { type?: string; text?: string }[];
-                is_error?: boolean;
-              }
-          >;
-        };
-        usage?: { input_tokens?: number; output_tokens?: number };
-      };
-
-      if (e.type === 'assistant' && e.message?.content) {
-        for (const block of e.message.content) {
-          if (block.type === 'text' && block.text) {
-            stepTarget.content += block.text;
-            broadcast(state, thread.id, {
-              kind: 'text_delta',
-              text: block.text,
-              stepIndex,
-              ts: Date.now(),
-            });
-          } else if (block.type === 'thinking' && block.thinking) {
-            stepTarget.thinking = (stepTarget.thinking ?? '') + block.thinking;
-            broadcast(state, thread.id, {
-              kind: 'thinking_delta',
-              text: block.thinking,
-              stepIndex,
-              ts: Date.now(),
-            });
-          } else if (block.type === 'tool_use') {
-            const id = block.id ?? randomUUID();
-            stepTarget.toolCalls.push({
-              id,
-              name: block.name ?? 'tool',
-              input: block.input ?? {},
-            });
-            broadcast(state, thread.id, {
-              kind: 'tool_use',
-              toolUseId: id,
-              toolName: block.name,
-              toolInput: block.input,
-              stepIndex,
-              ts: Date.now(),
-            });
-          }
-        }
-      } else if (e.type === 'user' && e.message?.content) {
-        for (const block of e.message.content) {
-          if (block.type === 'tool_result') {
-            const text =
-              typeof block.content === 'string'
-                ? block.content
-                : Array.isArray(block.content)
-                  ? block.content
-                      .map((c) =>
-                        typeof c === 'object' && c?.type === 'text'
-                          ? (c.text ?? '')
-                          : '',
-                      )
-                      .join('')
-                  : '';
-            const tu = stepTarget.toolCalls.find(
-              (c) => c.id === block.tool_use_id,
-            );
-            if (tu) {
-              tu.result = text;
-              tu.isError = !!block.is_error;
-            }
-            broadcast(state, thread.id, {
-              kind: 'tool_result',
-              toolUseId: block.tool_use_id,
-              toolResult: text,
-              toolIsError: !!block.is_error,
-              stepIndex,
-              ts: Date.now(),
-            });
-          }
-        }
-      } else if (e.type === 'result' && e.usage) {
-        stepTarget.usage = {
-          input: e.usage.input_tokens ?? 0,
-          output: e.usage.output_tokens ?? 0,
-        };
-        broadcast(state, thread.id, {
-          kind: 'usage',
-          inputTokens: e.usage.input_tokens,
-          outputTokens: e.usage.output_tokens,
-          stepIndex,
-          ts: Date.now(),
-        });
-      }
+  } catch (err) {
+    return {
+      exitCode: null,
+      cancelled: false,
+      error: (err as Error).message,
     };
+  }
 
-    child.stdout?.on('data', (chunk: Buffer) => {
-      lineBuf += chunk.toString('utf8');
-      let nl: number;
-      while ((nl = lineBuf.indexOf('\n')) >= 0) {
-        const line = lineBuf.slice(0, nl).trim();
-        lineBuf = lineBuf.slice(nl + 1);
-        if (line) handleLine(line);
-      }
-    });
-    child.stderr?.on('data', (chunk: Buffer) => {
-      stderrBuf += chunk.toString('utf8');
-    });
+  state.activeRunHandle = handle;
+  state.activeThreadId = thread.id;
+  thread.activeRun = {
+    runId,
+    sessionName: handle.sessionName,
+    runDir: handle.runDir,
+    startedAt: Date.now(),
+    assistantMessageId: assistant.id,
+    kind: 'team-step',
+    stepIndex,
+  };
+  await persistThread(state.projectPath, thread);
 
-    child.on('error', (err) => {
-      state.activeChild = null;
-      resolve({
-        exitCode: null,
-        signal: null,
-        cancelled: false,
-        error: err.message,
+  const result = await handle.promise;
+
+  if (state.activeRunHandle === handle) {
+    state.activeRunHandle = null;
+    state.activeThreadId = null;
+  }
+  delete thread.activeRun;
+
+  return {
+    exitCode: result.exitCode,
+    cancelled: result.cancelled,
+    error: result.error,
+  };
+}
+
+// ─── resume on boot ─────────────────────────────────────────────────────────
+
+// Walk every hydrated thread looking for activeRun records, then re-
+// attach a watcher to each one's runDir. The tmux session may have:
+//   1. finished cleanly while the app was closed — done file present,
+//      we finalize from the saved exit code without spawning anything
+//   2. still be running — we resume tailing out.jsonl from offset 0 so
+//      the renderer sees everything that's been streamed so far, then
+//      keep streaming new events as claude writes them
+//   3. been killed (no tmux session, no done file) — finalize as
+//      cancelled
+//
+// Only solo runs get full pipeline continuation on resume. Team-step
+// runs resume the in-flight step but the pipeline does NOT continue
+// past it (the remaining steps get marked cancelled). Re-running the
+// whole turn is the user's job — keeping this simple sidesteps the
+// "did the base config change?" problem.
+async function resumeActiveRuns(state: ProjectState): Promise<void> {
+  for (const thread of state.threads.values()) {
+    if (!thread.activeRun) continue;
+    // Defensive: a malformed thread JSON could leave assistantMessageId
+    // pointing at a non-existent message. Just clear and move on.
+    const run = thread.activeRun;
+    const assistant = thread.messages.find((m) => m.id === run.assistantMessageId);
+    if (!assistant) {
+      logger.warn(
+        `thread ${thread.id.slice(0, 8)} has activeRun pointing at missing message — clearing`,
+      );
+      delete thread.activeRun;
+      await persistThread(state.projectPath, thread);
+      continue;
+    }
+
+    if (state.activeRunHandle) {
+      logger.warn(
+        `thread ${thread.id.slice(0, 8)} resume skipped — another run already active`,
+      );
+      continue;
+    }
+
+    logger.info(
+      `resuming chat run thread=${thread.id.slice(0, 8)} runId=${run.runId} kind=${run.kind}`,
+    );
+
+    if (run.kind === 'solo') {
+      const handleLine = makeSoloLineHandler(state, thread, assistant);
+      const handle = await attachToRun({
+        sessionName: run.sessionName,
+        runDir: run.runDir,
+        onLine: handleLine,
       });
-    });
-    child.on('exit', (code, signal) => {
-      if (lineBuf.trim()) handleLine(lineBuf.trim());
-      state.activeChild = null;
-      state.activeThreadId = null;
-      const cancelled = signal === 'SIGTERM' || signal === 'SIGKILL';
-      let error: string | null = null;
-      if (!cancelled && code !== 0) {
-        error = stderrBuf.trim().slice(-500) || `claude exited ${code}`;
+      state.activeRunHandle = handle;
+      state.activeThreadId = thread.id;
+      broadcast(state, thread.id, {
+        kind: 'status',
+        message: 'resumed (tmux)',
+        ts: Date.now(),
+      });
+      void finalizeSoloRun(state, thread, assistant, handle);
+    } else if (run.kind === 'team-step') {
+      const stepIndex = run.stepIndex ?? -1;
+      const step = assistant.teamRun?.steps[stepIndex];
+      if (!step) {
+        logger.warn(
+          `thread ${thread.id.slice(0, 8)} team-step resume: step ${stepIndex} missing`,
+        );
+        delete thread.activeRun;
+        await persistThread(state.projectPath, thread);
+        continue;
       }
-      resolve({ exitCode: code, signal, cancelled, error });
-    });
+      const handleLine = makeStepLineHandler(state, thread, step, stepIndex);
+      const handle = await attachToRun({
+        sessionName: run.sessionName,
+        runDir: run.runDir,
+        onLine: handleLine,
+      });
+      state.activeRunHandle = handle;
+      state.activeThreadId = thread.id;
+      broadcast(state, thread.id, {
+        kind: 'status',
+        message: `resumed step ${stepIndex + 1} (tmux)`,
+        ts: Date.now(),
+      });
+      void finalizeResumedTeamStep(state, thread, assistant, step, stepIndex, handle);
+    }
+  }
+}
+
+// Mirror of finalizeSoloRun for resumed team steps. We DON'T continue
+// the pipeline past this step — the user gets the in-flight step's
+// output and any later steps stay 'cancelled'. Resending picks up from
+// scratch with fresh team config + base config.
+async function finalizeResumedTeamStep(
+  state: ProjectState,
+  thread: ChatThread,
+  assistant: ChatMessage,
+  step: TeamStep,
+  stepIndex: number,
+  handle: ChatRunHandle,
+): Promise<void> {
+  const result = await handle.promise;
+
+  if (state.activeRunHandle === handle) {
+    state.activeRunHandle = null;
+    state.activeThreadId = null;
+  }
+  delete thread.activeRun;
+
+  step.finishedAt = Date.now();
+  if (result.cancelled) {
+    step.status = 'cancelled';
+    assistant.status = 'cancelled';
+  } else if (result.error) {
+    step.status = 'error';
+    step.error = result.error;
+    assistant.status = 'error';
+    assistant.error = `step ${stepIndex + 1} (${step.agentSlug}) failed: ${result.error}`;
+  } else {
+    step.status = 'done';
+    // Don't auto-continue: mark every later step cancelled so the UI
+    // doesn't spin forever and the user knows the run didn't proceed.
+    if (assistant.teamRun) {
+      for (let j = stepIndex + 1; j < assistant.teamRun.steps.length; j++) {
+        const later = assistant.teamRun.steps[j]!;
+        if (later.status === 'queued' || later.status === 'running') {
+          later.status = 'cancelled';
+        }
+      }
+    }
+    if (assistant.status === 'streaming') assistant.status = 'cancelled';
+  }
+  broadcast(state, thread.id, {
+    kind: 'team_step_end',
+    stepIndex,
+    message: result.error ?? undefined,
+    ts: Date.now(),
   });
+  thread.updatedAt = Date.now();
+  broadcast(state, thread.id, { kind: 'done', ts: Date.now() });
+  await persistThread(state.projectPath, thread);
 }
