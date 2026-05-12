@@ -21,6 +21,7 @@ import type {
 } from '@shared/design';
 import { createLogger } from '@shared/logger';
 
+import { planStyleWrite as planStyleWriteShared } from './jsxStyleWriter';
 import {
   cssPropertyToStyleKey,
   swapClass,
@@ -297,154 +298,11 @@ function planClassSwap(
   return { newClasses: out, summary: `class "${newClass}" applied` };
 }
 
-/**
- * Plan a `style={{ ... }}` insertion or update. Returns the new attribute
- * source text (e.g. `style={{ backgroundColor: '#3b82f6' }}`) plus the
- * replacement span [start, end) on the original file. If `existing` is
- * non-null we replace its span; otherwise we insert just before the
- * opening element's closing `>` or `/>`.
- */
-interface StylePlan {
-  replacement: string;
-  start: number;
-  end: number;
-  summary: string;
-}
-
-function planStyleWrite(
-  source: string,
-  elem: JSXOpeningElementLike,
-  existingStyle: AttrFindResult | null,
-  property: string,
-  value: string,
-): StylePlan {
-  const styleKey = cssPropertyToStyleKey(property);
-  if (!styleKey) {
-    throw new Error(`invalid CSS property name: ${property}`);
-  }
-  const escapedValue = escapeJsString(value);
-  const propPair = `${quoteIdent(styleKey)}: '${escapedValue}'`;
-
-  if (!existingStyle) {
-    // No style attribute — insert one before the closing `>` / `/>`.
-    // Locate the closing token by scanning from elem.end backwards.
-    const insertAt = findOpenElementCloseInsertPos(source, elem);
-    const before = source.slice(elem.start, insertAt);
-    // Pad with a leading space if the char before the insertion isn't
-    // already whitespace.
-    const padLeft = /\s$/.test(before) ? '' : ' ';
-    const replacement = `${padLeft}style={{ ${propPair} }}`;
-    return {
-      replacement,
-      start: insertAt,
-      end: insertAt,
-      summary: `added style.${styleKey} = ${value}`,
-    };
-  }
-
-  // Existing style attribute. Try to update inline; if its expression
-  // isn't a plain ObjectExpression we replace the whole attribute as a
-  // last resort.
-  const exprContainer = existingStyle.exprContainer;
-  const attrNode = existingStyle.attr;
-  if (!exprContainer) {
-    // style="..." (string literal — non-standard, but accept it). Replace
-    // the entire attribute.
-    const replacement = `style={{ ${propPair} }}`;
-    return {
-      replacement,
-      start: attrNode.start,
-      end: attrNode.end,
-      summary: `replaced style with ${styleKey} = ${value}`,
-    };
-  }
-  const expr = (exprContainer as unknown as { expression: BabelNode | null }).expression;
-  if (!expr || expr.type !== 'ObjectExpression') {
-    // Computed expression (e.g. style={someObj}) — too risky to merge.
-    // Replace the entire attribute.
-    const replacement = `style={{ ${propPair} }}`;
-    return {
-      replacement,
-      start: attrNode.start,
-      end: attrNode.end,
-      summary: `replaced computed style with ${styleKey} = ${value}`,
-    };
-  }
-  const props = (expr as unknown as { properties: BabelNode[] }).properties;
-  // Look for an existing property whose key matches (ObjectProperty with
-  // a string-or-ident key equal to styleKey).
-  const existingProp = props.find((p) => {
-    if (p.type !== 'ObjectProperty') return false;
-    const key = (p as unknown as { key: BabelNode; computed?: boolean }).key;
-    if (!key) return false;
-    if (key.type === 'Identifier') {
-      return (key as unknown as { name: string }).name === styleKey;
-    }
-    if (key.type === 'StringLiteral') {
-      return (key as unknown as { value: string }).value === styleKey;
-    }
-    return false;
-  });
-  if (existingProp) {
-    // Replace the value half of the existing key/value pair. Use a tight
-    // splice: from the colon+1 to the property's end.
-    const propNode = existingProp as BabelNode & { value: BabelNode };
-    const valueNode = propNode.value;
-    return {
-      replacement: ` '${escapedValue}'`,
-      start: valueNode.start,
-      end: valueNode.end,
-      summary: `updated style.${styleKey} = ${value}`,
-    };
-  }
-  // Insert a new property at the END of the existing object. Position
-  // ourselves just before the closing `}`.
-  // The ObjectExpression's `end` is one past `}`. Step back to find the
-  // `}`, then insert before it (with a leading comma if the object isn't
-  // empty).
-  const objEnd = expr.end - 1; // position of `}`
-  const lastInside = props.length === 0 ? '' : ', ';
-  // Preserve any whitespace before `}` — if it's already on its own line
-  // we add a comma+space; otherwise inline.
-  const replacement = `${lastInside}${propPair}`;
-  return {
-    replacement,
-    start: objEnd,
-    end: objEnd,
-    summary: `added style.${styleKey} = ${value}`,
-  };
-}
-
-/** Find the position to insert a new attribute — right before the `>` or
- * `/>` that closes the opening element. */
-function findOpenElementCloseInsertPos(
-  source: string,
-  elem: JSXOpeningElementLike,
-): number {
-  // elem.end is the index AFTER the closing token. Walk backwards to
-  // skip whitespace, then position before the `>` (or before `/` of `/>`).
-  let i = elem.end - 1;
-  if (i < 0 || i >= source.length) return elem.end;
-  if (source[i] === '>') {
-    // Self-closing `/>` — back up to the `/` so the insertion lands
-    // before it; otherwise just back up to `>`.
-    if (i > 0 && source[i - 1] === '/') return i - 1;
-    return i;
-  }
-  return elem.end;
-}
-
-/** Quote a JS object-property identifier safely. If the styleKey is a
- * valid ES identifier we leave it bare; otherwise we wrap in single
- * quotes (e.g. `'-webkit-transform'` would otherwise be a syntax error).
- */
-function quoteIdent(s: string): string {
-  return /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(s) ? s : `'${escapeJsString(s)}'`;
-}
-
-function escapeJsString(s: string): string {
-  return s.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
-}
+// `planStyleWrite` (and its quoteIdent / escapeJsString / close-position
+// helpers) moved to `./jsxStyleWriter` so VanillaCssAdapter, CSS-Modules
+// adapter, and styled-components adapter can share the same JSX-splice
+// logic for their fall-back-to-style-prop path. Imported above as
+// `planStyleWriteShared`.
 
 // ─── public entry point ────────────────────────────────────────────────────
 
@@ -562,10 +420,10 @@ export async function applyEdit(
         // No className present even though classOrigin claimed 'literal'.
         // Defensive — fall through to style write.
         const styleAttr = findAttr(elem, 'style');
-        const stylePlan = planStyleWrite(
+        const stylePlan = planStyleWriteShared(
           original,
-          elem,
-          styleAttr,
+          elem as unknown as Parameters<typeof planStyleWriteShared>[1],
+          styleAttr as unknown as Parameters<typeof planStyleWriteShared>[2],
           edit.property,
           edit.value,
         );
@@ -578,10 +436,10 @@ export async function applyEdit(
     } else {
       // Style-prop write fallback.
       const styleAttr = findAttr(elem, 'style');
-      const stylePlan = planStyleWrite(
+      const stylePlan = planStyleWriteShared(
         original,
-        elem,
-        styleAttr,
+        elem as unknown as Parameters<typeof planStyleWriteShared>[1],
+        styleAttr as unknown as Parameters<typeof planStyleWriteShared>[2],
         edit.property,
         edit.value,
       );

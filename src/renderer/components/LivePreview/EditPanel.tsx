@@ -406,13 +406,12 @@ export function EditPanel({ selectedElement, projectPath, onClose }: EditPanelPr
   }, []);
 
   // Apply is disabled when nothing pending, the dry-run is mid-flight,
-  // or the result we already applied is still the freshest one. Also
-  // disabled when the selected adapter isn't implemented in 0.8 — the
-  // only supported adapter today is Tailwind; everything else ships in
-  // 0.9 (vanilla-css / styled-components / css-modules).
+  // or the result we already applied is still the freshest one. As of
+  // v0.9.0 all four adapters are implemented (Tailwind, vanilla-css,
+  // styled-components, css-modules); only `unknown` is still gated.
   const canApply =
     edits.length > 0 &&
-    adapter === 'tailwind' &&
+    adapter !== 'unknown' &&
     run.kind !== 'preview-loading' &&
     run.kind !== 'applying' &&
     !(run.kind === 'applied' && run.result.ok);
@@ -447,12 +446,12 @@ export function EditPanel({ selectedElement, projectPath, onClose }: EditPanelPr
   );
 
   // ─── Adapter mismatch warning ───────────────────────────────────────
-  // 0.8 only implements the Tailwind adapter. Any non-tailwind selection
-  // gets a warning banner — the project may genuinely use that styling
-  // stack, but write-back lands in v0.9.0.
-  const showAdapterUnsupportedWarning =
-    adapter !== 'tailwind' && adapter !== 'unknown';
+  // v0.9.0: all four adapters are implemented. The "unsupported" banner
+  // now only fires for `unknown` (no detectable styling stack); the
+  // historical "vanilla-css ships in 0.9" mismatch warning is retired.
+  const showAdapterUnsupportedWarning = adapter === 'unknown';
   const showAdapterMismatchWarning =
+    false &&
     adapter === 'vanilla-css' &&
     adapterInfo?.preferred === 'tailwind';
 
@@ -626,9 +625,9 @@ export function EditPanel({ selectedElement, projectPath, onClose }: EditPanelPr
             <div className="flex items-start gap-1.5 rounded-[6px] border border-semantic-warn/30 bg-[rgba(234,179,8,0.08)] px-2 py-1.5 text-[10.5px] text-semantic-warn">
               <AlertTriangle size={11} className="mt-0.5 shrink-0" />
               <span>
-                {adapterLabel(adapter)} write-back ships in v0.9.0 — Apply is
-                disabled. Switch to Tailwind to write back this release, or
-                stick with the dry-run preview.
+                No styling stack detected for this project. Apply is disabled
+                — pick a specific adapter from the dropdown if you know which
+                one applies, or stick with the dry-run preview.
               </span>
             </div>
           )}

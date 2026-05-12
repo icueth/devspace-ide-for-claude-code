@@ -5,6 +5,34 @@ All notable changes to DevSpace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.9.0] — 2026-05-12
+
+### Added — Design Studio Phase C3b (multi-adapter write-back)
+
+DevSpace's Design Studio now ships write-back across **every major styling stack**, reaching feature-parity with opendesign's headline value (design in DevSpace, code in the real project, regardless of styling stack):
+
+- **VanillaCssAdapter** — for projects using plain `.css`/`.scss`/`.sass`/`.less` files. Resolves the JSX element's first className to a matching `.classname { ... }` rule anywhere in the project, edits the property in-place, atomic-writes. Compound selectors (`.btn.primary`) match either token. Falls back to a `style={{ }}` write on the JSX file when no rule resolves.
+- **StyledComponentsAdapter** — for `styled-components` / Emotion. Resolves `source.styledComponent.ref` (or `source.ownerRef`) to a `` styled.div`...` `` / `` styled(Base)`...` `` / `` styled.div.attrs(...)`...` `` tagged template, edits the CSS inside. Preserves `${...}` interpolations byte-for-byte; rejects edits that straddle an interpolation.
+- **CssModulesAdapter** — for `.module.css`/`.module.scss` etc. De-hashes runtime classes through three conventions (`<base>__<class>--<hash>`, `<class>--<hash>`, `<class>_<hash>`) and walks underscore positions to handle source classes with embedded underscores (`my_class_name`). Prefers co-located module files over distant ones.
+- **Shared `jsxStyleWriter`** module — extracted from TailwindAdapter so the style-prop fallback is identical across adapters (one source of truth for JSX `style={{ }}` insertion).
+
+### Hardening applied before commit (2 reviewers, 27 findings)
+
+- 🔒 **SEC-MEDIUM** (all 3 adapters): Reject `url(...)` values — Chromium typically ignores `javascript:` URLs in stylesheets but Electron's `<webview>` has historically been more permissive, and `url(http://attacker/x)` would beacon the user's IP on every render of the affected component.
+- 🔒 **SEC-MEDIUM** (VanillaCss): Tightened the CSS-value allowlist to match the other two adapters — dropped `@`/`*`/`+`/`!` which enable at-rule injection / cascade-elevation (`!important`) the user didn't author.
+- 🐛 **BUG-CRITICAL** (StyledComponents): Existing-property regex never matched indented declarations — every multi-line styled-components edit silently appended a duplicate property instead of updating. Fixed by allowing a `\n\s*` anchor in the boundary alternation, then scanning ALL matches and picking the last one at depth 0 (cascade winner). Block comments are stripped before scan so `/* color: red */` sentences aren't mistaken for live declarations.
+- 🐛 **BUG-CRITICAL** (StyledComponents): "No existing declaration" insertion previously used `view.lastIndexOf('}')` which lands inside nested rules (`& > div { ... }`). Now uses outermost depth-0 `}` so the new declaration always goes on the parent component.
+- 🐛 **BUG-HIGH** (StyledComponents): `valueStart` arithmetic clipped the first character of values followed by trailing whitespace (`color: red ;`). Fixed by locating `:` explicitly and skipping whitespace.
+- 🐛 **BUG-HIGH** (VanillaCss): Rule finder regex forbade `.` in its left boundary set, so `.foo` in `.bar.foo { ... }` never matched despite the docstring promising compound-selector support. Added `.` to the boundary class.
+- 🐛 **BUG-HIGH** (CssModules): Underscore-hash de-hash used a greedy regex that mangled source classes containing underscores (`my_class_name`). Now walks every underscore position from right to left, emitting every candidate with a hashable-looking tail and a non-trivial head; the CSS file decides which is real.
+- 🐛 **BUG-HIGH**: Per-file write lock now keys differently per adapter — `tw:<jsx-file>` for Tailwind (which writes the JSX file), `<adapter>:<project>` for the other three (which write a different file than the consumer). Coarser than per-target-file but correct: better to over-serialize within one batch than lose an edit silently.
+
+### Verification
+
+- 187/187 vitest tests pass (30 new for the 3 adapters)
+- Typecheck clean across all three tsconfigs
+- arm64 dmg build clean
+
 ## [0.8.0] — 2026-05-12
 
 ### Added — Design Studio Phase C3a (Tailwind write-back)

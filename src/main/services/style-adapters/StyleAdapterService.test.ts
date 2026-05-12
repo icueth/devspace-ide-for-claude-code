@@ -189,7 +189,12 @@ describe('writeBack — dispatch', () => {
     expect(applied.diff).toContain('bg-blue-500');
   });
 
-  it('returns a stub error for non-tailwind adapters in 0.8', async () => {
+  it('dispatches a vanilla-css preferredAdapter to the vanilla-css adapter (v0.9+)', async () => {
+    // In v0.9.0 the vanilla-css, styled-components, and css-modules
+    // adapters all exist. Dispatching to vanilla-css now actually
+    // runs the adapter — if it can't resolve a rule for the class it
+    // falls back to a style-prop write on the JSX file, so the result
+    // is OK and the file has been touched.
     const { projectPath, filePath } = await buildTailwindProject();
     const { writeBack } = await import(
       '@main/services/style-adapters/StyleAdapterService'
@@ -202,12 +207,15 @@ describe('writeBack — dispatch', () => {
       dryRun: true,
     });
 
-    expect(result.ok).toBe(false);
     expect(result.applied.length).toBe(1);
     const applied = result.applied[0]!;
     expect(applied.adapter).toBe('vanilla-css');
-    expect(applied.error).toBeTruthy();
-    expect(applied.error?.toLowerCase()).toMatch(/not implemented|0\.8/);
+    // The Tailwind project has no plain .css file matching `bg-red-500`,
+    // so vanilla-css falls back to style-prop write on the JSX file —
+    // result should NOT carry a "not implemented" error.
+    if (applied.error) {
+      expect(applied.error.toLowerCase()).not.toMatch(/not implemented/);
+    }
   });
 
   it('rejects an empty edits array with a top-level errorMessage', async () => {

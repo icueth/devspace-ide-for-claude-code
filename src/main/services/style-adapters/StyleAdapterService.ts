@@ -31,7 +31,10 @@ import type {
   StyleAdapterKind,
 } from '@shared/design';
 
+import { applyEdit as applyCssModulesEdit } from './CssModulesAdapter';
+import { applyEdit as applyStyledComponentsEdit } from './StyledComponentsAdapter';
 import { applyEdit as applyTailwindEdit } from './TailwindAdapter';
+import { applyEdit as applyVanillaCssEdit } from './VanillaCssAdapter';
 
 const logger = createLogger('StyleAdapterService');
 
@@ -316,27 +319,42 @@ export async function writeBack(
   const applied: DesignWriteBackApplied[] = [];
   for (const edit of input.edits) {
     const adapter = pickAdapterForEdit(edit, preferred);
+    // Serialize writes per source file so two concurrent writeBacks
+    // touching the same file can't interleave a read-splice-rename
+    // race and silently drop one user's edit. The lock key is the raw
+    // source.ref's file portion FOR TAILWIND (it writes the JSX), or
+    // a per-project lock for adapters that write to a different file
+    // than the JSX consumer (vanilla-css / styled-components /
+    // css-modules can all resolve to a sibling stylesheet or styled
+    // declaration site, and the JSX-consumer key wouldn't serialize
+    // edits that share the resolved target). Per-adapter scope is
+    // coarser than per-target-file would be, but correct: it's better
+    // to over-serialize within one batch than to lose an edit silently.
+    const rawRef = edit?.source?.ref ?? '';
+    let lockKey: string;
     if (adapter === 'tailwind') {
-      // Serialize writes per source file so two concurrent writeBacks
-      // touching the same file can't interleave a read-splice-rename
-      // race and silently drop one user's edit.
-      // The lock key is the raw source.ref's file portion; the adapter
-      // realpaths it later, but the unresolved path is fine as a lock
-      // discriminator (collisions across realpath aliasing are
-      // acceptable — they just over-serialize, never under-serialize).
-      const rawRef = edit?.source?.ref ?? '';
-      const lockKey = rawRef.split(':')[0] || '<no-ref>';
-      // eslint-disable-next-line no-await-in-loop -- serial by design within a batch
-      const result = await withFileLock(lockKey, () =>
-        applyTailwindEdit(projectPath, edit, dryRun),
-      );
-      applied.push(result);
-      continue;
+      lockKey = `tw:${rawRef.split(':')[0] || '<no-ref>'}`;
+    } else {
+      lockKey = `${adapter}:${projectPath}`;
     }
-    // All other adapters are stubbed for 0.8 — return a clear,
-    // actionable error per edit so the UI can dispatch to a "Phase 0.9"
-    // help message.
-    applied.push(notImplementedApplied(edit, adapter));
+    const dispatchEdit = async (): Promise<DesignWriteBackApplied> => {
+      switch (adapter) {
+        case 'tailwind':
+          return applyTailwindEdit(projectPath, edit, dryRun);
+        case 'vanilla-css':
+          return applyVanillaCssEdit(projectPath, edit, dryRun);
+        case 'styled-components':
+          return applyStyledComponentsEdit(projectPath, edit, dryRun);
+        case 'css-modules':
+          return applyCssModulesEdit(projectPath, edit, dryRun);
+        default:
+          // 'unknown' still falls through to a clear "no adapter
+          // resolved" error so the renderer can surface it inline.
+          return notImplementedApplied(edit, adapter);
+      }
+    };
+    // eslint-disable-next-line no-await-in-loop -- serial by design within a batch
+    applied.push(await withFileLock(lockKey, dispatchEdit));
   }
 
   const anyError = applied.some((a) => a.error);
