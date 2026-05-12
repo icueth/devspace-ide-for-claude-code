@@ -5,6 +5,40 @@ All notable changes to DevSpace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.4.1] — 2026-05-12
+
+### Added
+- **Tmux-backed chat runs survive app restart.** Long-running `claude --print`
+  sessions are now launched inside a detached tmux session and stream their
+  stdout to a JSONL transcript on disk
+  (`<project>/.devspace/chat/runs/<runId>.jsonl`). Quitting DevSpace (or a
+  crash, or a renderer reload) no longer kills the in-flight model turn —
+  on the next launch DevSpace scans live tmux sessions tagged with its
+  socket, re-attaches to any matching run, and replays the JSONL into the
+  same chat thread so the user sees the answer arrive as if nothing
+  happened. A new `TmuxChatRunner` owns the spawn / attach / kill /
+  prune lifecycle; ChatService picks the tmux runner automatically when
+  tmux is available on PATH and falls back to a plain detached spawn
+  when it isn't.
+
+### Changed
+- **`ChatService` split into focused modules.** The 1240-line god-object
+  is now three single-responsibility pieces — `ChatService` (orchestration
+  + thread CRUD + IPC surface), `ChatTranscript` (per-thread JSONL
+  persistence + project mapping + atomic stage-and-rename writes), and
+  `ChatLineHandler` (stream-json line parsing + tool-call card synthesis
+  + UI event emission). External call sites and IPC channel shape are
+  unchanged; this is an internal restructure that unblocks the tmux
+  runner and tests.
+- **Vitest harness + smoke tests.** `pnpm test` / `pnpm test:watch` ship
+  in `package.json` now, backed by vitest 3 (pinned to 3.x because
+  vitest 4 requires vite 6+ but the project is on vite 5). 18 smoke
+  tests cover the new line-handler and transcript modules across happy
+  paths (assistant deltas, tool-call cards, multi-line buffering) and
+  edge cases (truncated JSON lines, restart-replay ordering, project-
+  isolation of run files). CI is not wired yet — run locally before
+  cutting a release.
+
 ## [0.4.0] — 2026-05-11
 
 ### Added
@@ -548,6 +582,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   project, persistent tmux-backed CLI panes, multi-agent Team mode, and
   Claude Code account/files settings.
 
+[0.4.1]: https://github.com/icueth/devspace-ide-for-claude-code/releases/tag/v0.4.1
+[0.4.0]: https://github.com/icueth/devspace-ide-for-claude-code/releases/tag/v0.4.0
 [0.3.31]: https://github.com/icueth/devspace-ide-for-claude-code/releases/tag/v0.3.31
 [0.3.30]: https://github.com/icueth/devspace-ide-for-claude-code/releases/tag/v0.3.30
 [0.3.29]: https://github.com/icueth/devspace-ide-for-claude-code/releases/tag/v0.3.29
