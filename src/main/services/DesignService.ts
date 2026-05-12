@@ -817,7 +817,15 @@ async function maybeAddSkill(
   const category =
     typeof def.extra.category === 'string' ? (def.extra.category as string) : '';
   const underDesignSubtree = dir.includes(`${path.sep}design-skills${path.sep}`);
-  const looksLikeDesign = underDesignSubtree || category.toLowerCase() === 'design';
+  // The bundled built-in pack lives at `resources/design-packs/skills/<slug>/`
+  // and contains only design skills by construction — trust it without
+  // requiring a marker. User-supplied skills (global/project scope) must
+  // opt in via the `design-skills/` subtree or `category: design`
+  // frontmatter to avoid picking up unrelated skills.
+  const looksLikeDesign =
+    scope === 'builtin' ||
+    underDesignSubtree ||
+    category.toLowerCase() === 'design';
   if (!looksLikeDesign) return;
   // De-dupe by slug+scope+path so the two-level walk doesn't yield the
   // same skill twice.

@@ -5,6 +5,14 @@ All notable changes to DevSpace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.6.3] — 2026-05-12
+
+### Fixed
+- **Built-in skill and design-system pickers were empty.** The discovery walker only accepted skills under a `design-skills/` subtree or with `category: design` frontmatter, but the bundled `resources/design-packs/skills/<slug>/SKILL.md` layout had neither. Result: all 20 built-in skills (plus 30 design systems) were silently dropped, leaving the Generate button useless. Built-in scope is now trusted by construction (the bundled pack only contains design skills) while user-supplied skills under `~/.claude/skills/` or `<project>/.claude/skills/` still require the marker so the picker doesn't get polluted by unrelated skills.
+
+### Added
+- Regression tests in `DesignDiscovery.test.ts` covering all four acceptance paths (built-in without marker, project without marker rejected, `category: design` frontmatter, `design-skills/` subtree).
+
 ## [0.6.2] — 2026-05-12
 
 ### Fixed
