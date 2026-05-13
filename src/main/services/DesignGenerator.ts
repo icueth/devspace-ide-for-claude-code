@@ -92,37 +92,32 @@ export async function generateDesign(
   // The run's `out.jsonl` will just be the raw text in this case (the
   // chat parser only kicks in when it sees JSONL lines).
   //
-  // S1+S2 hardening (v0.13): design generations should not be able to
+  // S1+S2 hardening (v0.13, revised v0.13.1): design generations must not
   // touch the host filesystem outside the project, hit the network, or
-  // run shell commands — the brief is untrusted user input that can ask
-  // Claude to do unsafe things. The lockdown is layered:
+  // run shell commands. The brief is untrusted user input. Lockdown is:
   //
-  //   1. --permission-mode plan  — Claude's "planning" mode is read-only
-  //      by spec; it cannot invoke Edit/Write/Bash/WebFetch regardless
-  //      of the user's ~/.claude/settings.json allowlist. Belt.
+  //   1. --disallowed-tools …  — explicit denylist for every write-class
+  //      and exfil-class tool. This is the real security boundary in
+  //      `--print` mode: tools listed here cannot be invoked regardless
+  //      of the user's ~/.claude/settings.json allowlist.
   //   2. --allowed-tools Glob,Grep  — explicit allowlist of the inspection
-  //      tools we actually want (project tree walks). Read is intentionally
-  //      OMITTED because `--add-dir` does NOT scope the Read tool to a
-  //      subtree — it would still resolve absolute paths like
-  //      `/Users/<u>/.aws/credentials`. Suspenders.
-  //   3. --disallowed-tools …  — defense-in-depth explicit denial for
-  //      every write-class and exfil-class tool, so even if a future
-  //      Claude CLI release changes the meaning of `plan` mode the
-  //      hardening doesn't silently weaken. Backup suspenders.
+  //      tools the generator is allowed to use. Read is intentionally
+  //      OMITTED — Claude has no need to read source files (we already
+  //      inject project context via ProjectProfileBuilder), and `Read`
+  //      would resolve absolute paths like `/Users/<u>/.aws/credentials`
+  //      that `--add-dir` does not scope.
   //
-  // If we ever need to write back to source code we'll route through
-  // StyleAdapterService, not through Claude. So Write/Edit stay denied.
-  const args = [
-    '--print',
-    '--output-format',
-    'text',
-    '--permission-mode',
-    'plan',
-    '--allowed-tools',
-    'Glob,Grep',
-    '--disallowed-tools',
-    'Bash,WebFetch,WebSearch,Edit,Write,NotebookEdit,Task,Read',
-  ];
+  // PRIOR BUG (v0.13.0): we also passed `--permission-mode plan`. plan is
+  // Claude Code's interactive "research" mode — Claude must call the
+  // `ExitPlanMode` tool before producing real output. In `--print` mode
+  // there is no UI to confirm the plan, so Claude emitted the plan text
+  // itself (not the HTML page). That manifested as "claude did not return
+  // HTML" + no streaming visible. Lesson: plan mode is interactive-only;
+  // for one-shot `--print` runs, `--disallowed-tools` alone is the right
+  // security primitive. If a future hardening pass wants tighter scope,
+  // use `--add-dir <project>` (already implied by cwd) + extend the
+  // disallow list, not `--permission-mode plan`.
+  const args = buildClaudeArgs();
 
   let handle: ChatRunHandle;
   try {
@@ -199,6 +194,22 @@ export async function generateDesign(
     kill: () => handle.kill(),
     completion,
   };
+}
+
+// Pure args builder — exported so DesignGenerator.test.ts can pin this
+// shape down. The plan-mode regression (v0.13.0 → v0.13.1) was invisible
+// to extractHtml tests; pinning the CLI args here is the cheapest way to
+// keep "no `--permission-mode plan` in --print" enforced.
+export function buildClaudeArgs(): string[] {
+  return [
+    '--print',
+    '--output-format',
+    'text',
+    '--allowed-tools',
+    'Glob,Grep',
+    '--disallowed-tools',
+    'Bash,WebFetch,WebSearch,Edit,Write,NotebookEdit,Task,Read',
+  ];
 }
 
 // ─── prompt assembly ────────────────────────────────────────────────────────

@@ -7,7 +7,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { extractHtml } from './DesignGenerator';
+import { buildClaudeArgs, extractHtml } from './DesignGenerator';
 
 describe('extractHtml', () => {
   it('returns null for empty input', () => {
@@ -102,5 +102,42 @@ describe('extractHtml', () => {
     const raw = '```HTML\n<!DOCTYPE html>\n<html></html>\n```';
     const out = extractHtml(raw);
     expect(out).toBe('<!DOCTYPE html>\n<html></html>');
+  });
+});
+
+// Pins the CLI invocation shape. Direct regression for the v0.13.0 bug
+// where `--permission-mode plan` made claude return a plan text instead
+// of HTML in --print mode. Plan mode is interactive-only; never pass it
+// here. If you need a tighter sandbox, extend `--disallowed-tools`.
+describe('buildClaudeArgs', () => {
+  it('uses --print + text output', () => {
+    const args = buildClaudeArgs();
+    expect(args).toContain('--print');
+    expect(args).toContain('--output-format');
+    const fmtIdx = args.indexOf('--output-format');
+    expect(args[fmtIdx + 1]).toBe('text');
+  });
+
+  it('NEVER passes --permission-mode plan in --print mode', () => {
+    const args = buildClaudeArgs();
+    expect(args).not.toContain('--permission-mode');
+    expect(args).not.toContain('plan');
+  });
+
+  it('explicitly disallows write + exfil tools', () => {
+    const args = buildClaudeArgs();
+    const idx = args.indexOf('--disallowed-tools');
+    expect(idx).toBeGreaterThanOrEqual(0);
+    const disallowed = args[idx + 1] ?? '';
+    for (const tool of ['Bash', 'WebFetch', 'WebSearch', 'Edit', 'Write', 'Read']) {
+      expect(disallowed.split(',')).toContain(tool);
+    }
+  });
+
+  it('allows only Glob + Grep for project inspection', () => {
+    const args = buildClaudeArgs();
+    const idx = args.indexOf('--allowed-tools');
+    expect(idx).toBeGreaterThanOrEqual(0);
+    expect(args[idx + 1]).toBe('Glob,Grep');
   });
 });

@@ -5,6 +5,45 @@ All notable changes to DevSpace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.13.1] — 2026-05-13
+
+Hotfix for two visible regressions introduced by the v0.13.0 S1+S2
+hardening pass. Both bugs traced to a single bad CLI flag.
+
+### Fixed
+
+- **Design generation no longer fails with "claude did not return HTML".**
+  v0.13.0 spawned the generator with `--permission-mode plan` as part of
+  the S1+S2 sandboxing. `plan` is Claude Code's interactive research
+  mode — Claude must call `ExitPlanMode` before producing real output.
+  In `--print` (non-interactive) mode there is no UI to confirm the
+  plan, so Claude emitted the plan text and exited; `extractHtml`
+  correctly returned `null` and the screen flipped to `error` ("claude
+  did not return HTML — try refining your brief"). Since `index.html`
+  was never written, clicking the preview also failed with `error
+  invoking remote method 'design:read-html'` (ENOENT). Removed
+  `--permission-mode plan`. The real security boundary is
+  `--disallowed-tools Bash,WebFetch,WebSearch,Edit,Write,NotebookEdit,Task,Read`
+  — that stays. `--allowed-tools Glob,Grep` also stays. No reduction
+  in lockdown surface.
+- **Streaming visible in the chat transcript again.** Plan mode buffers
+  the entire response and emits it at the end; with plan mode removed,
+  `onProgress` fires per line again and the assistant message bubble
+  streams as Claude generates.
+
+### Tests
+
+- New `buildClaudeArgs` pure helper pinned with 4 regression tests that
+  enforce: `--print + text` shape, no `--permission-mode plan`, complete
+  `--disallowed-tools` coverage, `--allowed-tools Glob,Grep`. Closes
+  the test gap that let v0.13.0 ship a broken flag — extractHtml
+  coverage alone could not catch CLI-arg drift.
+
+### Verified
+
+- 284 vitest tests pass (+4 regression).
+- Typecheck clean.
+
 ## [0.13.0] — 2026-05-13
 
 Design Studio polish + understanding-your-project release. Closes the
