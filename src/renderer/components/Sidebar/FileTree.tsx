@@ -3,6 +3,7 @@ import { ChevronDown, ChevronRight, Eye, EyeOff, Folder } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { api } from '@renderer/lib/api';
+import { addFileToChat } from '@renderer/lib/chatAttach';
 import { addFileToClaudeCli } from '@renderer/lib/claudeCli';
 import { cn } from '@renderer/lib/utils';
 import { useEditorStore } from '@renderer/state/editor';
@@ -279,6 +280,18 @@ export function FileTree({ rootPath, onOpenFile }: FileTreeProps) {
                   onOpenFile?.(entry.path);
                 }
               }}
+              // Make every entry draggable into the chat textarea. We
+              // serialize a JSON array (single path here) so the drop
+              // handler can stay uniform — future "multi-select drag"
+              // can extend this without changing the consumer.
+              draggable
+              onDragStart={(e) => {
+                e.dataTransfer.setData(
+                  'application/x-devspace-path',
+                  JSON.stringify([entry.path]),
+                );
+                e.dataTransfer.effectAllowed = 'copy';
+              }}
               className={cn(
                 'group relative flex w-full items-center gap-1.5 rounded-[6px] py-[3px] pr-2 text-left text-[12px] transition-colors',
                 isActiveFile
@@ -379,6 +392,9 @@ export function FileTree({ rootPath, onOpenFile }: FileTreeProps) {
               className="z-50 min-w-[200px] rounded-md border border-border-emphasis bg-surface-raised p-1 text-xs shadow-lg animate-in fade-in-0 zoom-in-95"
               style={{ backgroundColor: 'var(--color-surface-raised)' }}
             >
+              <MenuItem onSelect={() => addFileToChat(entry.path)}>
+                Add to Chat
+              </MenuItem>
               <MenuItem onSelect={() => addFileToClaudeCli(entry.path)}>
                 Add to Claude CLI
               </MenuItem>

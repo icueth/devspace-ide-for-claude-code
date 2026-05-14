@@ -189,4 +189,21 @@ describe('emitChatPrefill / onChatPrefill', () => {
     expect(a).toHaveBeenCalledTimes(1);
     expect(b).toHaveBeenCalledTimes(1);
   });
+
+  it('attach mode carries absolute path through the bridge', () => {
+    // Regression for v0.15.1: FileTree right-click "Add to Chat" and the
+    // textarea drop handler both rely on `attachPath` reaching the
+    // listener intact so it can compute @<rel> against project root.
+    const got: ChatPrefillEvent[] = [];
+    subscribe((e) => got.push(e));
+
+    emitChatPrefill({
+      projectPath: '/proj',
+      text: '',
+      attachPath: '/proj/src/index.ts',
+    });
+
+    expect(got).toHaveLength(1);
+    expect(got[0]!.attachPath).toBe('/proj/src/index.ts');
+  });
 });

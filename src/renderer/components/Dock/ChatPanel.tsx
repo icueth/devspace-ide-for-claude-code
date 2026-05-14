@@ -322,6 +322,17 @@ export function ChatPanel({ projectPath }: ChatPanelProps) {
   useEffect(() => {
     return onChatPrefill((event) => {
       if (event.projectPath !== projectPath) return;
+      // Attach mode: append `@<rel> ` via insertAttachment instead of
+      // replacing the input. Skips thread creation + the "Design context"
+      // toast — those are wrong for a file attach.
+      if (event.attachPath) {
+        insertAttachment(event.attachPath);
+        requestAnimationFrame(() => {
+          inputRef.current?.focus();
+          inputRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        });
+        return;
+      }
       void (async () => {
         if (event.newThread) {
           // Mirror onNewThread: create thread, prepend, switch active.
@@ -358,7 +369,7 @@ export function ChatPanel({ projectPath }: ChatPanelProps) {
         setNotice('Design context loaded — review and send.');
       })();
     });
-  }, [projectPath]);
+  }, [projectPath, insertAttachment]);
 
   const activeThread = useMemo(
     () => threads.find((t) => t.id === activeId) ?? null,
@@ -870,16 +881,37 @@ export function ChatPanel({ projectPath }: ChatPanelProps) {
               }
             }}
             // Drag-and-drop files onto the textarea — drops `@<path>`
-            // tokens into the input the same way the paperclip button
-            // does. Lets the user drop multiple files at once from
-            // Finder.
+            // tokens into the input. Accepts two sources:
+            //   1. OS file drops (Finder) via `Files` MIME
+            //   2. In-app drags from the project file tree via the
+            //      custom `application/x-devspace-path` MIME (payload is
+            //      a JSON array of absolute paths)
             onDragOver={(e) => {
-              if (e.dataTransfer.types.includes('Files')) {
+              const types = e.dataTransfer.types;
+              if (
+                types.includes('Files') ||
+                types.includes('application/x-devspace-path')
+              ) {
                 e.preventDefault();
                 e.dataTransfer.dropEffect = 'copy';
               }
             }}
             onDrop={(e) => {
+              const inApp = e.dataTransfer.getData('application/x-devspace-path');
+              if (inApp) {
+                e.preventDefault();
+                try {
+                  const paths = JSON.parse(inApp) as unknown;
+                  if (Array.isArray(paths)) {
+                    for (const p of paths) {
+                      if (typeof p === 'string' && p) insertAttachment(p);
+                    }
+                  }
+                } catch {
+                  /* malformed payload — ignore */
+                }
+                return;
+              }
               if (!e.dataTransfer.files?.length) return;
               e.preventDefault();
               for (const f of Array.from(e.dataTransfer.files)) {

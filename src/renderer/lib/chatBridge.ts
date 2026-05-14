@@ -14,6 +14,8 @@ export interface ChatPrefillEvent {
   // projects (each panel instance is per-project).
   projectPath: string;
   // The composed text to drop into the chat input. May contain newlines.
+  // Ignored when `attachPath` is set — the panel uses its own
+  // `insertAttachment` helper to format `@<rel> ` against its project root.
   text: string;
   // Optional preferred thread to switch to. When unset, ChatPanel uses
   // the currently-active thread. When set but the thread no longer exists
@@ -22,6 +24,10 @@ export interface ChatPrefillEvent {
   // When true, the panel auto-creates a new thread before pre-filling.
   // Default: false (use the active thread).
   newThread?: boolean;
+  // When set, the listener APPENDS `@<rel> ` to the current input instead
+  // of replacing it. Used by FileTree right-click "Add to Chat" and drag-
+  // and-drop — the user may already be composing a question.
+  attachPath?: string;
 }
 
 type Listener = (event: ChatPrefillEvent) => void;

@@ -5,6 +5,44 @@ All notable changes to DevSpace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.15.1] — 2026-05-14
+
+Tiny UX patch over 0.15.0: bring file references into the main chat
+without the user having to type the path. The CLI dock already had
+"Add to Claude CLI" — the modern chat panel now gets the same surface
+plus drag-and-drop from the project tree.
+
+### Added
+
+- **"Add to Chat" in the project tree right-click menu.** Sits above
+  "Add to Claude CLI" so the modern chat panel is the default
+  destination. Resolves the absolute path to a `@<rel>` token against
+  the active project and appends it to the chat input (does not
+  replace existing draft). If the dock isn't open yet, dockProject()
+  spins one up the same way "Add to Claude CLI" does.
+- **Drag files from the sidebar into the chat textarea.** Every
+  FileTree entry is now `draggable`; dropping on the chat input
+  appends `@<rel> ` tokens. Multi-file drop works too. Uses a custom
+  `application/x-devspace-path` MIME so external drags (Finder
+  `Files`, plain `text/plain`) still flow through the existing
+  webUtils.getPathForFile() path unchanged.
+
+### Internal
+
+- `chatBridge.ChatPrefillEvent` gains an optional `attachPath` field.
+  When set, ChatPanel's listener calls `insertAttachment(attachPath)`
+  (append + format @path) instead of `setInput(text)` (replace). One
+  bridge, two modes — keeps the Design → Chat "Discuss in main chat"
+  flow on the same plumbing.
+- New helper `src/renderer/lib/chatAttach.ts` (mirrors the shape of
+  `claudeCli.ts`) so right-click + drag share a single entry point.
+
+### Tests
+
+- +1 regression test in `chatBridge.test.ts` pins the `attachPath`
+  contract — keeps a future refactor from silently dropping the field.
+  Total: 364 vitest tests pass.
+
 ## [0.15.0] — 2026-05-14
 
 Design Studio gains the long-deferred multi-screen + project-coherence
