@@ -1,18 +1,27 @@
 import {
   BookOpen,
+  Bot,
+  Brain,
   Calendar,
   ChevronRight,
   Clock,
   ExternalLink,
+  FileText,
   FolderOpen,
   Hash,
   Home,
   Inbox,
+  KeyRound,
+  Lightbulb,
+  Paintbrush,
   Pin,
+  Plug,
   Plus,
   Search,
+  Server,
   Settings as SettingsIcon,
   Sparkles,
+  Users,
   X,
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -746,6 +755,12 @@ function HomeView({
           onJumpToFull={() => onView('inbox')}
         />
       </section>
+
+      {/* Settings shortcuts — deep-link into Claude · Settings tabs */}
+      <SettingsShortcuts
+        variant="compact"
+        onMemorySettings={() => onView('settings')}
+      />
     </div>
   );
 }
@@ -1057,13 +1072,22 @@ function SettingsView() {
   }
 
   return (
-    <div className="flex max-w-[640px] flex-col gap-5">
+    <div className="flex max-w-[760px] flex-col gap-5">
       <div>
         <h2 className="text-[14px] font-semibold text-text">Settings</h2>
         <p className="mt-1 text-[11.5px] text-text-muted">
           Memory is stored locally under <code className="rounded bg-surface-3 px-1">~/.devspace/</code>.
           Toggles take effect immediately.
         </p>
+      </div>
+
+      <SettingsShortcuts variant="full" />
+
+      <div className="flex items-center gap-2 border-t border-border-subtle pt-4">
+        <Sparkles size={12} className="text-accent" />
+        <h3 className="text-[12.5px] font-semibold uppercase tracking-wider text-text-secondary">
+          Memory
+        </h3>
       </div>
 
       <SettingRow
@@ -1162,6 +1186,149 @@ function SettingsView() {
         </div>
       )}
     </div>
+  );
+}
+
+// ─── Settings shortcuts ──────────────────────────────────────────────────
+//
+// Ergonomic deep-link grid that opens the global Claude · Settings page on a
+// specific tab. Reuses the `devspace:open-settings` custom event that
+// App.tsx already subscribes to (App.tsx:106-127), so no plumbing is added.
+// Settings replaces the editor area while open; closing it returns to the
+// dashboard tab automatically.
+
+type ClaudeSettingsTab =
+  | 'account'
+  | 'agents'
+  | 'teams'
+  | 'skills'
+  | 'design'
+  | 'mcp'
+  | 'files'
+  | 'tmux'
+  | 'llm';
+
+function openClaudeSettings(tab: ClaudeSettingsTab) {
+  window.dispatchEvent(
+    new CustomEvent('devspace:open-settings', { detail: { tab } }),
+  );
+}
+
+const SHORTCUT_TILES: Array<{
+  tab: ClaudeSettingsTab;
+  label: string;
+  hint: string;
+  icon: typeof Home;
+}> = [
+  { tab: 'account', label: 'Account', hint: 'Subscription / API key', icon: KeyRound },
+  { tab: 'agents', label: 'Agents', hint: 'Built-in & custom agents', icon: Bot },
+  { tab: 'teams', label: 'Teams', hint: 'Multi-agent teams', icon: Users },
+  { tab: 'skills', label: 'Skills', hint: 'Claude Code skills', icon: Lightbulb },
+  { tab: 'design', label: 'Design', hint: 'Project tokens & libs', icon: Paintbrush },
+  { tab: 'mcp', label: 'MCP', hint: 'MCP servers', icon: Plug },
+  { tab: 'files', label: 'Files', hint: 'Raw ~/.claude/* edit', icon: FileText },
+  { tab: 'tmux', label: 'tmux', hint: 'Sessions & runners', icon: Server },
+  { tab: 'llm', label: 'LLM', hint: 'Provider routing', icon: Brain },
+];
+
+function SettingsShortcuts({
+  variant = 'compact',
+  onMemorySettings,
+}: {
+  variant?: 'compact' | 'full';
+  onMemorySettings?: () => void;
+}) {
+  return (
+    <section className="flex flex-col gap-2">
+      <div className="flex items-baseline justify-between">
+        <h2 className="text-[12.5px] font-semibold uppercase tracking-wider text-text-secondary">
+          Settings shortcuts
+          <span className="ml-1.5 font-mono text-[10px] text-text-dim">
+            {SHORTCUT_TILES.length + (onMemorySettings ? 1 : 0)}
+          </span>
+        </h2>
+        {variant === 'compact' && (
+          <span className="text-[10.5px] text-text-muted">
+            Open Claude · Settings on a specific tab
+          </span>
+        )}
+      </div>
+      <div
+        className={cn(
+          'grid gap-2',
+          variant === 'compact'
+            ? 'grid-cols-2 sm:grid-cols-3 lg:grid-cols-5'
+            : 'grid-cols-2 sm:grid-cols-3 lg:grid-cols-4',
+        )}
+      >
+        {onMemorySettings && (
+          <ShortcutTile
+            label="Memory"
+            hint="Auto-capture, inject, sync"
+            icon={Sparkles}
+            accent
+            onClick={onMemorySettings}
+          />
+        )}
+        {SHORTCUT_TILES.map((t) => (
+          <ShortcutTile
+            key={t.tab}
+            label={t.label}
+            hint={t.hint}
+            icon={t.icon}
+            onClick={() => openClaudeSettings(t.tab)}
+          />
+        ))}
+      </div>
+      {variant === 'full' && (
+        <p className="mt-1 text-[11px] text-text-muted">
+          Each tile opens the global Claude · Settings page on the selected
+          tab. Closing it returns you here.
+        </p>
+      )}
+    </section>
+  );
+}
+
+function ShortcutTile({
+  label,
+  hint,
+  icon: Icon,
+  accent,
+  onClick,
+}: {
+  label: string;
+  hint: string;
+  icon: typeof Home;
+  accent?: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={`${label} — ${hint}`}
+      className={cn(
+        'group flex items-start gap-2.5 rounded-[8px] border bg-surface-2 px-3 py-2.5 text-left transition',
+        accent
+          ? 'border-accent/40 hover:border-accent hover:bg-accent/5'
+          : 'border-border-subtle hover:border-border-hi hover:bg-surface-3',
+      )}
+    >
+      <Icon
+        size={14}
+        className={cn(
+          'mt-[1px] shrink-0 transition',
+          accent
+            ? 'text-accent'
+            : 'text-text-muted group-hover:text-text',
+        )}
+      />
+      <div className="flex min-w-0 flex-col">
+        <span className="text-[12px] font-medium text-text">{label}</span>
+        <span className="truncate text-[10.5px] text-text-muted">{hint}</span>
+      </div>
+    </button>
   );
 }
 

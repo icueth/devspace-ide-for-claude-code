@@ -5,6 +5,18 @@ All notable changes to DevSpace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.19.1] — 2026-05-14
+
+### Added
+
+- **Dashboard → Settings shortcuts.** A 9-tile grid (Account / Agents /
+  Teams / Skills / Design / MCP / Files / tmux / LLM) appears at the
+  bottom of the Home view and at the top of the Memory Settings view.
+  Each tile deep-links into the global Claude · Settings page on the
+  matching tab via the existing `devspace:open-settings` event — no new
+  IPC, no plumbing change. Memory Settings tile also surfaced from Home
+  as an accent-colored shortcut.
+
 ## [0.19.0] — 2026-05-14
 
 Persistent cross-project memory system + dashboard. DevSpace now
