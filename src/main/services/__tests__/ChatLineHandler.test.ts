@@ -488,6 +488,60 @@ describe('segments — chronological assembly', () => {
     });
   });
 
+  it('broadcasts diffStats on the tool_use stream event for file-mutating tools', () => {
+    // Regression for 0.16.2: in 0.16.0/0.16.1 the diffStats chip only
+    // appeared after a thread reload because the live broadcast event
+    // omitted the field. Renderer's tool_use reducer then created a
+    // toolCall without diffStats. Pin the field on the broadcast.
+    const state = emptyState();
+    const events: unknown[] = [];
+    // Fake WebContents subscriber capturing every broadcast payload.
+    const fakeWc = {
+      isDestroyed: () => false,
+      send: (_channel: string, payload: unknown) => events.push(payload),
+    };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    state.subscribers.add(fakeWc as any);
+
+    const thread = freshThread();
+    const assistant = freshAssistant();
+    const handle = makeSoloLineHandler(state, thread, assistant);
+
+    handle(
+      asLine({
+        type: 'assistant',
+        message: {
+          content: [
+            {
+              type: 'tool_use',
+              id: 'edit-1',
+              name: 'Edit',
+              input: {
+                file_path: '/tmp/devspace-test/src/foo.ts',
+                old_string: 'a\nb',
+                new_string: 'a\nb\nc\nd',
+              },
+            },
+          ],
+        },
+      }),
+    );
+
+    const toolUseBroadcast = events.find(
+      (e): e is { event: { kind: string; diffStats?: unknown } } =>
+        typeof e === 'object' &&
+        e !== null &&
+        'event' in e &&
+        (e as { event: { kind: string } }).event.kind === 'tool_use',
+    );
+    expect(toolUseBroadcast).toBeDefined();
+    expect(toolUseBroadcast!.event.diffStats).toEqual({
+      additions: 4,
+      deletions: 2,
+      path: 'src/foo.ts',
+    });
+  });
+
   it('leaves diffStats undefined for non-file-mutating tools', () => {
     const state = emptyState();
     const thread = freshThread();

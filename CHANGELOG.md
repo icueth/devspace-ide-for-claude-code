@@ -5,6 +5,24 @@ All notable changes to DevSpace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.16.2] — 2026-05-14
+
+Chat diff stats hotfix — Cursor-style `+N -N` chips now appear live during
+streaming, not only after a thread reload.
+
+### Fixed
+
+- **Diff stat chips invisible during live tool calls.** 0.16.0 wired the
+  `+N -N` chips through hydrated thread state but the backend `tool_use`
+  broadcast event omitted the freshly-computed `diffStats` field, and the
+  renderer's streaming reducer built each `toolCall` without it. The chip
+  only appeared after switching threads / restarting the app, which is when
+  the persisted state was re-read off disk. Now the broadcast carries
+  `diffStats` and the renderer's `tool_use` handler hydrates it
+  immediately, so Edit/Write/MultiEdit/NotebookEdit calls show their
+  Cursor-style green `+N` / red `-N` chip the instant Claude starts the
+  call (before the result lands).
+
 ## [0.16.1] — 2026-05-14
 
 Sidebar hotfix — empty workspaces are usable again.

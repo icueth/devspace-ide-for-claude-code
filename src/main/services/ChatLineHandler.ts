@@ -135,6 +135,7 @@ export function makeSoloLineHandler(
             toolUseId: id,
             toolName: block.name,
             toolInput: block.input,
+            diffStats,
             ts: Date.now(),
           });
         }
@@ -224,6 +225,7 @@ export function makeStepLineHandler(
             toolUseId: id,
             toolName: block.name,
             toolInput: block.input,
+            diffStats,
             stepIndex,
             ts: Date.now(),
           });

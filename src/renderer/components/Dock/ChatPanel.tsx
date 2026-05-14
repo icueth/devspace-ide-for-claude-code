@@ -2198,6 +2198,7 @@ function applyEvent(
         id: toolUseId,
         name: event.toolName ?? 'tool',
         input: event.toolInput ?? {},
+        diffStats: event.diffStats,
       },
     ];
     // Same immutable replace-not-mutate pattern as text_delta.

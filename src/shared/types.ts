@@ -124,6 +124,14 @@ export interface ChatEvent {
   toolName?: string;
   toolUseId?: string;
   toolInput?: Record<string, unknown>;
+  // tool_use — Cursor-style diff stats for file-mutating tools, computed
+  // backend-side so the chip appears live during streaming (not only after
+  // a thread reload). Absent for tools that don't touch files.
+  diffStats?: {
+    additions: number;
+    deletions: number;
+    path: string;
+  };
   // tool_result
   toolResult?: string;
   toolIsError?: boolean;
