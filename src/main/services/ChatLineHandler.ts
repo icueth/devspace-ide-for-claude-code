@@ -12,6 +12,7 @@ import { randomUUID } from 'node:crypto';
 
 import { broadcast, type ProjectState } from '@main/services/ChatTranscript';
 import { computeToolDiffStats } from '@main/utils/diffStats';
+import { computeToolDiffPreview } from '@main/utils/diffPreview';
 import type {
   ChatMessage,
   ChatMessageSegment,
@@ -123,11 +124,15 @@ export function makeSoloLineHandler(
           const diffStats =
             computeToolDiffStats(toolName, toolInput, state.projectPath) ??
             undefined;
+          const diffPreview =
+            computeToolDiffPreview(toolName, toolInput, state.projectPath) ??
+            undefined;
           assistant.toolCalls.push({
             id,
             name: toolName,
             input: toolInput,
             diffStats,
+            diffPreview,
           });
           appendToolUseToSegments(assistant, id);
           broadcast(state, thread.id, {
@@ -136,6 +141,7 @@ export function makeSoloLineHandler(
             toolName: block.name,
             toolInput: block.input,
             diffStats,
+            diffPreview,
             ts: Date.now(),
           });
         }
@@ -213,11 +219,15 @@ export function makeStepLineHandler(
           const diffStats =
             computeToolDiffStats(toolName, toolInput, state.projectPath) ??
             undefined;
+          const diffPreview =
+            computeToolDiffPreview(toolName, toolInput, state.projectPath) ??
+            undefined;
           stepTarget.toolCalls.push({
             id,
             name: toolName,
             input: toolInput,
             diffStats,
+            diffPreview,
           });
           appendToolUseToSegments(stepTarget, id);
           broadcast(state, thread.id, {
@@ -226,6 +236,7 @@ export function makeStepLineHandler(
             toolName: block.name,
             toolInput: block.input,
             diffStats,
+            diffPreview,
             stepIndex,
             ts: Date.now(),
           });

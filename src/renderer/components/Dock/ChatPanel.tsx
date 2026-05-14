@@ -70,6 +70,8 @@ import type {
   ChatThread,
   TeamDef,
   TeamStep,
+  ToolDiffHunk,
+  ToolDiffPreview,
 } from '@shared/types';
 
 // Slash commands available in the chat input. These are UI actions —
@@ -1754,11 +1756,90 @@ function aggregateDiffStats(
   return { additions, deletions, fileCount: paths.size };
 }
 
+// Inline unified diff view rendered inside an expanded ToolCard for
+// file-mutating tools (Edit/MultiEdit/Write/NotebookEdit). Matches the
+// Cursor convention: 3-column row = [old line #] [new line #] [text],
+// red background for deletions, green for additions, neutral for
+// context, with a small gutter sign. No per-token highlighting — we
+// stop at line granularity, same as Cursor's inline view.
+function DiffHunkView({ hunk }: { hunk: ToolDiffHunk }) {
+  return (
+    <div className="overflow-hidden rounded border border-border-subtle bg-surface-2">
+      {hunk.label && (
+        <div className="border-b border-border-subtle bg-surface-3 px-2 py-1 font-mono text-[10px] text-text-muted">
+          {hunk.label}
+        </div>
+      )}
+      <pre className="m-0 overflow-x-auto whitespace-pre font-mono text-[10.5px] leading-[1.5]">
+        {hunk.lines.map((line, idx) => {
+          const oldNum = line.oldLine ?? '';
+          const newNum = line.newLine ?? '';
+          const sign = line.kind === 'add' ? '+' : line.kind === 'del' ? '-' : ' ';
+          return (
+            <div
+              key={idx}
+              className={cn(
+                'flex',
+                line.kind === 'add'
+                  ? 'bg-emerald-500/10 text-emerald-300'
+                  : line.kind === 'del'
+                    ? 'bg-rose-500/10 text-rose-300'
+                    : 'text-text-secondary',
+              )}
+            >
+              <span className="w-8 shrink-0 select-none px-1 text-right text-[9.5px] text-text-muted/70">
+                {oldNum}
+              </span>
+              <span className="w-8 shrink-0 select-none px-1 text-right text-[9.5px] text-text-muted/70">
+                {newNum}
+              </span>
+              <span
+                className={cn(
+                  'w-3 shrink-0 select-none text-center font-bold',
+                  line.kind === 'add'
+                    ? 'text-emerald-400'
+                    : line.kind === 'del'
+                      ? 'text-rose-400'
+                      : 'text-text-muted/40',
+                )}
+              >
+                {sign}
+              </span>
+              <span className="min-w-0 flex-1 whitespace-pre-wrap break-all px-1">
+                {line.text || ' '}
+              </span>
+            </div>
+          );
+        })}
+      </pre>
+    </div>
+  );
+}
+
+// Wrapper that renders one or more hunks + a truncation hint. Stays
+// dumb so it can be reused in TeamStep tool cards if/when we surface
+// diffPreview there too.
+function DiffPreviewBlock({ preview }: { preview: ToolDiffPreview }) {
+  return (
+    <div className="space-y-1.5">
+      {preview.hunks.map((hunk, idx) => (
+        <DiffHunkView key={idx} hunk={hunk} />
+      ))}
+      {preview.truncated && (
+        <div className="px-1 font-mono text-[10px] text-text-muted/70">
+          Diff truncated — input exceeded preview caps.
+        </div>
+      )}
+    </div>
+  );
+}
+
 // One card per tool invocation. Head row: tool-specific icon + verb
 // + concise argument summary + status indicator. Expanding shows the
-// full input JSON + tool output. Matches the "per-tool family card"
-// pattern from opendesign while staying within DevSpace's existing
-// details/summary disclosure idiom.
+// inline unified diff (for file-mutating tools) + tool output + raw
+// input JSON (collapsed nested details). Matches the "per-tool family
+// card" pattern from opendesign while staying within DevSpace's
+// existing details/summary disclosure idiom.
 function ToolCard({ call }: { call: ChatMessage['toolCalls'][number] }) {
   const meta = toolDisplay(call.name, call.input);
   const running = call.result === undefined;
@@ -1816,9 +1897,7 @@ function ToolCard({ call }: { call: ChatMessage['toolCalls'][number] }) {
         )}
       </summary>
       <div className="space-y-1.5 border-t border-border-subtle px-2.5 py-1.5">
-        <pre className="overflow-x-auto whitespace-pre-wrap break-words rounded bg-surface-3 px-2 py-1 font-mono text-[10.5px] text-text-muted">
-          {JSON.stringify(call.input, null, 2)}
-        </pre>
+        {call.diffPreview && <DiffPreviewBlock preview={call.diffPreview} />}
         {call.result !== undefined && (
           <pre
             className={cn(
@@ -1832,6 +1911,14 @@ function ToolCard({ call }: { call: ChatMessage['toolCalls'][number] }) {
             {(call.result ?? '').length > 2000 && '\n…(truncated)'}
           </pre>
         )}
+        <details className="group">
+          <summary className="cursor-pointer text-[10px] text-text-muted/70 hover:text-text-muted">
+            Raw input
+          </summary>
+          <pre className="mt-1 overflow-x-auto whitespace-pre-wrap break-words rounded bg-surface-3 px-2 py-1 font-mono text-[10.5px] text-text-muted">
+            {JSON.stringify(call.input, null, 2)}
+          </pre>
+        </details>
       </div>
     </details>
   );
@@ -2199,6 +2286,7 @@ function applyEvent(
         name: event.toolName ?? 'tool',
         input: event.toolInput ?? {},
         diffStats: event.diffStats,
+        diffPreview: event.diffPreview,
       },
     ];
     // Same immutable replace-not-mutate pattern as text_delta.

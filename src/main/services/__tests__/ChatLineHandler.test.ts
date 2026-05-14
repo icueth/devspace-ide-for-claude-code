@@ -542,6 +542,66 @@ describe('segments — chronological assembly', () => {
     });
   });
 
+  it('broadcasts diffPreview on the tool_use stream event for file-mutating tools', () => {
+    // Regression for 0.17.0: same shape as diffStats broadcast above —
+    // diffPreview must ride the live tool_use event so the inline
+    // unified diff view appears during streaming, not only after a
+    // thread reload.
+    const state = emptyState();
+    const events: unknown[] = [];
+    const fakeWc = {
+      isDestroyed: () => false,
+      send: (_channel: string, payload: unknown) => events.push(payload),
+    };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    state.subscribers.add(fakeWc as any);
+
+    const thread = freshThread();
+    const assistant = freshAssistant();
+    const handle = makeSoloLineHandler(state, thread, assistant);
+
+    handle(
+      asLine({
+        type: 'assistant',
+        message: {
+          content: [
+            {
+              type: 'tool_use',
+              id: 'edit-1',
+              name: 'Edit',
+              input: {
+                file_path: '/tmp/devspace-test/src/foo.ts',
+                old_string: 'line1\nline2',
+                new_string: 'line1\nline2-edit',
+              },
+            },
+          ],
+        },
+      }),
+    );
+
+    const toolUseBroadcast = events.find(
+      (e): e is { event: { kind: string; diffPreview?: unknown } } =>
+        typeof e === 'object' &&
+        e !== null &&
+        'event' in e &&
+        (e as { event: { kind: string } }).event.kind === 'tool_use',
+    );
+    expect(toolUseBroadcast).toBeDefined();
+    const preview = toolUseBroadcast!.event.diffPreview as {
+      path: string;
+      hunks: Array<{ lines: Array<{ kind: string }> }>;
+    };
+    expect(preview).toBeDefined();
+    expect(preview.path).toBe('src/foo.ts');
+    expect(preview.hunks).toHaveLength(1);
+    expect(preview.hunks[0]!.lines.map((l) => l.kind)).toEqual([
+      'ctx',
+      'del',
+      'add',
+    ]);
+  });
+
   it('leaves diffStats undefined for non-file-mutating tools', () => {
     const state = emptyState();
     const thread = freshThread();

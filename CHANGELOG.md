@@ -5,6 +5,48 @@ All notable changes to DevSpace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.17.0] — 2026-05-14
+
+Cursor-style inline unified diff inside every Edit/MultiEdit/Write/NotebookEdit
+tool card — when Claude edits a file in chat, expand the card to see the
+exact lines that came out (red) and went in (green), with old/new line
+numbers and contextual hold-overs.
+
+### Added
+
+- **Inline unified diff in ToolCard.** Expanding any file-mutating tool
+  call (`Edit`, `MultiEdit`, `Write`, `NotebookEdit`) now reveals a
+  red/green/context line view computed at JSONL parse time. Driven by a
+  new `computeToolDiffPreview()` helper in `main/utils/diffPreview.ts`
+  that runs an LCS line diff over `old_string` / `new_string`. Hunks
+  carry old + new line numbers; `MultiEdit` shows one hunk per entry
+  with an "Edit N of M" caption; `NotebookEdit` shows the cell ID.
+- **Safety caps.** Each side capped at 400 lines before running LCS
+  (O(m·n) memory bound); each line at 500 chars; `MultiEdit` at 8 hunks.
+  Inputs that exceed caps still render a partial diff with a "Diff
+  truncated" hint.
+- **Diff carried through live broadcast + persistence.** New
+  `ChatEvent.diffPreview` field rides every `tool_use` event so the
+  inline diff appears during streaming, not only after a thread reload.
+  Persisted into `ChatMessage.toolCalls[].diffPreview` +
+  `TeamStep.toolCalls[].diffPreview` for replay across app restarts.
+
+### Changed
+
+- **Tool card body layout.** The expanded section now leads with the
+  diff view (for file-mutating tools) followed by tool output. The
+  legacy raw-JSON input dump is tucked into a nested `<details>` so it
+  stays accessible for power users without dominating the card.
+
+### Verified
+
+- 487 vitest tests pass (was 465; +22 covering diffPreview Edit / MultiEdit /
+  Write / NotebookEdit paths, LCS context detection, line-length
+  truncation, hunk cap, path relativization, plus a regression test
+  pinning `diffPreview` in the broadcast event so the silent-during-
+  streaming flavor of v0.16.0/0.16.1 cannot return).
+- Typecheck clean.
+
 ## [0.16.2] — 2026-05-14
 
 Chat diff stats hotfix — Cursor-style `+N -N` chips now appear live during

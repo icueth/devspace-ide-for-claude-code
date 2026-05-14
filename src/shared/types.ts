@@ -97,6 +97,41 @@ export interface LlmEditResponse {
 // PTY-backed Claude CLI dock so users can pick per-tab: TTY (interactive,
 // per-tool approval) or chat (bypass-permissions Yolo, prettier output).
 
+// Line-by-line unified diff preview for a file-mutating tool call. Built
+// in main/utils/diffPreview.ts at tool_use time so the renderer can show
+// an inline red/green/context diff inside the ToolCard. Kept as a plain
+// data shape (not a class) so it round-trips through IPC and JSON
+// persistence cleanly. See diffPreview.ts for safety caps.
+export type ToolDiffLineKind = 'add' | 'del' | 'ctx';
+
+export interface ToolDiffLine {
+  kind: ToolDiffLineKind;
+  text: string;
+  // 1-based line numbers — `add` rows carry newLine only, `del` rows
+  // carry oldLine only, `ctx` rows carry both.
+  oldLine?: number;
+  newLine?: number;
+}
+
+export interface ToolDiffHunk {
+  oldStart: number;
+  oldLen: number;
+  newStart: number;
+  newLen: number;
+  lines: ToolDiffLine[];
+  // Optional caption (e.g. "Edit 2 of 3" for MultiEdit, "cell <id>" for
+  // NotebookEdit). Omitted for single-hunk diffs.
+  label?: string;
+}
+
+export interface ToolDiffPreview {
+  path: string;
+  hunks: ToolDiffHunk[];
+  // True when input lines were clipped at MAX_LINES_PER_SIDE or hunks
+  // were clipped at MAX_HUNKS. Renderer shows a "Diff truncated" hint.
+  truncated: boolean;
+}
+
 // Lifecycle of a single backend → renderer event during a chat turn.
 export type ChatEventKind =
   | 'text_delta'      // streaming assistant text
@@ -132,6 +167,11 @@ export interface ChatEvent {
     deletions: number;
     path: string;
   };
+  // tool_use — line-by-line unified diff for the same tools. Rendered as
+  // an inline expandable diff inside the ToolCard. Same caps + path as
+  // diffStats. Absent for non-mutating tools and for inputs that exceed
+  // the safety caps in main/utils/diffPreview.ts.
+  diffPreview?: ToolDiffPreview;
   // tool_result
   toolResult?: string;
   toolIsError?: boolean;
@@ -201,6 +241,10 @@ export interface ChatMessage {
       deletions: number;
       path: string;
     };
+    // Inline unified diff for the same set of file-mutating tools.
+    // Renderer expands ToolCard to show a red/green/context diff view.
+    // Absent for non-mutating tools and when the input exceeds caps.
+    diffPreview?: ToolDiffPreview;
   }>;
   // Ordered text / tool_group segments — see ChatMessageSegment. Optional
   // so messages from v0.10.x and earlier still parse cleanly.
@@ -248,6 +292,10 @@ export interface TeamStep {
       deletions: number;
       path: string;
     };
+    // Inline unified diff for the same set of file-mutating tools.
+    // Renderer expands ToolCard to show a red/green/context diff view.
+    // Absent for non-mutating tools and when the input exceeds caps.
+    diffPreview?: ToolDiffPreview;
   }>;
   // Same chronological segmentation as ChatMessage.segments — present
   // for v0.11+ runs, absent for legacy steps where the renderer falls
