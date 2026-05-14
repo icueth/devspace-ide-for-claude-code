@@ -9,12 +9,14 @@ import {
   Lock,
   Package,
   Paintbrush,
+  Palette,
   RefreshCw,
   Search,
   Sparkles,
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
+import { ProjectTokensPanel } from '@renderer/components/Design/ProjectTokensPanel';
 import { api } from '@renderer/lib/api';
 import { cn } from '@renderer/lib/utils';
 import { useEditorStore } from '@renderer/state/editor';
@@ -26,7 +28,7 @@ import type {
   ProjectDesignProfile,
 } from '@shared/design';
 
-type SubTab = 'context' | 'skills' | 'systems';
+type SubTab = 'context' | 'skills' | 'systems' | 'tokens';
 
 /**
  * Settings tab listing every design skill + design system DevSpace can
@@ -70,11 +72,22 @@ export function DesignSettings() {
           icon={<Sparkles size={11} />}
           label="Design systems"
         />
+        <SubTabButton
+          active={tab === 'tokens'}
+          onClick={() => setTab('tokens')}
+          icon={<Palette size={11} />}
+          label="Project tokens"
+        />
         <div className="flex-1" />
         {tab === 'context' ? (
           <span className="text-[10.5px] text-text-muted">
             Source:{' '}
             <code className="font-mono">.devspace/design/profile.json</code>
+          </span>
+        ) : tab === 'tokens' ? (
+          <span className="text-[10.5px] text-text-muted">
+            Source:{' '}
+            <code className="font-mono">.devspace/design/tokens.json</code>
           </span>
         ) : (
           <span className="text-[10.5px] text-text-muted">
@@ -88,12 +101,42 @@ export function DesignSettings() {
           <ProjectContextBrowser />
         ) : tab === 'skills' ? (
           <SkillsBrowser />
+        ) : tab === 'tokens' ? (
+          <ProjectTokensSection />
         ) : (
           <SystemsBrowser />
         )}
       </div>
     </div>
   );
+}
+
+// ─── Project tokens sub-section ────────────────────────────────────────
+//
+// Mounts the standalone <ProjectTokensPanel> only when a project is open.
+// Uses the same workspace selector pattern as ProjectContextBrowser so
+// switching projects rebinds the panel to the new path automatically.
+function ProjectTokensSection() {
+  const activeProject = useWorkspaceStore((s) => {
+    const id = s.activeProjectId;
+    return s.projects.find((p) => p.id === id) ?? null;
+  });
+  if (!activeProject) {
+    return (
+      <div className="flex h-full min-h-0 flex-col overflow-y-auto">
+        <div className="mx-auto flex w-full max-w-[820px] flex-col items-center gap-2 rounded-[8px] border border-dashed border-border bg-surface-2/40 px-6 py-10 text-center">
+          <Palette size={22} className="text-text-dim" />
+          <div className="text-[12px] font-medium text-text-secondary">
+            No project open
+          </div>
+          <div className="max-w-[420px] text-[10.5px] leading-relaxed text-text-dim">
+            Select a project to manage its design tokens.
+          </div>
+        </div>
+      </div>
+    );
+  }
+  return <ProjectTokensPanel projectPath={activeProject.path} />;
 }
 
 interface SubTabButtonProps {

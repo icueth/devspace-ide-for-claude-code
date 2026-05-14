@@ -1,11 +1,14 @@
 import * as Dialog from '@radix-ui/react-dialog';
 import {
+  CheckCircle2,
   ChevronDown,
   ChevronRight,
   FolderOpen,
   Info,
+  Layers,
   Paintbrush,
   Plus,
+  Sparkles,
   Trash2,
   X,
 } from 'lucide-react';
@@ -17,12 +20,16 @@ import {
   useState,
 } from 'react';
 
+import { AppPlanCard } from '@renderer/components/Design/AppPlanCard';
+import { AppPlanDialog } from '@renderer/components/Design/AppPlanDialog';
 import { DesignBriefPanel } from '@renderer/components/Design/DesignBriefPanel';
 import { DesignPreview } from '@renderer/components/Design/DesignPreview';
 import { DesignToolbar } from '@renderer/components/Design/DesignToolbar';
 import { EditPanel } from '@renderer/components/Design/EditPanel';
 import { ElementInspector } from '@renderer/components/Design/ElementInspector';
+import { TerminalContextMenu, type TerminalMenuItem } from '@renderer/components/Dock/TerminalContextMenu';
 import { api } from '@renderer/lib/api';
+import { buildChatPrefill, emitChatPrefill } from '@renderer/lib/chatBridge';
 import {
   sendApplyEdit,
   sendClearOverrides,
@@ -30,7 +37,9 @@ import {
   sendSetMode,
 } from '@renderer/lib/designBridge';
 import { cn } from '@renderer/lib/utils';
+import { useEditorStore } from '@renderer/state/editor';
 import type {
+  DesignAppPlan,
   DesignBridgeInbound,
   DesignBridgeMode,
   DesignEditOp,
@@ -128,6 +137,23 @@ export function DesignView({ projectPath }: DesignViewProps) {
   const [messages, setMessages] = useState<DesignMessage[]>([]);
   const onEventRef = useRef<((ev: DesignEvent) => void) | null>(null);
 
+  // ─── v0.15: app plans ────────────────────────────────────────────────
+  const [apps, setApps] = useState<DesignAppPlan[]>([]);
+  const [appPlanDialogOpen, setAppPlanDialogOpen] = useState(false);
+  // When set, the AppPlanDialog opens at Stage 2 with this plan loaded
+  // (used by AppPlanCard's "Open plan editor" menu item).
+  const [appPlanForReview, setAppPlanForReview] =
+    useState<DesignAppPlan | null>(null);
+  // Lightweight transient banner for cross-bridge actions (sent context to
+  // chat, plan approved, etc.). Auto-dismisses after 4s.
+  const [transientNotice, setTransientNotice] = useState<string | null>(null);
+  // Right-click context menu for screen rows. `null` = closed.
+  const [screenContextMenu, setScreenContextMenu] = useState<{
+    x: number;
+    y: number;
+    screenId: string;
+  } | null>(null);
+
   // ─── Phase B inspect/edit state ─────────────────────────────────────
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const [mode, setMode] = useState<DesignBridgeMode>('view');
@@ -191,15 +217,17 @@ export function DesignView({ projectPath }: DesignViewProps) {
     let cancelled = false;
     void (async () => {
       try {
-        const [list, skillList, systemList] = await Promise.all([
+        const [list, skillList, systemList, appList] = await Promise.all([
           api.design.list(projectPath),
           api.design.listSkills(projectPath),
           api.design.listSystems(projectPath),
+          api.design.listApps(projectPath),
         ]);
         if (cancelled) return;
         setScreens(list);
         setSkills(skillList);
         setSystems(systemList);
+        setApps(appList);
         // Default the skill picker to whichever is first in scope-priority
         // order: project > global > builtin. The toolbar's group renderer
         // already enforces that order visually.
@@ -319,6 +347,26 @@ export function DesignView({ projectPath }: DesignViewProps) {
       if (ev.kind === 'generation_error') {
         setToolbarError(ev.message ?? 'Generation failed.');
       }
+      // ── v0.15: app plan lifecycle ────────────────────────────────────
+      if (ev.appPlan) {
+        const next = ev.appPlan;
+        if (ev.kind === 'app_plan_deleted') {
+          setApps((prev) => prev.filter((a) => a.appId !== next.appId));
+        } else if (
+          ev.kind === 'app_plan_ready' ||
+          ev.kind === 'app_plan_updated' ||
+          ev.kind === 'app_plan_started' ||
+          ev.kind === 'app_plan_error'
+        ) {
+          setApps((prev) => {
+            const idx = prev.findIndex((a) => a.appId === next.appId);
+            if (idx === -1) return [next, ...prev];
+            const out = prev.slice();
+            out[idx] = next;
+            return out;
+          });
+        }
+      }
     };
   });
 
@@ -360,10 +408,53 @@ export function DesignView({ projectPath }: DesignViewProps) {
     };
   }, [projectPath, activeScreenId]);
 
+  // ─── Transient notice auto-dismiss ──────────────────────────────────
+  useEffect(() => {
+    if (!transientNotice) return;
+    const t = window.setTimeout(() => setTransientNotice(null), 4000);
+    return () => window.clearTimeout(t);
+  }, [transientNotice]);
+
+  // ─── v0.15: hydrate brief/skill prefill from the editor tab ─────────
+  // The Main chat → Design bridge (the OTHER agent's surface) populates
+  // EditorTab.designPrefillBrief / designPrefillSkillSlug when opening
+  // the design tab. We subscribe to the prefill fields via Zustand
+  // selectors so a SECOND bridge call (when the tab already exists)
+  // also re-hydrates — the openDesign action sets consumed=false on
+  // re-open, which fires this effect again.
+  const tabPath = projectPath ? `design:${projectPath}` : null;
+  const tabPrefillBrief = useEditorStore((s) =>
+    tabPath ? s.tabs.find((t) => t.path === tabPath)?.designPrefillBrief : undefined,
+  );
+  const tabPrefillSkillSlug = useEditorStore((s) =>
+    tabPath ? s.tabs.find((t) => t.path === tabPath)?.designPrefillSkillSlug : undefined,
+  );
+  const tabPrefillConsumed = useEditorStore((s) =>
+    tabPath ? s.tabs.find((t) => t.path === tabPath)?.designPrefillConsumed : true,
+  );
+  useEffect(() => {
+    if (!tabPath || tabPrefillConsumed !== false) return;
+    if (tabPrefillBrief && tabPrefillBrief.length > 0) {
+      setBrief(tabPrefillBrief);
+    }
+    if (tabPrefillSkillSlug && tabPrefillSkillSlug.length > 0) {
+      setSkillSlug(tabPrefillSkillSlug);
+    }
+    useEditorStore.getState().consumeDesignPrefill(tabPath);
+  }, [tabPath, tabPrefillBrief, tabPrefillSkillSlug, tabPrefillConsumed]);
+
   // ─── Derived state ──────────────────────────────────────────────────
   const activeScreen = useMemo(
     () => screens.find((s) => s.id === activeScreenId) ?? null,
     [screens, activeScreenId],
+  );
+
+  // Filter out screens that belong to a planned app — those render under
+  // their AppPlanCard. Independent screens (no appId) keep rendering in
+  // the flat list.
+  const independentScreens = useMemo(
+    () => screens.filter((s) => !s.appId),
+    [screens],
   );
 
   // Active screen's preview override resolves to a version id; otherwise
@@ -842,6 +933,160 @@ export function DesignView({ projectPath }: DesignViewProps) {
     [projectPath, requestConfirm, screens],
   );
 
+  // ─── v0.15: app actions ─────────────────────────────────────────────
+  const handlePlanApprove = useCallback(
+    (plan: DesignAppPlan) => {
+      setApps((prev) => {
+        const idx = prev.findIndex((a) => a.appId === plan.appId);
+        if (idx === -1) return [plan, ...prev];
+        const out = prev.slice();
+        out[idx] = plan;
+        return out;
+      });
+      setTransientNotice(
+        `Plan approved. ${plan.screens.length} screen${
+          plan.screens.length === 1 ? '' : 's'
+        } created. Generate all from the sidebar.`,
+      );
+      setAppPlanForReview(null);
+    },
+    [],
+  );
+
+  const handleOpenPlan = useCallback((plan: DesignAppPlan) => {
+    setAppPlanForReview(plan);
+    setAppPlanDialogOpen(true);
+  }, []);
+
+  const handleDeleteApp = useCallback(
+    async (appId: string) => {
+      const plan = apps.find((a) => a.appId === appId);
+      if (!plan) return;
+      const ok = await requestConfirm({
+        title: 'Delete app plan?',
+        body: `Delete "${plan.name}" and remove its plan? Screens already materialized stay (they're independent designs after this).`,
+        confirmLabel: 'Delete',
+        danger: true,
+      });
+      if (!ok) return;
+      try {
+        await api.design.deleteApp(projectPath, appId);
+        setApps((prev) => prev.filter((a) => a.appId !== appId));
+      } catch (err) {
+        setToolbarError((err as Error).message);
+      }
+    },
+    [apps, projectPath, requestConfirm],
+  );
+
+  const handleRunBatch = useCallback(
+    async (appId: string) => {
+      try {
+        await api.design.runBatch(projectPath, appId);
+        setTransientNotice('Batch generation started. Watch the screens fill in.');
+      } catch (err) {
+        setToolbarError((err as Error).message);
+      }
+    },
+    [projectPath],
+  );
+
+  // ─── v0.15: Discuss in main chat — bridges to ChatPanel ─────────────
+  const handleDiscussInChat = useCallback(
+    async (screenId: string) => {
+      const screen = screens.find((s) => s.id === screenId);
+      if (!screen) return;
+      try {
+        // Pull the latest version's HTML if available (capped to 8KB by
+        // buildChatPrefill). Best-effort — a missing version just means
+        // we send the meta + brief without an excerpt.
+        let htmlExcerpt: string | undefined;
+        const latest = screen.versions[screen.versions.length - 1];
+        if (latest) {
+          try {
+            const html = await api.design.readHtml(
+              projectPath,
+              screenId,
+              latest.id,
+            );
+            htmlExcerpt = html.length > 8 * 1024 ? html.slice(0, 8 * 1024) : html;
+          } catch (err) {
+            console.warn('[design] readHtml failed for chat handoff:', err);
+          }
+        }
+        const versionNumber = screen.versions.length || 1;
+        const text = buildChatPrefill({
+          screenName: screen.name,
+          ...(screen.pageName ? { pageName: screen.pageName } : {}),
+          relPath: screen.htmlPath ?? `.devspace/design/screens/${screen.id}/index.html`,
+          versionNumber,
+          brief: screen.brief,
+          ...(htmlExcerpt ? { htmlExcerpt } : {}),
+        });
+        emitChatPrefill({ projectPath, text, newThread: true });
+        setTransientNotice(
+          'Sent screen context to chat. Switch to chat panel to continue.',
+        );
+      } catch (err) {
+        setToolbarError((err as Error).message);
+      }
+    },
+    [projectPath, screens],
+  );
+
+  const handleCopyScreenPath = useCallback(
+    async (screenId: string) => {
+      const screen = screens.find((s) => s.id === screenId);
+      if (!screen) return;
+      const rel = screen.htmlPath ?? `.devspace/design/screens/${screen.id}/index.html`;
+      const abs = `${projectPath}/${rel}`;
+      try {
+        await navigator.clipboard.writeText(abs);
+        setTransientNotice('Copied screen path to clipboard.');
+      } catch (err) {
+        setToolbarError((err as Error).message);
+      }
+    },
+    [projectPath, screens],
+  );
+
+  const handleScreenContextMenu = useCallback(
+    (event: React.MouseEvent, screenId: string) => {
+      event.preventDefault();
+      setScreenContextMenu({ x: event.clientX, y: event.clientY, screenId });
+    },
+    [],
+  );
+
+  const screenContextMenuItems: TerminalMenuItem[] = useMemo(() => {
+    if (!screenContextMenu) return [];
+    const id = screenContextMenu.screenId;
+    return [
+      {
+        id: 'discuss',
+        label: 'Discuss in main chat',
+        onSelect: () => void handleDiscussInChat(id),
+      },
+      {
+        id: 'copy-path',
+        label: 'Copy screen path',
+        onSelect: () => void handleCopyScreenPath(id),
+      },
+      { id: 'sep1', label: '', separator: true },
+      {
+        id: 'delete',
+        label: 'Delete screen',
+        danger: true,
+        onSelect: () => void handleDeleteScreen(id),
+      },
+    ];
+  }, [
+    handleCopyScreenPath,
+    handleDeleteScreen,
+    handleDiscussInChat,
+    screenContextMenu,
+  ]);
+
   // ─── U5: keyboard shortcuts ─────────────────────────────────────────
   // DesignView only mounts when the Design tab is active, so a plain
   // document listener is fine here — no need to disambiguate against
@@ -982,10 +1227,22 @@ export function DesignView({ projectPath }: DesignViewProps) {
 
       <div className="flex min-h-0 flex-1">
         <ScreenSidebar
-          screens={screens}
+          screens={independentScreens}
+          totalScreenCount={screens.length}
+          apps={apps}
           activeScreenId={activeScreenId}
+          projectPath={projectPath}
           onSelect={(id) => void handleSelectScreen(id)}
           onDelete={(id) => void handleDeleteScreen(id)}
+          onScreenContextMenu={handleScreenContextMenu}
+          onPlanApp={() => {
+            setAppPlanForReview(null);
+            setAppPlanDialogOpen(true);
+          }}
+          onSelectPlanScreen={(screenId) => void handleSelectScreen(screenId)}
+          onOpenPlan={handleOpenPlan}
+          onDeleteApp={(appId) => void handleDeleteApp(appId)}
+          onRunBatch={(appId) => void handleRunBatch(appId)}
         />
 
         <main className="flex min-w-0 flex-1">
@@ -1064,6 +1321,49 @@ export function DesignView({ projectPath }: DesignViewProps) {
           />
         </main>
       </div>
+
+      {/* v0.15: transient notice banner — used for cross-bridge actions
+          and batch-generation feedback. Auto-dismisses after 4s; the X
+          button forces an immediate close. */}
+      {transientNotice && (
+        <div className="fixed bottom-4 left-1/2 z-50 flex -translate-x-1/2 items-center gap-2 rounded-[8px] border border-accent/40 bg-surface-raised px-3 py-2 text-[12px] text-text shadow-[0_18px_40px_rgba(0,0,0,0.5)]">
+          <CheckCircle2 size={13} className="shrink-0 text-accent" />
+          <span className="flex-1">{transientNotice}</span>
+          <button
+            type="button"
+            onClick={() => setTransientNotice(null)}
+            className="rounded p-0.5 text-text-muted hover:bg-surface-overlay hover:text-text"
+            aria-label="Dismiss notice"
+          >
+            <X size={11} />
+          </button>
+        </div>
+      )}
+
+      {/* v0.15: app plan dialog — opens at Stage 1 by default, jumps
+          straight to Stage 2 review when an existing plan is passed via
+          appPlanForReview (e.g. from "Open plan editor" in AppPlanCard). */}
+      <AppPlanDialog
+        open={appPlanDialogOpen}
+        onClose={() => {
+          setAppPlanDialogOpen(false);
+          setAppPlanForReview(null);
+        }}
+        projectPath={projectPath}
+        initialPlan={appPlanForReview}
+        onApproved={handlePlanApprove}
+      />
+
+      {/* v0.15: screen-row context menu. Renders only while the user
+          right-clicked a screen header. */}
+      {screenContextMenu && (
+        <TerminalContextMenu
+          x={screenContextMenu.x}
+          y={screenContextMenu.y}
+          items={screenContextMenuItems}
+          onClose={() => setScreenContextMenu(null)}
+        />
+      )}
 
       {/* F1: dialogs live at the bottom of the tree so they can portal
           out without re-mounting on every state update. Both are
@@ -1210,16 +1510,36 @@ function WelcomeStarter({ skills, onApply }: WelcomeStarterProps) {
 
 interface ScreenSidebarProps {
   screens: DesignScreen[];
+  /** Total screen count across apps + independent — for the header pill. */
+  totalScreenCount: number;
+  apps: DesignAppPlan[];
   activeScreenId: string | null;
+  projectPath: string;
   onSelect: (id: string) => void;
   onDelete: (id: string) => void;
+  onScreenContextMenu: (event: React.MouseEvent, screenId: string) => void;
+  // ── v0.15 app plan integration ──────────────────────────────────────
+  onPlanApp: () => void;
+  onSelectPlanScreen: (screenId: string) => void;
+  onOpenPlan: (plan: DesignAppPlan) => void;
+  onDeleteApp: (appId: string) => void;
+  onRunBatch: (appId: string) => void;
 }
 
 function ScreenSidebar({
   screens,
+  totalScreenCount,
+  apps,
   activeScreenId,
+  projectPath,
   onSelect,
   onDelete,
+  onScreenContextMenu,
+  onPlanApp,
+  onSelectPlanScreen,
+  onOpenPlan,
+  onDeleteApp,
+  onRunBatch,
 }: ScreenSidebarProps) {
   const [collapsed, setCollapsed] = useState(false);
 
@@ -1238,13 +1558,13 @@ function ScreenSidebar({
 
   return (
     <aside
-      className="flex h-full w-[210px] shrink-0 flex-col border-r border-border bg-surface-2"
+      className="flex h-full w-[230px] shrink-0 flex-col border-r border-border bg-surface-2"
       aria-label="Design screens"
     >
       <div className="flex h-9 shrink-0 items-center gap-1.5 border-b border-border px-3">
         <Paintbrush size={11} className="text-text-muted" />
         <span className="text-[11px] font-semibold text-text">Screens</span>
-        <span className="text-[10px] text-text-dim">({screens.length})</span>
+        <span className="text-[10px] text-text-dim">({totalScreenCount})</span>
         <div className="flex-1" />
         <button
           type="button"
@@ -1256,12 +1576,64 @@ function ScreenSidebar({
         </button>
       </div>
 
-      {screens.length === 0 ? (
+      {/* v0.15: top action — Plan an app. Stays visible at all times so
+          users can plan even when there are existing apps/screens. */}
+      <div className="shrink-0 border-b border-border-subtle px-2 py-1.5">
+        <button
+          type="button"
+          onClick={onPlanApp}
+          className="inline-flex w-full items-center justify-center gap-1.5 rounded-[6px] border border-accent/40 bg-accent/10 px-2 py-1.5 text-[11px] font-medium text-accent transition hover:bg-accent/15"
+        >
+          <Sparkles size={11} />
+          Plan an app
+        </button>
+      </div>
+
+      {/* v0.15: planned apps section. Hidden when no apps exist. */}
+      {apps.length > 0 && (
+        <section className="shrink-0 border-b border-border">
+          <div className="flex h-7 items-center gap-1.5 px-3">
+            <Layers size={10} className="text-text-muted" />
+            <span className="text-[10px] font-semibold uppercase tracking-wide text-text-muted">
+              Apps
+            </span>
+            <span className="text-[10px] text-text-dim">({apps.length})</span>
+          </div>
+          <div className="max-h-[40vh] overflow-y-auto">
+            {apps.map((plan) => (
+              <AppPlanCard
+                key={plan.appId}
+                plan={plan}
+                projectPath={projectPath}
+                onSelectScreen={onSelectPlanScreen}
+                onOpenPlan={onOpenPlan}
+                onDelete={onDeleteApp}
+                onRunBatch={onRunBatch}
+              />
+            ))}
+          </div>
+        </section>
+      )}
+
+      {/* v0.15: independent screens group label only shows when there
+          are also apps — otherwise the flat list is the only thing here
+          and a label would be visual noise. */}
+      {apps.length > 0 && screens.length > 0 && (
+        <div className="flex h-7 shrink-0 items-center gap-1.5 border-b border-border-subtle px-3">
+          <span className="text-[10px] font-semibold uppercase tracking-wide text-text-muted">
+            Independent
+          </span>
+          <span className="text-[10px] text-text-dim">({screens.length})</span>
+        </div>
+      )}
+
+      {screens.length === 0 && apps.length === 0 ? (
         <div className="flex flex-1 flex-col items-center justify-center px-4 text-center">
           <Plus size={14} className="mb-1.5 text-text-dim" />
           <div className="text-[11px] text-text-muted">No designs yet.</div>
           <div className="mt-1 text-[10px] text-text-dim">
-            Use the toolbar above to generate your first screen.
+            Use the toolbar above to generate your first screen, or click
+            "Plan an app" to scaffold a multi-screen flow.
           </div>
         </div>
       ) : (
@@ -1273,6 +1645,7 @@ function ScreenSidebar({
               isActive={s.id === activeScreenId}
               onClick={() => onSelect(s.id)}
               onDelete={() => onDelete(s.id)}
+              onContextMenu={(e) => onScreenContextMenu(e, s.id)}
             />
           ))}
         </ul>
@@ -1286,12 +1659,22 @@ interface ScreenRowProps {
   isActive: boolean;
   onClick: () => void;
   onDelete: () => void;
+  // v0.15: right-click → context menu in DesignView. Plain DOM event so
+  // the parent can read clientX/clientY.
+  onContextMenu: (e: React.MouseEvent) => void;
 }
 
-function ScreenRow({ screen, isActive, onClick, onDelete }: ScreenRowProps) {
+function ScreenRow({
+  screen,
+  isActive,
+  onClick,
+  onDelete,
+  onContextMenu,
+}: ScreenRowProps) {
   return (
     <li>
       <div
+        onContextMenu={onContextMenu}
         className={cn(
           'group flex items-center gap-1.5 px-2 py-1.5 transition',
           isActive

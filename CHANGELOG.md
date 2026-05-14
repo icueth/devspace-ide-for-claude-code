@@ -5,6 +5,136 @@ All notable changes to DevSpace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.15.0] — 2026-05-14
+
+Design Studio gains the long-deferred multi-screen + project-coherence
+muscle. Plan a whole app from one brief, lock theme tokens at the
+project level so every generation stays on-brand, and ping designs back
+and forth with the main chat. Plus the renderer + backend got hardened
+on a dozen blocker findings from the first review pass.
+
+### Added
+
+- **Multi-screen app planning.** "Plan an app" button in the Design
+  sidebar opens a 2-stage dialog: stage 1 takes your brief
+  ("Stock management app for a small warehouse"); Claude returns a
+  JSON plan (4–8 screens + shared theme + per-screen brief) which you
+  edit in stage 2 (rename / reorder / delete screens, edit colors and
+  fonts). Approve materializes each PlannedScreen as a real
+  DesignScreen grouped under the new app card; "Generate all" batches
+  every screen sequentially with the shared theme injected.
+  Storage: `<project>/.devspace/design/apps/<appId>/plan.json`.
+- **Project-wide design tokens.** New tab in DesignSettings → Project
+  Tokens. View / edit colors, fonts, vibe; auto-extract from any
+  ready screen version; lock to make every future generation prompt
+  inject the tokens as authoritative project-wide constraints. Locked
+  tokens override per-screen reuseTheme. Storage:
+  `<project>/.devspace/design/tokens.json`.
+- **Bridge — Main chat → Design.** Right-click any assistant message
+  in the main chat panel for "Generate design from this idea" /
+  "Generate landing page from this" / "Generate dashboard from this".
+  Selection-aware: if you've highlighted text in the bubble, that's
+  the brief; otherwise the message's prose content. Opens (or
+  re-focuses) the project's Design tab with the brief composer
+  pre-filled and a heuristic-suggested skill picked.
+- **Bridge — Design → Main chat.** Right-click a screen header in
+  DesignView for "Discuss in main chat". Composes a prefill string
+  with screen path + version + brief + an HTML excerpt (≤8KB, fenced
+  defensively against backtick breakouts), drops it into the chat
+  input for review before send.
+- **App plan card in sidebar.** Status pill (draft / approved /
+  completed / cancelled), per-planned-screen status dots reflecting
+  live generation state, "..." menu (Open plan editor, Generate all,
+  Delete app). Independent (non-app) screens render under a separate
+  "Independent" group label.
+
+### Changed
+
+- **DesignPromptBuilder** now accepts a `lockedTokens` field and
+  injects it as a "## Project Tokens (locked — must follow)" section
+  fenced as untrusted-data delimiters. When locked tokens are present,
+  the builder suppresses per-screen reuseTheme to avoid double-add.
+- **AppPlanner** prompts Claude with a strict JSON-only output schema,
+  injects optional Project Context + locked tokens, and the parser
+  picks the LAST `` ```json `` block (Claude often emits explanation
+  prose before the JSON). Allowlist-validates colors (hex / named /
+  rgb / hsl), fonts (alphanumerics + hyphen / underscore, no `url(`),
+  caps screens at 12 / colors at 8 / fonts at 4 / brief at 8KB.
+- **runBatch** mirrors per-screen `'generating'` state into the plan
+  in real time so the AppPlanCard's "Generate all" button + status
+  dots reflect live progress (not just the final settled state).
+
+### Fixed
+
+- **Chat → Design prefill silently dropped on second use.** The
+  hydrate effect was keyed only on `tabPath`; once the design tab
+  existed the effect never re-ran when openDesign updated the prefill
+  fields. Fix: subscribe to the prefill fields via Zustand selectors
+  so the effect fires on every fresh prefill, even when the tab
+  already exists.
+- **Cancel during runBatch hung the batch for 5 minutes.** A user-
+  cancelled screen with no prior versions ends in `'pending'`, but
+  waitForScreenSettled only resolved on `'ready'`/`'error'`. Fix:
+  treat `'pending'` as a soft-stop terminal; runBatch exits cleanly
+  with an `app_plan_updated` event instead of timing out.
+- **extractTokens(lock=true) on a screen with no detectable colors/fonts
+  destroyed existing locked tokens.** All-empty token object would
+  sanitize to null in setTokens → file deleted. Fix: extractTokens
+  refuses to lock when extraction yields nothing.
+- **setTokens deleted the file on any all-empty payload.** Vibe-only
+  edit of an empty field wiped locked colors. Fix: only the explicit
+  `tokens === null` path removes the file; an all-empty non-null
+  payload returns the current persisted tokens unchanged.
+- **deleteApp didn't abort an in-flight runBatch on the same app.** The
+  batch's next `persistAppPlan` call recreated the just-deleted plan
+  file. Fix: shared `activeBatches` set; deleteApp removes the entry,
+  runBatch checks between iterations and exits without writing back.
+- **ProjectTokensPanel chip edit raced two persists.** Edit fired
+  remove-then-add as separate IPC calls reading the same closure'd
+  tokens; the second persist could revert the deletion or duplicate
+  the value. Fix: single `handleEditColor` / `handleEditFont` that
+  produces one tokens object + one persist.
+- **Renderer chip caps (16/8) exceeded backend caps (8/4).** Silent
+  truncation on persist. Fix: matched renderer constants to backend.
+- **Duplicate planned-screen IDs corrupted state on approve.** Two
+  PlannedScreens sharing an id materialized to the same DesignScreen.
+  Fix: `validatePlanForCommit` tracks `seenIds` and reissues UUIDs on
+  collision.
+- **`app_plan_error` events never updated the apps list.** A
+  background planner failure left the app row stuck on "Planning…"
+  if the AppPlanDialog had already closed. Fix: DesignView's event
+  switch routes `app_plan_error` through the same patch branch as
+  the other lifecycle events.
+- **AppPlanDialog accepted ANY app_plan event on first attempt.** The
+  `planAppIdRef.current && mismatch` guard short-circuited when the
+  ref was null, so unrelated events from concurrent dialogs / other
+  windows mutated dialog state. Fix: explicit `stageRef === 'planning'`
+  acceptance window when the ref isn't yet set; `app_plan_started`
+  events adopt the appId immediately.
+
+### Security
+
+- **chatBridge htmlExcerpt fence escape.** A screen's HTML excerpt
+  containing a `` ``` `` run would close its own markdown fence; the
+  text after the breakout would parse as instructions when Claude
+  read the prefilled chat input next turn. Fix: pick a fence one
+  longer than the longest backtick run inside the excerpt
+  (CommonMark-compliant).
+- **planApp concurrency.** Double-click could spawn two parallel
+  Claude planning runs writing two draft plans for the same project.
+  Fix: in-flight `inflightPlanRuns` map; second call returns the same
+  promise.
+- **parseAppPlanResponse runaway-input cap.** Cap raw input at 256 KB
+  and the picked JSON candidate at 64 KB before `JSON.parse`. Defends
+  against a hostile / runaway planner emitting megabytes of nested
+  JSON to tie up the main process.
+- **DesignService deleteApp** refuses to remove the apps root and
+  no longer swallows orphan-screen persist failures (in-memory state
+  is reverted on disk-write failure).
+- **DesignService extractTokens** validates `versionId` as UUID at the
+  IPC boundary (was relying on internal `readHtml` validation; now
+  symmetric with `screenId`).
+
 ## [0.14.0] — 2026-05-14
 
 Design Studio matures into a real conversational surface. The chat panel

@@ -1,28 +1,42 @@
 import { ipcMain } from 'electron';
 
 import {
+  approvePlan,
   cancelDesign,
   createDesign,
+  deleteApp,
   deleteDesign,
+  extractTokens,
   followUp,
+  getApp,
   getProfile,
   getScreen,
+  getTokens,
+  listApps,
   listMessages,
   listScreens,
   listSkills,
   listSystems,
+  planApp,
   readHtml,
   rebuildProfile,
   regenerateDesign,
+  runBatch,
   saveEdits,
+  setTokens,
   subscribeEvents,
+  updatePlan,
 } from '@main/services/DesignService';
 import { IPC } from '@shared/ipc-channels';
 import type {
+  ApprovePlanInput,
   CreateDesignInput,
   DesignFollowUpInput,
   DesignSaveEditsInput,
+  ExtractProjectTokensInput,
+  PlanAppInput,
   RegenerateDesignInput,
+  SetProjectTokensInput,
 } from '@shared/design';
 
 export function registerDesignIpc(): void {
@@ -118,5 +132,68 @@ export function registerDesignIpc(): void {
   ipcMain.handle(
     IPC.DESIGN_REBUILD_PROFILE,
     (_event, projectPath: string) => rebuildProfile(projectPath),
+  );
+
+  // ─── v0.15: multi-screen app planning ────────────────────────────────────
+  ipcMain.handle(IPC.DESIGN_PLAN_APP, (event, input: PlanAppInput) => {
+    // Auto-subscribe so the renderer reliably receives app_plan_*
+    // lifecycle events emitted while the planner runs.
+    subscribeEvents(input.projectPath, event.sender);
+    return planApp(input);
+  });
+
+  ipcMain.handle(IPC.DESIGN_APPROVE_PLAN, (event, input: ApprovePlanInput) => {
+    subscribeEvents(input.projectPath, event.sender);
+    return approvePlan(input);
+  });
+
+  ipcMain.handle(IPC.DESIGN_LIST_APPS, (event, projectPath: string) => {
+    subscribeEvents(projectPath, event.sender);
+    return listApps(projectPath);
+  });
+
+  ipcMain.handle(
+    IPC.DESIGN_GET_APP,
+    (_event, projectPath: string, appId: string) => getApp(projectPath, appId),
+  );
+
+  ipcMain.handle(IPC.DESIGN_UPDATE_PLAN, (event, input: ApprovePlanInput) => {
+    subscribeEvents(input.projectPath, event.sender);
+    return updatePlan(input);
+  });
+
+  ipcMain.handle(
+    IPC.DESIGN_DELETE_APP,
+    (_event, projectPath: string, appId: string) =>
+      deleteApp(projectPath, appId),
+  );
+
+  ipcMain.handle(
+    IPC.DESIGN_RUN_BATCH,
+    (event, projectPath: string, appId: string) => {
+      subscribeEvents(projectPath, event.sender);
+      return runBatch(projectPath, appId);
+    },
+  );
+
+  // ─── v0.15: project-wide tokens ──────────────────────────────────────────
+  ipcMain.handle(IPC.DESIGN_GET_TOKENS, (_event, projectPath: string) =>
+    getTokens(projectPath),
+  );
+
+  ipcMain.handle(
+    IPC.DESIGN_SET_TOKENS,
+    (event, input: SetProjectTokensInput) => {
+      subscribeEvents(input.projectPath, event.sender);
+      return setTokens(input);
+    },
+  );
+
+  ipcMain.handle(
+    IPC.DESIGN_EXTRACT_TOKENS,
+    (event, input: ExtractProjectTokensInput) => {
+      subscribeEvents(input.projectPath, event.sender);
+      return extractTokens(input);
+    },
   );
 }

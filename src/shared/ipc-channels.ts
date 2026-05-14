@@ -176,6 +176,24 @@ export const IPC = {
   DESIGN_DETECT_ADAPTER: 'design:detect-adapter',
   DESIGN_WRITE_BACK: 'design:write-back',
 
+  // v0.15: Multi-screen app planning. Claude breaks a free-form brief
+  // into a JSON plan (screens + shared theme). User reviews/edits, then
+  // approves to materialize each screen as a normal DesignScreen + run
+  // batched generation with the shared theme injected.
+  DESIGN_PLAN_APP: 'design:plan-app',
+  DESIGN_APPROVE_PLAN: 'design:approve-plan',
+  DESIGN_LIST_APPS: 'design:list-apps',
+  DESIGN_GET_APP: 'design:get-app',
+  DESIGN_UPDATE_PLAN: 'design:update-plan',
+  DESIGN_DELETE_APP: 'design:delete-app',
+  DESIGN_RUN_BATCH: 'design:run-batch',
+  // v0.15: Project-wide design tokens. When `lockedAt` is set the prompt
+  // builder injects these into every generation regardless of per-screen
+  // reuseTheme. UI lives in DesignSettings → Project Tokens tab.
+  DESIGN_GET_TOKENS: 'design:get-tokens',
+  DESIGN_SET_TOKENS: 'design:set-tokens',
+  DESIGN_EXTRACT_TOKENS: 'design:extract-tokens',
+
   // Codeflow — codebase visualization + Claude-generated architecture docs
   CODEFLOW_GET_STATUS: 'codeflow:get-status',
   CODEFLOW_ANALYZE: 'codeflow:analyze',

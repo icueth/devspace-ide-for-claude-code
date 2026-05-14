@@ -28,19 +28,32 @@ import {
   generateDesign,
 } from '@main/services/DesignGenerator';
 import type { BuildPromptThemeTokens } from '@main/services/DesignPromptBuilder';
+import {
+  buildAppPlanPrompt,
+  parseAppPlanResponse,
+} from '@main/services/design/AppPlanner';
 import { DEVSPACE_BRIDGE_SCRIPT } from '@main/services/design/bridgeScript';
 import { tagDevspaceIds } from '@main/services/design/idTagger';
+import {
+  extractTokensFromHtml,
+  validateAndSanitizeTokens,
+} from '@main/services/design/ProjectTokens';
 import {
   buildProjectProfile,
   loadCachedOrBuild,
 } from '@main/services/ProjectProfileBuilder';
 import { readSkill } from '@main/services/SkillsService';
 import { extractTheme } from '@main/services/ThemeExtractor';
+import { resolveClaudeBinary } from '@main/services/ClaudeCliLauncher';
+import { newRunId, startChatRun } from '@main/services/TmuxChatRunner';
 import { getBuiltinDesignPacksDir } from '@main/utils/designResourcePaths';
+import { resolveInteractiveShellEnv } from '@main/utils/shellEnv';
 import { IPC } from '@shared/ipc-channels';
 import { createLogger } from '@shared/logger';
 import type {
+  ApprovePlanInput,
   CreateDesignInput,
+  DesignAppPlan,
   DesignEvent,
   DesignEventKind,
   DesignFollowUpInput,
@@ -50,10 +63,16 @@ import type {
   DesignSaveEditsInput,
   DesignScope,
   DesignScreen,
+  DesignScreenStatus,
   DesignSkill,
   DesignSystem,
+  ExtractProjectTokensInput,
+  PlanAppInput,
+  PlannedScreen,
   ProjectDesignProfile,
+  ProjectDesignTokens,
   RegenerateDesignInput,
+  SetProjectTokensInput,
 } from '@shared/design';
 import type { SkillDef } from '@shared/types';
 
@@ -430,13 +449,103 @@ async function pruneLegacyVersions(
 async function persistRegistry(state: ProjectState): Promise<void> {
   const file = registryFile(state.projectPath);
   await fs.promises.mkdir(path.dirname(file), { recursive: true });
+  // v0.15: registry now also includes apps + tokens so a fresh
+  // hydrate on next boot has the full DesignProject snapshot in one
+  // read. The apps[] / tokens fields are best-effort — failure to
+  // load them must not block screen persistence (which is the
+  // critical write).
+  let apps: DesignAppPlan[] | undefined;
+  let tokens: ProjectDesignTokens | undefined;
+  try {
+    const list = await listAppsFromDisk(state.projectPath);
+    if (list.length > 0) apps = list;
+  } catch (err) {
+    logger.warn(`apps snapshot failed: ${(err as Error).message}`);
+  }
+  try {
+    const t = await readProjectTokens(state.projectPath);
+    if (t) tokens = t;
+  } catch (err) {
+    logger.warn(`tokens snapshot failed: ${(err as Error).message}`);
+  }
   const payload: DesignProject = {
     projectPath: state.projectPath,
     screens: [...state.screens.values()].sort((a, b) => a.createdAt - b.createdAt),
   };
+  if (apps) payload.apps = apps;
+  if (tokens) payload.tokens = tokens;
   const tmp = `${file}.tmp-${randomUUID()}`;
   await fs.promises.writeFile(tmp, JSON.stringify(payload, null, 2));
   await fs.promises.rename(tmp, file);
+}
+
+// ─── v0.15: app plan + tokens filesystem layout ────────────────────────────
+
+function appsDir(projectPath: string): string {
+  return path.join(designDir(projectPath), 'apps');
+}
+
+function appDir(projectPath: string, appId: string): string {
+  return path.join(appsDir(projectPath), appId);
+}
+
+function appPlanFile(projectPath: string, appId: string): string {
+  return path.join(appDir(projectPath, appId), 'plan.json');
+}
+
+function tokensFile(projectPath: string): string {
+  return path.join(designDir(projectPath), 'tokens.json');
+}
+
+// Validate an app id with the same UUID guard used for screen ids.
+// Reusing SCREEN_ID_RE keeps the surface area minimal — both renderer
+// inputs are crypto.randomUUID() v4 strings.
+function assertValidAppId(id: string): void {
+  if (typeof id !== 'string' || !SCREEN_ID_RE.test(id)) {
+    throw new Error(`invalid design appId: ${JSON.stringify(id)}`);
+  }
+}
+
+// Atomic write of a JSON payload through tmp + rename. Mirrors the
+// pattern in persistRegistry / persistScreenMeta.
+async function atomicWriteJson(file: string, value: unknown): Promise<void> {
+  await fs.promises.mkdir(path.dirname(file), { recursive: true });
+  const tmp = `${file}.tmp-${randomUUID()}`;
+  await fs.promises.writeFile(tmp, JSON.stringify(value, null, 2));
+  await fs.promises.rename(tmp, file);
+}
+
+// Read a JSON payload from disk; returns null on ENOENT, throws
+// otherwise (so callers can distinguish "missing" from "corrupt").
+async function readJsonIfExists<T>(file: string): Promise<T | null> {
+  let raw: string;
+  try {
+    raw = await fs.promises.readFile(file, 'utf8');
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw err;
+  }
+  try {
+    return JSON.parse(raw) as T;
+  } catch (err) {
+    logger.warn(`json parse failed for ${file}: ${(err as Error).message}`);
+    return null;
+  }
+}
+
+// Read project tokens off disk. Validates + sanitizes through
+// validateAndSanitizeTokens so a tampered tokens.json can't smuggle
+// values past the allowlist into a prompt. Returns null when missing,
+// invalid, or empty after sanitization.
+async function readProjectTokens(
+  projectPath: string,
+): Promise<ProjectDesignTokens | null> {
+  const file = tokensFile(projectPath);
+  assertInsideDesignDir(projectPath, file);
+  if (!(await assertRegularFile(file))) return null;
+  const raw = await readJsonIfExists<ProjectDesignTokens>(file);
+  if (!raw) return null;
+  return validateAndSanitizeTokens(raw);
 }
 
 async function persistScreenMeta(
@@ -902,6 +1011,16 @@ interface ActiveRunEntry {
   cancelRequested?: boolean;
 }
 const activeRuns = new Map<string, ActiveRunEntry>();
+
+// v0.15: in-flight planApp + runBatch tracking. Keyed by
+// `${projectPath}::${appId}` for batches and `${projectPath}` for plans
+// (only one plan per project can be in flight at a time — prevents
+// double-click from spawning parallel Claude calls).
+const inflightPlanRuns = new Map<string, Promise<DesignAppPlan>>();
+const activeBatches = new Set<string>();
+function batchKey(projectPath: string, appId: string): string {
+  return `${path.resolve(projectPath)}::${appId}`;
+}
 
 function runKey(projectPath: string, screenId: string): string {
   return `${path.resolve(projectPath)}::${screenId}`;
@@ -1424,6 +1543,20 @@ async function runGeneration(
     reuseThemeTokens = await loadPriorThemeTokens(state.projectPath, screen);
   }
 
+  // v0.15: project-wide locked tokens. When set with `lockedAt`, the
+  // prompt builder injects them as an authoritative section that
+  // OVERRIDES per-screen reuseTheme (the builder suppresses the
+  // reuseThemeTokens section when lockedTokens is active). Best-effort
+  // load — failure here must not block generation.
+  let lockedTokens: ProjectDesignTokens | null = null;
+  try {
+    lockedTokens = await readProjectTokens(state.projectPath);
+  } catch (err) {
+    logger.warn(
+      `tokens load failed (continuing without): ${(err as Error).message}`,
+    );
+  }
+
   // Buffer streaming output so we cap memory + can mirror the same
   // truncation logic into the persisted message. The HTML on disk
   // remains the source of truth — this buffer is purely for UI.
@@ -1440,6 +1573,7 @@ async function runGeneration(
       projectProfile,
       pageName: screen.pageName,
       reuseThemeTokens,
+      lockedTokens,
       onProgress: (message) => {
         emit(state, 'generation_progress', screen.id, { message });
 
@@ -1742,4 +1876,796 @@ export async function rebuildProfile(
   projectPath: string,
 ): Promise<ProjectDesignProfile | null> {
   return buildProjectProfile({ projectPath, force: true });
+}
+
+// ─── v0.15: app planning API ────────────────────────────────────────────────
+
+// Cap on user-supplied free-form planner brief. AppPlanner caps again
+// internally; we cap here so the prompt size + tmux env are bounded
+// before we even spawn claude.
+const PLAN_BRIEF_MAX_BYTES = 8 * 1024;
+// Hard ceiling on materialized screens per app — same constant as
+// AppPlanner's HARD_MAX_SCREENS, restated locally so we don't need to
+// re-export it.
+const APP_HARD_MAX_SCREENS = 12;
+
+// listAppsFromDisk — read every plan.json under apps/ and return the
+// parsed plans sorted newest-first. Tolerates missing dir + corrupt
+// individual plans (those are skipped with a warning).
+async function listAppsFromDisk(
+  projectPath: string,
+): Promise<DesignAppPlan[]> {
+  const root = appsDir(projectPath);
+  let entries: fs.Dirent[];
+  try {
+    entries = await fs.promises.readdir(root, { withFileTypes: true });
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    throw err;
+  }
+  const out: DesignAppPlan[] = [];
+  for (const e of entries) {
+    if (!e.isDirectory()) continue;
+    if (!SCREEN_ID_RE.test(e.name)) continue;
+    const file = appPlanFile(projectPath, e.name);
+    try {
+      assertInsideDesignDir(projectPath, file);
+      if (!(await assertRegularFile(file))) continue;
+      const raw = await readJsonIfExists<DesignAppPlan>(file);
+      if (raw && typeof raw.appId === 'string' && raw.appId === e.name) {
+        out.push(raw);
+      }
+    } catch (err) {
+      logger.warn(
+        `failed to load app plan ${e.name}: ${(err as Error).message}`,
+      );
+    }
+  }
+  out.sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0));
+  return out;
+}
+
+export async function listApps(projectPath: string): Promise<DesignAppPlan[]> {
+  const s = getState(projectPath);
+  await s.hydrationPromise;
+  return listAppsFromDisk(s.projectPath);
+}
+
+export async function getApp(
+  projectPath: string,
+  appId: string,
+): Promise<DesignAppPlan | null> {
+  assertValidAppId(appId);
+  const s = getState(projectPath);
+  await s.hydrationPromise;
+  const file = appPlanFile(s.projectPath, appId);
+  assertInsideDesignDir(s.projectPath, file);
+  if (!(await assertRegularFile(file))) return null;
+  return readJsonIfExists<DesignAppPlan>(file);
+}
+
+async function persistAppPlan(
+  projectPath: string,
+  plan: DesignAppPlan,
+): Promise<void> {
+  assertValidAppId(plan.appId);
+  const file = appPlanFile(projectPath, plan.appId);
+  assertInsideDesignDir(projectPath, file);
+  await atomicWriteJson(file, plan);
+}
+
+// runPlanGeneration — one-shot Claude call to produce the JSON plan.
+// Mirrors DesignGenerator's spawn pattern (TmuxChatRunner + buildClaudeArgs)
+// but with a different prompt + result shape. Lives here rather than in
+// DesignGenerator because the planner output is a JSON plan, not HTML —
+// keeping the two pipelines distinct avoids leaking AppPlanner concerns
+// into the screen generator.
+async function runPlanGeneration(
+  projectPath: string,
+  appId: string,
+  brief: string,
+  profile: ProjectDesignProfile | null,
+  maxScreens: number | undefined,
+  lockedTokens: ProjectDesignTokens | null,
+): Promise<{ raw: string; runId: string; error: string | null }> {
+  const claudeBin = await resolveClaudeBinary();
+  if (!claudeBin) {
+    throw new Error(
+      "`claude` binary not found on PATH. Install Claude Code CLI first.",
+    );
+  }
+  const prompt = buildAppPlanPrompt(brief, profile, maxScreens, lockedTokens);
+  const runId = newRunId();
+  const runRoot = path.join(projectPath, '.devspace', 'design');
+  const env = await resolveInteractiveShellEnv();
+
+  const args = [
+    '--print',
+    '--output-format',
+    'text',
+    '--allowed-tools',
+    'Glob,Grep',
+    '--disallowed-tools',
+    'Bash,WebFetch,WebSearch,Edit,Write,NotebookEdit,Task,Read',
+  ];
+
+  const handle = await startChatRun({
+    projectId: path.basename(path.resolve(projectPath)),
+    threadId: `app-${appId}`,
+    runId,
+    cwd: projectPath,
+    claudeBin,
+    args,
+    env,
+    prompt,
+    onLine: () => {
+      // Planner runs are short and the JSON arrives in one chunk —
+      // we don't stream-forward progress. The renderer shows a single
+      // "planning…" indicator backed by the app_plan_started event.
+    },
+    runRoot,
+  });
+
+  const result = await handle.promise;
+  if (result.cancelled) {
+    return { raw: '', runId, error: 'cancelled' };
+  }
+  if (result.error) {
+    return { raw: '', runId, error: result.error };
+  }
+  let raw: string;
+  try {
+    raw = await fs.promises.readFile(
+      path.join(handle.runDir, 'out.jsonl'),
+      'utf8',
+    );
+  } catch (err) {
+    return {
+      raw: '',
+      runId,
+      error: `failed to read planner output: ${(err as Error).message}`,
+    };
+  }
+  return { raw, runId, error: null };
+}
+
+export async function planApp(input: PlanAppInput): Promise<DesignAppPlan> {
+  const s = getState(input.projectPath);
+  await s.hydrationPromise;
+
+  // Guard against double-click / parallel calls — return the in-flight
+  // promise for the same project rather than spawning a second Claude
+  // run. Keyed on resolved projectPath; deleted in finally.
+  const planKey = path.resolve(input.projectPath);
+  const inflight = inflightPlanRuns.get(planKey);
+  if (inflight) return inflight;
+
+  if (typeof input.brief !== 'string' || input.brief.trim().length === 0) {
+    throw new Error('plan brief is empty');
+  }
+
+  const promise = (async () => {
+  // Hard cap before AppPlanner re-caps internally. Keeps prompt + env
+  // bounded against a runaway paste.
+  const briefBuf = Buffer.from(input.brief, 'utf8');
+  const cappedBrief =
+    briefBuf.length <= PLAN_BRIEF_MAX_BYTES
+      ? input.brief
+      : briefBuf.slice(0, PLAN_BRIEF_MAX_BYTES).toString('utf8');
+
+  const appId = randomUUID();
+  const now = Date.now();
+
+  // Initial draft — empty until the planner returns. Persisting up
+  // front lets the UI link to the plan row even while it's still
+  // generating, and gives us a stable id to emit lifecycle events on.
+  const initialPlan: DesignAppPlan = {
+    appId,
+    name:
+      typeof input.name === 'string' && input.name.trim().length > 0
+        ? input.name.trim().slice(0, 80)
+        : 'Planning…',
+    brief: cappedBrief,
+    status: 'draft',
+    theme: { colors: [], fonts: [], vibe: '' },
+    screens: [],
+    createdAt: now,
+    updatedAt: now,
+  };
+  await persistAppPlan(s.projectPath, initialPlan);
+  emit(s, 'app_plan_started', '', { appPlan: initialPlan });
+
+  // Best-effort project context + token load. Failures fall through —
+  // we still try to plan with whatever signal we have.
+  let profile: ProjectDesignProfile | null = null;
+  try {
+    profile = await loadCachedOrBuild(s.projectPath);
+  } catch (err) {
+    logger.warn(
+      `plan: profile load failed (continuing): ${(err as Error).message}`,
+    );
+  }
+  let lockedTokens: ProjectDesignTokens | null = null;
+  try {
+    lockedTokens = await readProjectTokens(s.projectPath);
+  } catch (err) {
+    logger.warn(
+      `plan: tokens load failed (continuing): ${(err as Error).message}`,
+    );
+  }
+
+  let raw = '';
+  let runId = '';
+  let runError: string | null = null;
+  try {
+    const out = await runPlanGeneration(
+      s.projectPath,
+      appId,
+      cappedBrief,
+      profile,
+      input.maxScreens,
+      lockedTokens,
+    );
+    raw = out.raw;
+    runId = out.runId;
+    runError = out.error;
+  } catch (err) {
+    runError = (err as Error).message;
+  }
+
+  if (runError) {
+    const failed: DesignAppPlan = {
+      ...initialPlan,
+      planRunId: runId || undefined,
+      planError: runError,
+      updatedAt: Date.now(),
+    };
+    await persistAppPlan(s.projectPath, failed);
+    emit(s, 'app_plan_error', '', { appPlan: failed, message: runError });
+    return failed;
+  }
+
+  // Map skill slugs from listSkills() — same source the screen
+  // generator uses, so the planner's choices map cleanly.
+  const skills = await listSkills(s.projectPath);
+  const availableSlugs = skills.map((k) => k.slug);
+  const parsed = parseAppPlanResponse(raw, availableSlugs);
+
+  if ('error' in parsed) {
+    const failed: DesignAppPlan = {
+      ...initialPlan,
+      planRunId: runId,
+      planError: parsed.error,
+      updatedAt: Date.now(),
+    };
+    await persistAppPlan(s.projectPath, failed);
+    emit(s, 'app_plan_error', '', { appPlan: failed, message: parsed.error });
+    return failed;
+  }
+
+    const finalPlan: DesignAppPlan = {
+      appId,
+      name: parsed.plan.name,
+      brief: cappedBrief,
+      status: 'draft',
+      theme: parsed.plan.theme,
+      screens: parsed.plan.screens.slice(0, APP_HARD_MAX_SCREENS),
+      createdAt: now,
+      updatedAt: Date.now(),
+      planRunId: runId,
+    };
+    await persistAppPlan(s.projectPath, finalPlan);
+    await persistRegistry(s);
+    emit(s, 'app_plan_ready', '', { appPlan: finalPlan });
+    return finalPlan;
+  })();
+
+  inflightPlanRuns.set(planKey, promise);
+  try {
+    return await promise;
+  } finally {
+    if (inflightPlanRuns.get(planKey) === promise) {
+      inflightPlanRuns.delete(planKey);
+    }
+  }
+}
+
+// validatePlanForCommit — applies the same allowlists used by the
+// planner to a renderer-supplied plan. Used by both updatePlan and
+// approvePlan so the two paths share their validation surface. Throws
+// on missing fields; silently drops invalid entries inside theme +
+// screens (matches AppPlanner.parseAppPlanResponse semantics).
+function validatePlanForCommit(input: ApprovePlanInput): DesignAppPlan {
+  if (!input || typeof input !== 'object') {
+    throw new Error('plan payload missing');
+  }
+  if (!input.plan || typeof input.plan !== 'object') {
+    throw new Error('plan body missing');
+  }
+  assertValidAppId(input.appId);
+  if (input.plan.appId !== input.appId) {
+    throw new Error('plan appId mismatch');
+  }
+
+  // Theme: reuse validateAndSanitizeTokens for the colors/fonts/vibe
+  // half. AppThemeSpec is the same shape as ProjectDesignTokens minus
+  // lockedAt / source, so the sanitizer's behaviour is identical.
+  const sanitizedTokens = validateAndSanitizeTokens({
+    colors: Array.isArray(input.plan.theme?.colors)
+      ? input.plan.theme.colors
+      : [],
+    fonts: Array.isArray(input.plan.theme?.fonts) ? input.plan.theme.fonts : [],
+    vibe:
+      typeof input.plan.theme?.vibe === 'string' ? input.plan.theme.vibe : '',
+  });
+  const theme = sanitizedTokens
+    ? {
+        colors: sanitizedTokens.colors,
+        fonts: sanitizedTokens.fonts,
+        vibe: sanitizedTokens.vibe,
+      }
+    : { colors: [], fonts: [], vibe: '' };
+
+  // Screens: cap at HARD_MAX_SCREENS, drop entries with missing core
+  // fields, reissue ids that don't look like UUIDs (renderer may have
+  // edited or invented them).
+  const rawScreens = Array.isArray(input.plan.screens)
+    ? input.plan.screens
+    : [];
+  const screens: PlannedScreen[] = [];
+  const seenIds = new Set<string>();
+  for (const raw of rawScreens) {
+    if (!raw || typeof raw !== 'object') continue;
+    const name = typeof raw.name === 'string' ? raw.name.trim() : '';
+    if (name.length === 0) continue;
+    // Reject duplicates — two PlannedScreens sharing an id would later
+    // both materialize to the same DesignScreen via approvePlan, leaving
+    // the plan with two pointers to one screen and broken status mirror.
+    const candidateId = String(raw.id ?? '');
+    const id =
+      SCREEN_ID_RE.test(candidateId) && !seenIds.has(candidateId)
+        ? candidateId
+        : randomUUID();
+    seenIds.add(id);
+    const pageNameRaw =
+      typeof raw.pageName === 'string' ? raw.pageName.trim() : name;
+    const pageName = pageNameRaw.length > 0 ? pageNameRaw : name;
+    const briefRaw =
+      typeof raw.brief === 'string' ? raw.brief.trim() : '';
+    const brief = briefRaw.length <= 600 ? briefRaw : briefRaw.slice(0, 600);
+    const skillSlug =
+      typeof raw.skillSlug === 'string' && raw.skillSlug.trim().length > 0
+        ? raw.skillSlug.trim()
+        : '';
+    if (skillSlug.length === 0) continue;
+    const status: PlannedScreen['status'] =
+      raw.status === 'generating' ||
+      raw.status === 'ready' ||
+      raw.status === 'error'
+        ? raw.status
+        : 'pending';
+    const screenId =
+      typeof raw.screenId === 'string' && SCREEN_ID_RE.test(raw.screenId)
+        ? raw.screenId
+        : undefined;
+    const planned: PlannedScreen = {
+      id,
+      name: name.slice(0, 80),
+      pageName: pageName.slice(0, 80),
+      brief,
+      skillSlug,
+      status,
+    };
+    if (screenId) planned.screenId = screenId;
+    screens.push(planned);
+    if (screens.length >= APP_HARD_MAX_SCREENS) break;
+  }
+  if (screens.length === 0) {
+    throw new Error('plan must have at least one screen');
+  }
+
+  const name =
+    typeof input.plan.name === 'string' && input.plan.name.trim().length > 0
+      ? input.plan.name.trim().slice(0, 80)
+      : 'Untitled app';
+  const brief =
+    typeof input.plan.brief === 'string' ? input.plan.brief : '';
+  const status: DesignAppPlan['status'] =
+    input.plan.status === 'approved' ||
+    input.plan.status === 'completed' ||
+    input.plan.status === 'cancelled'
+      ? input.plan.status
+      : 'draft';
+
+  return {
+    appId: input.appId,
+    name,
+    brief,
+    status,
+    theme,
+    screens,
+    createdAt: input.plan.createdAt ?? Date.now(),
+    updatedAt: Date.now(),
+    planRunId: input.plan.planRunId,
+    planError: input.plan.planError,
+  };
+}
+
+export async function updatePlan(
+  input: ApprovePlanInput,
+): Promise<DesignAppPlan> {
+  const s = getState(input.projectPath);
+  await s.hydrationPromise;
+  const validated = validatePlanForCommit(input);
+  // updatePlan preserves status — never auto-promotes to 'approved'.
+  // Caller must explicitly invoke approvePlan for that transition.
+  if (
+    validated.status !== 'draft' &&
+    validated.status !== 'approved' &&
+    validated.status !== 'completed' &&
+    validated.status !== 'cancelled'
+  ) {
+    validated.status = 'draft';
+  }
+  await persistAppPlan(s.projectPath, validated);
+  await persistRegistry(s);
+  emit(s, 'app_plan_updated', '', { appPlan: validated });
+  return validated;
+}
+
+export async function approvePlan(
+  input: ApprovePlanInput,
+): Promise<DesignAppPlan> {
+  const s = getState(input.projectPath);
+  await s.hydrationPromise;
+
+  const validated = validatePlanForCommit(input);
+  validated.status = 'approved';
+
+  // Materialize each PlannedScreen as a real DesignScreen via
+  // createDesign(). We bypass the brief-sanitization layer that
+  // createDesign normally applies to user input by writing screens
+  // directly — but reusing createDesign keeps the screen-creation
+  // path single-sourced (and emits screen_created events for free).
+  // Trade-off: createDesign also auto-kicks generation. We DON'T want
+  // that here (runBatch is the explicit trigger), so we materialize
+  // by hand and emit screen_created.
+  const skills = await listSkills(s.projectPath);
+  for (const planned of validated.screens) {
+    if (planned.screenId && s.screens.has(planned.screenId)) {
+      // Already materialized (idempotent re-approval). Just refresh
+      // the planned-side screenId pointer.
+      continue;
+    }
+    const skill = skills.find((k) => k.slug === planned.skillSlug);
+    if (!skill) {
+      throw new Error(
+        `design skill not found for screen "${planned.name}": ${planned.skillSlug}`,
+      );
+    }
+    const now = Date.now();
+    const screenId = planned.id;
+    const initialMessages: DesignMessage[] =
+      planned.brief.trim().length > 0
+        ? [
+            {
+              id: randomUUID(),
+              role: 'user',
+              content: planned.brief,
+              ts: now,
+            },
+          ]
+        : [];
+    const screen: DesignScreen = {
+      id: screenId,
+      name: planned.name,
+      skillSlug: planned.skillSlug,
+      brief: planned.brief,
+      status: 'pending',
+      htmlPath: null,
+      createdAt: now,
+      updatedAt: now,
+      versions: [],
+      messages: initialMessages,
+      historyVersion: 2,
+      pageName: planned.pageName,
+      appId: validated.appId,
+    };
+    s.screens.set(screen.id, screen);
+    await persistScreenMeta(s.projectPath, screen);
+    planned.screenId = screen.id;
+    planned.status = 'pending';
+    emit(s, 'screen_created', screen.id, { screen });
+  }
+
+  await persistAppPlan(s.projectPath, validated);
+  await persistRegistry(s);
+  emit(s, 'app_plan_updated', '', { appPlan: validated });
+  return validated;
+}
+
+export async function deleteApp(
+  projectPath: string,
+  appId: string,
+): Promise<void> {
+  assertValidAppId(appId);
+  const s = getState(projectPath);
+  await s.hydrationPromise;
+
+  // Signal any in-flight batch for this app to stop. The runBatch loop
+  // checks `activeBatches.has(key)` between iterations and exits cleanly
+  // — without this, deleteApp's `rm -rf` would race the batch's
+  // `persistAppPlan` call, recreating the just-deleted directory.
+  const bKey = batchKey(s.projectPath, appId);
+  activeBatches.delete(bKey);
+
+  // Orphan associated screens — set their appId to undefined and emit
+  // screen_updated so the renderer can re-bucket them. We DO NOT
+  // delete the screens; the user might still want their generated
+  // HTML. Persist failures are logged + leave in-memory state mirroring
+  // disk (so we don't surface a fake successful orphan).
+  for (const screen of s.screens.values()) {
+    if (screen.appId === appId) {
+      screen.appId = undefined;
+      screen.updatedAt = Date.now();
+      try {
+        await persistScreenMeta(s.projectPath, screen);
+      } catch (err) {
+        logger.warn(
+          `orphan persist failed for ${screen.id}: ${(err as Error).message}`,
+        );
+        // Best-effort revert: re-attach the appId so disk and memory stay
+        // consistent. The caller will see this screen as still-grouped
+        // and can retry.
+        screen.appId = appId;
+        continue;
+      }
+      emit(s, 'screen_updated', screen.id, { screen });
+    }
+  }
+
+  const dir = appDir(s.projectPath, appId);
+  assertInsideDesignDir(s.projectPath, dir);
+  // Refuse rm of the apps root itself (defensive; appId is UUID-validated
+  // so this can't trigger today, but cheap belt-and-suspenders).
+  if (path.resolve(dir) === path.resolve(appsDir(s.projectPath))) {
+    throw new Error('refusing to remove apps root');
+  }
+  try {
+    await fs.promises.rm(dir, { recursive: true, force: true });
+  } catch (err) {
+    logger.warn(`failed to remove app dir: ${(err as Error).message}`);
+  }
+  await persistRegistry(s);
+  emit(s, 'app_plan_deleted', '', { appPlan: { appId } as DesignAppPlan });
+}
+
+export async function runBatch(
+  projectPath: string,
+  appId: string,
+): Promise<void> {
+  assertValidAppId(appId);
+  const s = getState(projectPath);
+  await s.hydrationPromise;
+  const plan = await getApp(projectPath, appId);
+  if (!plan) throw new Error(`app plan not found: ${appId}`);
+  if (plan.status !== 'approved' && plan.status !== 'completed') {
+    throw new Error(`app plan must be approved before running batch`);
+  }
+
+  const bKey = batchKey(s.projectPath, appId);
+  if (activeBatches.has(bKey)) {
+    // Already running for this app — return without spawning a parallel
+    // batch (regenerateDesign would throw on the first generating screen
+    // anyway, but this gives a clean error path).
+    throw new Error('batch already in progress for this app');
+  }
+  activeBatches.add(bKey);
+
+  try {
+    // Sequential generation. Stop on first error and surface it via
+    // app_plan_error so the user can fix + retry without a half-done
+    // batch silently advancing. Between iterations we check activeBatches
+    // — if deleteApp removed our entry, we exit cleanly without writing
+    // back to the deleted plan file.
+    for (const planned of plan.screens) {
+      if (!activeBatches.has(bKey)) return;
+      if (!planned.screenId) continue;
+      if (planned.status === 'ready') continue;
+
+      // Mirror "generating" into the planned row up-front so the
+      // sidebar's "Generate all" button + per-screen status dots
+      // reflect live state (not just settled state).
+      planned.status = 'generating';
+      plan.updatedAt = Date.now();
+      await persistAppPlan(s.projectPath, plan);
+      emit(s, 'app_plan_updated', '', { appPlan: plan });
+
+      let settled: DesignScreenStatus;
+      try {
+        await regenerateDesign({
+          projectPath,
+          screenId: planned.screenId,
+          reuseTheme: false,
+        });
+        settled = await waitForScreenSettled(
+          s,
+          planned.screenId,
+          5 * 60 * 1000,
+        );
+      } catch (err) {
+        if (!activeBatches.has(bKey)) return;
+        const failedPlan: DesignAppPlan = {
+          ...plan,
+          planError: (err as Error).message,
+          updatedAt: Date.now(),
+        };
+        await persistAppPlan(s.projectPath, failedPlan);
+        emit(s, 'app_plan_error', '', {
+          appPlan: failedPlan,
+          message: (err as Error).message,
+        });
+        return;
+      }
+
+      if (!activeBatches.has(bKey)) return;
+
+      // Settled → mirror actual status. If 'pending' (user cancelled this
+      // screen with no prior versions), treat as soft-stop: persist + exit
+      // batch without raising an error.
+      const screen = s.screens.get(planned.screenId);
+      planned.status = settled === 'pending' ? 'pending' : settled;
+      plan.updatedAt = Date.now();
+      await persistAppPlan(s.projectPath, plan);
+      emit(s, 'app_plan_updated', '', { appPlan: plan });
+
+      if (settled === 'pending') {
+        return;
+      }
+
+      if (settled === 'error') {
+        const errMsg = screen?.errorMessage ?? 'screen generation failed';
+        const failedPlan: DesignAppPlan = {
+          ...plan,
+          planError: errMsg,
+          updatedAt: Date.now(),
+        };
+        await persistAppPlan(s.projectPath, failedPlan);
+        emit(s, 'app_plan_error', '', { appPlan: failedPlan, message: errMsg });
+        return;
+      }
+    }
+
+    if (!activeBatches.has(bKey)) return;
+
+    const allReady = plan.screens.every((p) => p.status === 'ready');
+    if (allReady) {
+      plan.status = 'completed';
+    }
+    plan.updatedAt = Date.now();
+    await persistAppPlan(s.projectPath, plan);
+    await persistRegistry(s);
+    emit(s, 'app_plan_updated', '', { appPlan: plan });
+  } finally {
+    activeBatches.delete(bKey);
+  }
+}
+
+// waitForScreenSettled — poll the in-memory screen until status reaches
+// a terminal state. 'ready' / 'error' are the success/fail terminals;
+// 'pending' becomes a terminal too (without error) because cancelDesign
+// flips a generating-from-zero screen back to 'pending', and a hung
+// 'pending' wait would otherwise block runBatch for the full timeout.
+// Resolves with the final status so callers can distinguish.
+function waitForScreenSettled(
+  state: ProjectState,
+  screenId: string,
+  timeoutMs: number,
+): Promise<DesignScreenStatus> {
+  return new Promise((resolve, reject) => {
+    const start = Date.now();
+    const check = () => {
+      const screen = state.screens.get(screenId);
+      if (!screen) {
+        reject(new Error(`screen vanished during batch: ${screenId}`));
+        return;
+      }
+      if (
+        screen.status === 'ready' ||
+        screen.status === 'error' ||
+        screen.status === 'pending'
+      ) {
+        resolve(screen.status);
+        return;
+      }
+      if (Date.now() - start > timeoutMs) {
+        reject(new Error(`batch timeout waiting for screen ${screenId}`));
+        return;
+      }
+      setTimeout(check, 250);
+    };
+    check();
+  });
+}
+
+// ─── v0.15: project tokens API ──────────────────────────────────────────────
+
+export async function getTokens(
+  projectPath: string,
+): Promise<ProjectDesignTokens | null> {
+  const s = getState(projectPath);
+  await s.hydrationPromise;
+  return readProjectTokens(s.projectPath);
+}
+
+export async function setTokens(
+  input: SetProjectTokensInput,
+): Promise<ProjectDesignTokens | null> {
+  const s = getState(input.projectPath);
+  await s.hydrationPromise;
+  const file = tokensFile(s.projectPath);
+  assertInsideDesignDir(s.projectPath, file);
+
+  // Explicit clear vs preserve distinction:
+  // - input.tokens === null → user clicked "Reset / clear", remove file.
+  // - input.tokens non-null but sanitizes to null → caller sent an
+  //   all-empty payload, treat as no-op (return current tokens unchanged
+  //   instead of destroying them). Avoids a vibe-only edit of an empty
+  //   field accidentally wiping locked colors/fonts.
+  if (input.tokens === null) {
+    try {
+      await fs.promises.rm(file, { force: true });
+    } catch (err) {
+      logger.warn(
+        `failed to remove tokens file: ${(err as Error).message}`,
+      );
+    }
+    emit(s, 'tokens_changed', '', { tokens: null });
+    return null;
+  }
+
+  const sanitized = validateAndSanitizeTokens(input.tokens);
+  if (sanitized === null) {
+    return readProjectTokens(s.projectPath);
+  }
+
+  await atomicWriteJson(file, sanitized);
+  emit(s, 'tokens_changed', '', { tokens: sanitized });
+  return sanitized;
+}
+
+export async function extractTokens(
+  input: ExtractProjectTokensInput,
+): Promise<ProjectDesignTokens> {
+  assertValidScreenId(input.screenId);
+  assertValidScreenId(input.versionId);
+  const s = getState(input.projectPath);
+  await s.hydrationPromise;
+
+  const html = await readHtml(s.projectPath, input.screenId, input.versionId);
+  const { colors, fonts } = extractTokensFromHtml(html);
+
+  const tokens: ProjectDesignTokens = {
+    colors,
+    fonts,
+    vibe: '',
+    source: { screenId: input.screenId, versionId: input.versionId },
+  };
+  if (input.lock === true) {
+    // Refuse to lock empty extraction over existing locked tokens —
+    // a screen with no extractable colors/fonts would otherwise wipe
+    // the user's previous lock via the all-empty branch in setTokens.
+    if (colors.length === 0 && fonts.length === 0) {
+      throw new Error(
+        'no tokens detected in selected version — extraction would clear existing tokens',
+      );
+    }
+    tokens.lockedAt = Date.now();
+    const persisted = await setTokens({
+      projectPath: s.projectPath,
+      tokens,
+    });
+    return persisted ?? tokens;
+  }
+  return tokens;
 }

@@ -41,8 +41,10 @@ import type {
   Workspace,
 } from '@shared/types';
 import type {
+  ApprovePlanInput,
   CreateDesignInput,
   DesignAdapterDetectResult,
+  DesignAppPlan,
   DesignEvent,
   DesignFollowUpInput,
   DesignMessage,
@@ -55,8 +57,12 @@ import type {
   DevServerEvent,
   DevServerInfo,
   DevServerStartInput,
+  ExtractProjectTokensInput,
+  PlanAppInput,
   ProjectDesignProfile,
+  ProjectDesignTokens,
   RegenerateDesignInput,
+  SetProjectTokensInput,
 } from '@shared/design';
 
 export interface DevspaceApi {
@@ -284,6 +290,18 @@ export interface DevspaceApi {
       projectPath: string,
       cb: (event: DesignEvent) => void,
     ) => () => void;
+    // ── v0.15: Multi-screen app planning ────────────────────────────
+    planApp: (input: PlanAppInput) => Promise<DesignAppPlan>;
+    listApps: (projectPath: string) => Promise<DesignAppPlan[]>;
+    getApp: (projectPath: string, appId: string) => Promise<DesignAppPlan | null>;
+    updatePlan: (input: ApprovePlanInput) => Promise<DesignAppPlan>;
+    approvePlan: (input: ApprovePlanInput) => Promise<DesignAppPlan>;
+    deleteApp: (projectPath: string, appId: string) => Promise<void>;
+    runBatch: (projectPath: string, appId: string) => Promise<void>;
+    // ── v0.15: Project-wide design tokens ───────────────────────────
+    getTokens: (projectPath: string) => Promise<ProjectDesignTokens | null>;
+    setTokens: (input: SetProjectTokensInput) => Promise<ProjectDesignTokens | null>;
+    extractTokens: (input: ExtractProjectTokensInput) => Promise<ProjectDesignTokens>;
   };
   devServer: {
     // Detect framework + script + package manager without starting anything.
@@ -513,6 +531,16 @@ function makeStubApi(): DevspaceApi {
       rebuildProfile: () => Promise.resolve(null),
       subscribe: notWired('design.subscribe'),
       onEvent: () => () => undefined,
+      planApp: notWired('design.planApp'),
+      listApps: () => Promise.resolve([]),
+      getApp: () => Promise.resolve(null),
+      updatePlan: notWired('design.updatePlan'),
+      approvePlan: notWired('design.approvePlan'),
+      deleteApp: notWired('design.deleteApp'),
+      runBatch: notWired('design.runBatch'),
+      getTokens: () => Promise.resolve(null),
+      setTokens: notWired('design.setTokens'),
+      extractTokens: notWired('design.extractTokens'),
     },
     devServer: {
       // Permissive idle stub so the LivePreview pane doesn't blow up

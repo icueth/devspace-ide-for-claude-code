@@ -288,6 +288,28 @@ const api = {
       ipcRenderer.invoke(IPC.DESIGN_GET_PROFILE, projectPath),
     rebuildProfile: (projectPath: string) =>
       ipcRenderer.invoke(IPC.DESIGN_REBUILD_PROFILE, projectPath),
+    // v0.15: multi-screen app planning
+    planApp: (input: import('@shared/design').PlanAppInput) =>
+      ipcRenderer.invoke(IPC.DESIGN_PLAN_APP, input),
+    approvePlan: (input: import('@shared/design').ApprovePlanInput) =>
+      ipcRenderer.invoke(IPC.DESIGN_APPROVE_PLAN, input),
+    listApps: (projectPath: string) =>
+      ipcRenderer.invoke(IPC.DESIGN_LIST_APPS, projectPath),
+    getApp: (projectPath: string, appId: string) =>
+      ipcRenderer.invoke(IPC.DESIGN_GET_APP, projectPath, appId),
+    updatePlan: (input: import('@shared/design').ApprovePlanInput) =>
+      ipcRenderer.invoke(IPC.DESIGN_UPDATE_PLAN, input),
+    deleteApp: (projectPath: string, appId: string) =>
+      ipcRenderer.invoke(IPC.DESIGN_DELETE_APP, projectPath, appId),
+    runBatch: (projectPath: string, appId: string) =>
+      ipcRenderer.invoke(IPC.DESIGN_RUN_BATCH, projectPath, appId),
+    // v0.15: project-wide tokens
+    getTokens: (projectPath: string) =>
+      ipcRenderer.invoke(IPC.DESIGN_GET_TOKENS, projectPath),
+    setTokens: (input: import('@shared/design').SetProjectTokensInput) =>
+      ipcRenderer.invoke(IPC.DESIGN_SET_TOKENS, input),
+    extractTokens: (input: import('@shared/design').ExtractProjectTokensInput) =>
+      ipcRenderer.invoke(IPC.DESIGN_EXTRACT_TOKENS, input),
     subscribe: (projectPath: string) =>
       ipcRenderer.invoke(IPC.DESIGN_SUBSCRIBE, projectPath),
     onEvent: (

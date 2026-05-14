@@ -292,11 +292,180 @@ export interface DesignScreen {
   // v0.14: optional page-name hint shown in the screen list and threaded
   // through prompts ("Design the Checkout page for this project's ...").
   pageName?: string;
+  // v0.15: when set, the screen belongs to a planned app (DesignAppPlan)
+  // and renders under that group in the sidebar. Independent screens have
+  // no appId. Cross-screen theme sharing keys off this id.
+  appId?: string;
 }
 
 export interface DesignProject {
   projectPath: string;
   screens: DesignScreen[];
+  // v0.15: planned multi-screen apps. Each app groups multiple screens
+  // that share a brief context + theme. Empty when no apps planned.
+  apps?: DesignAppPlan[];
+  // v0.15: project-wide design tokens. When `lockedAt` is set the prompt
+  // builder injects these tokens into every generation regardless of
+  // per-screen reuseTheme. Absent until the user opens DesignSettings →
+  // Project Tokens tab and either auto-extracts or hand-edits a value.
+  tokens?: ProjectDesignTokens;
+}
+
+// ─── v0.15: Multi-screen app planning ─────────────────────────────────────
+//
+// A "design app" is a set of screens generated from one brief
+// ("Stock management app", "E-commerce checkout flow", etc.). Claude
+// produces a JSON plan up front (screen list + per-screen brief + shared
+// theme spec); the user reviews/edits, then the backend batches each
+// screen sequentially with the shared theme injected into every prompt.
+//
+// Storage: <project>/.devspace/design/apps/<appId>/plan.json
+// Each screen in the plan is materialized as a regular DesignScreen with
+// `appId` set, so the existing screen pipeline (versions, edits, write-
+// back) applies unchanged.
+
+export type DesignAppPlanStatus =
+  | 'draft'        // Claude returned plan, awaiting user approval
+  | 'approved'     // user accepted, screens being / will be generated
+  | 'completed'    // every planned screen reached 'ready'
+  | 'cancelled';   // user dismissed before approving
+
+export interface PlannedScreen {
+  // Stable id within the plan. Becomes the screenId once materialized so
+  // status of the plan row stays in sync with the underlying screen.
+  id: string;
+  name: string;          // shown in plan editor + sidebar (e.g. "Dashboard")
+  pageName: string;      // semantic page ("Dashboard", "Add Product")
+  brief: string;         // per-screen brief (Claude's plan output)
+  skillSlug: string;     // resolved by the planner using suggestSkillSlugs heuristic
+  // Materialization state — 'pending' until generation kicks off, then
+  // mirrors the underlying DesignScreen.status.
+  status: DesignScreenStatus;
+  // Set once materialized. Equals PlannedScreen.id by construction.
+  screenId?: string;
+}
+
+// Theme spec the planner asks Claude to return. Same shape we inject
+// into every screen's prompt so the generated HTML stays visually
+// consistent across the app. Validated against an allowlist before
+// injection (no arbitrary CSS).
+export interface AppThemeSpec {
+  // Color tokens — at most 8 entries, each `name: value`. Allowed
+  // values: hex (#rgb / #rrggbb / #rrggbbaa), named CSS colors,
+  // rgb()/rgba()/hsl()/hsla() with literal numeric args. Anything else
+  // is dropped silently.
+  colors: string[];
+  // Font tokens — at most 4 entries. Stripped of any url() references
+  // so a hostile plan can't smuggle network calls into generations.
+  fonts: string[];
+  // One-line description for the user to confirm before approving the
+  // plan ("clean modern dashboard, deep navy + warm accents").
+  vibe: string;
+}
+
+export interface DesignAppPlan {
+  appId: string;
+  name: string;          // user-supplied app title (e.g. "Stock Management")
+  brief: string;         // the original user brief that produced the plan
+  status: DesignAppPlanStatus;
+  theme: AppThemeSpec;
+  screens: PlannedScreen[];
+  createdAt: number;
+  updatedAt: number;
+  // tmux runId for the planning call. Stored so the user can inspect
+  // the planner's stdout if the JSON fails to parse.
+  planRunId?: string;
+  // Set when status === 'draft' and parsing failed. Surfaces in the UI
+  // so the user can either retry or fall back to manual screen creation.
+  planError?: string;
+}
+
+export interface PlanAppInput {
+  projectPath: string;
+  // Free-form brief. Claude is asked to break it down into 4-8 screens
+  // plus a shared theme. Caller-side validation: 8KB cap.
+  brief: string;
+  name?: string;         // optional explicit name; otherwise derived from brief
+  // Optional cap on screens to plan. Default: Claude picks (typically 5-7).
+  maxScreens?: number;
+}
+
+export interface ApprovePlanInput {
+  projectPath: string;
+  appId: string;
+  // The (possibly user-edited) plan to commit. Backend validates the
+  // shape (allowlists colors/fonts, caps screens at 12) before
+  // materializing screens.
+  plan: DesignAppPlan;
+}
+
+// ─── v0.15: Project-wide design tokens ────────────────────────────────────
+//
+// Optional shared tokens that apply to every screen in the project.
+// When `lockedAt` is set, the prompt builder injects these as a hard
+// constraint into every generation. The user can hand-edit, auto-
+// extract from a chosen screen version, or unlock to let each
+// generation pick freely.
+
+export interface ProjectDesignTokens {
+  // Same shape as AppThemeSpec for consistency / easy promotion.
+  colors: string[];
+  fonts: string[];
+  vibe: string;
+  // Set when the user clicked "Lock theme for project". When unset
+  // these values are advisory hints only (shown in DesignSettings but
+  // NOT injected into prompts).
+  lockedAt?: number;
+  // When auto-extracted, the source screen+version for traceability.
+  // Empty when hand-edited.
+  source?: { screenId: string; versionId: string };
+}
+
+export interface SetProjectTokensInput {
+  projectPath: string;
+  tokens: ProjectDesignTokens | null;     // null clears
+}
+
+export interface ExtractProjectTokensInput {
+  projectPath: string;
+  // The screen + version to extract from. Pre-selected by the UI from a
+  // dropdown of ready versions.
+  screenId: string;
+  versionId: string;
+  // When true, also set `lockedAt` to now so the result is immediately
+  // injected into future prompts. Default: false (extract preview only,
+  // user must click "Lock" to commit).
+  lock?: boolean;
+}
+
+// ─── v0.15: Bridge actions (Main chat ↔ Design) ───────────────────────────
+//
+// Two-way handoffs between the main chat panel and the design pane.
+// These are pure UI actions (renderer-side openDesign / openChat with
+// pre-filled state) — there is no IPC because no backend state changes
+// until the user clicks Generate / Send. Types live here so renderer
+// + editor store agree on the shape.
+
+export interface OpenDesignFromChatInput {
+  projectPath: string;
+  // Excerpt of the assistant message the user right-clicked. Pre-fills
+  // the brief composer in DesignToolbar but leaves the rest blank so
+  // the user picks skill / page-name explicitly.
+  initialBrief: string;
+  // Suggested skill (from heuristic on the brief). User can override
+  // before clicking Generate. Empty when no good match.
+  suggestedSkillSlug?: string;
+}
+
+export interface OpenChatFromDesignInput {
+  projectPath: string;
+  screenId: string;
+  // Pre-filled chat input. Renderer composes:
+  //   "Working on design screen \"<name>\" (<relPath> v<n>).\n\nBrief: ...\n\n"
+  // Optionally appended with the latest version's HTML excerpt (≤8KB).
+  // Returned to the renderer so it can drop the text into the chat
+  // panel's input box for the user to review before sending.
+  prefill: string;
 }
 
 export interface CreateDesignInput {
@@ -390,11 +559,22 @@ export type DesignEventKind =
   // once the turn settles (success OR cancel) with the final content.
   | 'message_appended'
   | 'message_updated'
-  | 'message_finalized';
+  | 'message_finalized'
+  // v0.15: app planning lifecycle
+  | 'app_plan_started'
+  | 'app_plan_ready'
+  | 'app_plan_error'
+  | 'app_plan_updated'      // status / screen state changed
+  | 'app_plan_deleted'
+  // v0.15: project tokens
+  | 'tokens_changed';
 
 export interface DesignEvent {
   kind: DesignEventKind;
   projectPath: string;
+  // For app_plan_* / tokens_changed events, screenId is empty string
+  // ('') — those events are project-level. Existing screen-level
+  // handlers must guard with `if (e.screenId)` before lookup.
   screenId: string;
   // Populated for *_complete / *_error / *_updated events.
   screen?: DesignScreen;
@@ -403,6 +583,10 @@ export interface DesignEvent {
   // v0.10: populated on message_* events. The renderer routes by id
   // (append → push; updated → patch in place; finalized → mark complete).
   designMessage?: DesignMessage;
+  // v0.15: populated on app_plan_* events.
+  appPlan?: DesignAppPlan;
+  // v0.15: populated on tokens_changed events.
+  tokens?: ProjectDesignTokens | null;
   ts: number;
 }
 

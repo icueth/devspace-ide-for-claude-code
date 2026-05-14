@@ -33,6 +33,7 @@ import type {
   DesignSkill,
   DesignSystem,
   ProjectDesignProfile,
+  ProjectDesignTokens,
 } from '@shared/design';
 
 const logger = createLogger('DesignGenerator');
@@ -69,6 +70,12 @@ export interface GenerateDesignOptions {
   // "## Theme constraints (keep from previous version)" section that
   // pins colors / fonts so iterative regenerations don't drift.
   reuseThemeTokens?: BuildPromptThemeTokens;
+  // v0.15: optional project-wide locked tokens. When set with
+  // `lockedAt` populated, the prompt builder injects a "## Project
+  // Tokens (locked — must follow)" section that overrides the
+  // per-screen reuseThemeTokens. Loaded by DesignService from
+  // `<project>/.devspace/design/tokens.json`.
+  lockedTokens?: ProjectDesignTokens | null;
 }
 
 export interface GenerateDesignResult {
@@ -258,6 +265,7 @@ async function buildPrompt(opts: GenerateDesignOptions): Promise<string> {
     projectProfile: opts.projectProfile ?? null,
     pageName: opts.pageName,
     reuseThemeTokens: opts.reuseThemeTokens,
+    lockedTokens: opts.lockedTokens ?? null,
   });
 }
 
