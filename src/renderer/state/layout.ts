@@ -15,6 +15,9 @@ interface LayoutState {
   bottomOpen: boolean;
   dockFull: boolean;
   editorFontSize: number;
+  // Whole-app zoom level (Cmd+= / Cmd+- / Cmd+0). Range matches Chromium's
+  // webFrame: [-3, 5]; each step is ~20% scale. 0 = 100%.
+  uiZoomLevel: number;
   wordWrap: boolean;
   showHiddenFiles: boolean;
   teamMode: TeamMode;
@@ -30,6 +33,9 @@ interface LayoutState {
   adjustBottomHeight: (delta: number) => void;
   adjustEditorFontSize: (delta: number) => void;
   resetEditorFontSize: () => void;
+  adjustUiZoomLevel: (delta: number) => void;
+  resetUiZoomLevel: () => void;
+  applyUiZoomLevel: () => void;
   toggleWordWrap: () => void;
   toggleShowHidden: () => void;
   setTeamMode: (m: TeamMode) => void;
@@ -49,6 +55,7 @@ function readInitial(): Pick<
   | 'bottomOpen'
   | 'dockFull'
   | 'editorFontSize'
+  | 'uiZoomLevel'
   | 'wordWrap'
   | 'showHiddenFiles'
   | 'teamMode'
@@ -65,6 +72,7 @@ function readInitial(): Pick<
         bottomOpen: parsed.bottomOpen ?? false,
         dockFull: parsed.dockFull ?? false,
         editorFontSize: clamp(parsed.editorFontSize ?? 13, 10, 28),
+        uiZoomLevel: clamp(parsed.uiZoomLevel ?? 0, -3, 5),
         wordWrap: parsed.wordWrap ?? false,
         showHiddenFiles: parsed.showHiddenFiles ?? true,
         teamMode: tm === 'team' || tm === 'focus' ? tm : 'off',
@@ -80,6 +88,7 @@ function readInitial(): Pick<
     bottomOpen: false,
     dockFull: false,
     editorFontSize: 13,
+    uiZoomLevel: 0,
     wordWrap: false,
     showHiddenFiles: true,
     teamMode: 'off',
@@ -129,6 +138,30 @@ export const useLayoutStore = create<LayoutState>((set, get) => ({
   resetEditorFontSize() {
     set({ editorFontSize: 13 });
   },
+  adjustUiZoomLevel(delta) {
+    const next = clamp(get().uiZoomLevel + delta, -3, 5);
+    set({ uiZoomLevel: next });
+    try {
+      window.devspace?.ui?.setZoomLevel?.(next);
+    } catch {
+      /* preload not wired */
+    }
+  },
+  resetUiZoomLevel() {
+    set({ uiZoomLevel: 0 });
+    try {
+      window.devspace?.ui?.setZoomLevel?.(0);
+    } catch {
+      /* preload not wired */
+    }
+  },
+  applyUiZoomLevel() {
+    try {
+      window.devspace?.ui?.setZoomLevel?.(get().uiZoomLevel);
+    } catch {
+      /* preload not wired */
+    }
+  },
   toggleWordWrap() {
     set((s) => ({ wordWrap: !s.wordWrap }));
   },
@@ -154,6 +187,7 @@ export const useLayoutStore = create<LayoutState>((set, get) => ({
         bottomOpen,
         dockFull,
         editorFontSize,
+        uiZoomLevel,
         wordWrap,
         showHiddenFiles,
         teamMode,
@@ -167,6 +201,7 @@ export const useLayoutStore = create<LayoutState>((set, get) => ({
           bottomOpen,
           dockFull,
           editorFontSize,
+          uiZoomLevel,
           wordWrap,
           showHiddenFiles,
           teamMode,

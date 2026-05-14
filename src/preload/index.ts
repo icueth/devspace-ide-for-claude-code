@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer, webUtils } from 'electron';
+import { contextBridge, ipcRenderer, webFrame, webUtils } from 'electron';
 
 import { IPC } from '@shared/ipc-channels';
 
@@ -32,6 +32,27 @@ const api = {
         return webUtils.getPathForFile(file);
       } catch {
         return '';
+      }
+    },
+  },
+  // Whole-app zoom via Electron webFrame. Used by Cmd+= / Cmd+- / Cmd+0
+  // shortcuts in the renderer. Level range matches Chromium: each step is
+  // ~20% scale; we clamp to [-3, 5] in the store. Returning level from
+  // setter lets the renderer round-trip after clamp in chromium itself.
+  ui: {
+    setZoomLevel: (level: number): number => {
+      try {
+        webFrame.setZoomLevel(level);
+        return webFrame.getZoomLevel();
+      } catch {
+        return 0;
+      }
+    },
+    getZoomLevel: (): number => {
+      try {
+        return webFrame.getZoomLevel();
+      } catch {
+        return 0;
       }
     },
   },

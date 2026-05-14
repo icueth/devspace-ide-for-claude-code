@@ -140,6 +140,10 @@ function AppInner() {
       .then(setVersion)
       .catch(() => setVersion('?'));
     void load();
+    // Reapply persisted whole-app zoom on every boot. webFrame resets to 0
+    // each window load, so without this the user's saved level would be
+    // forgotten across restarts.
+    useLayoutStore.getState().applyUiZoomLevel();
   }, [load]);
 
   const activeProject = useMemo(
@@ -227,22 +231,24 @@ function AppInner() {
         void api.pty.write(sessionId, sel);
         return;
       }
-      // Editor zoom: Cmd+= / Cmd+- / Cmd+0
+      // Whole-app zoom: Cmd+= / Cmd+- / Cmd+0 — drives Electron's webFrame
+      // so every pixel (chat, sidebar, editor, dialogs) scales together.
+      // Editor-only font size remains adjustable via Settings.
       if (!e.shiftKey && !e.altKey && (e.key === '=' || e.key === '+')) {
         e.preventDefault();
-        useLayoutStore.getState().adjustEditorFontSize(1);
+        useLayoutStore.getState().adjustUiZoomLevel(1);
         useLayoutStore.getState().persist();
         return;
       }
       if (!e.shiftKey && !e.altKey && e.key === '-') {
         e.preventDefault();
-        useLayoutStore.getState().adjustEditorFontSize(-1);
+        useLayoutStore.getState().adjustUiZoomLevel(-1);
         useLayoutStore.getState().persist();
         return;
       }
       if (!e.shiftKey && !e.altKey && e.key === '0') {
         e.preventDefault();
-        useLayoutStore.getState().resetEditorFontSize();
+        useLayoutStore.getState().resetUiZoomLevel();
         useLayoutStore.getState().persist();
         return;
       }

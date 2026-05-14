@@ -97,6 +97,10 @@ export interface DevspaceApi {
     // path (synthesized File, paste-from-buffer, etc.).
     getPathForFile: (file: File) => string;
   };
+  ui: {
+    setZoomLevel: (level: number) => number;
+    getZoomLevel: () => number;
+  };
   workspace: {
     list: () => Promise<{ active: Workspace | null; workspaces: Workspace[] }>;
     pickFolder: () => Promise<Workspace | null>;
@@ -506,6 +510,7 @@ function makeStubApi(): DevspaceApi {
     },
     appEvents: { onCloseTab: () => () => undefined },
     files: { getPathForFile: () => '' },
+    ui: { setZoomLevel: () => 0, getZoomLevel: () => 0 },
     workspace: {
       list: notWired('workspace.list'),
       pickFolder: notWired('workspace.pickFolder'),

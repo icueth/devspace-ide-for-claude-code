@@ -5,6 +5,24 @@ All notable changes to DevSpace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.20.0] — 2026-05-14
+
+### Added
+
+- **Whole-app zoom (Cmd+= / Cmd+- / Cmd+0).** The Cmd+= / Cmd+- / Cmd+0
+  shortcuts now scale the entire DevSpace UI — sidebar, chat, editor,
+  dialogs, and Dashboard — instead of only the editor font. Drives
+  Electron's `webFrame.setZoomLevel` through a new
+  `window.devspace.ui.setZoomLevel(level)` preload bridge. Useful for
+  users with accessibility needs or high-DPI displays where the default
+  text size is hard to read.
+- Zoom level persists across app restarts via `useLayoutStore.uiZoomLevel`
+  (range −3 to +5, each step ≈ 20% scale; 0 = 100%). On every window
+  load `App.tsx` calls `applyUiZoomLevel()` because Chromium resets the
+  zoom factor per session.
+- Editor-only font size adjustment remains available via Settings for
+  fine-grained per-editor control.
+
 ## [0.19.2] — 2026-05-14
 
 ### Fixed
