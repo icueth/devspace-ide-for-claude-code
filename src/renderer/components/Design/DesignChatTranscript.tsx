@@ -1,4 +1,10 @@
-import { ChevronDown, ChevronUp, Send, X } from 'lucide-react';
+import {
+  ChevronDown,
+  ChevronUp,
+  FileCode,
+  Send,
+  X,
+} from 'lucide-react';
 import {
   useCallback,
   useEffect,
@@ -9,7 +15,11 @@ import {
 } from 'react';
 
 import { cn } from '@renderer/lib/utils';
-import type { DesignMessage, DesignScreen } from '@shared/design';
+import type {
+  DesignMessage,
+  DesignMessageSegment,
+  DesignScreen,
+} from '@shared/design';
 
 // ─── Display caps ─────────────────────────────────────────────────────
 //
@@ -20,6 +30,12 @@ import type { DesignMessage, DesignScreen } from '@shared/design';
 // even "show more" never tries to inject a megabyte into the DOM.
 const PREVIEW_LIMIT = 4000;
 const EXPANDED_LIMIT = 100_000;
+
+// v0.14: html-segment "show preview" expansion. The backend already
+// stores a short `preview` string (first ~200 chars of the html) on the
+// segment itself, but we cap the rendered version too so an
+// over-eager backend can't blow out the chat panel.
+const SEGMENT_HTML_PREVIEW_LIMIT = 200;
 
 // Submit-shortcut: Cmd+Enter on macOS, Ctrl+Enter elsewhere. Plain Enter
 // stays as a newline so multi-line prompts feel natural (matches the
@@ -50,8 +66,15 @@ export interface DesignChatTranscriptProps {
    * the backend pushes `message_*` events. We swallow errors silently
    * (DesignView raises them via the toolbar banner) so the composer
    * stays responsive.
+   *
+   * v0.14: signature widened to accept an optional `opts` bag so the
+   * composer can forward the "keep theme" checkbox state. Pre-v0.14
+   * callers passing only `(text)` stay valid — opts defaults to undefined.
    */
-  onSubmit: (text: string) => Promise<void> | void;
+  onSubmit: (
+    text: string,
+    opts?: { reuseTheme?: boolean },
+  ) => Promise<void> | void;
   /**
    * Abort the in-flight generation. Only shown when `busy === true`.
    */
@@ -97,6 +120,14 @@ interface MessageBubbleProps {
  *   • Long assistant turns (e.g. raw HTML) are clamped to 4 KB with a
  *     "show more" toggle, with a hard ceiling of 100 KB even when
  *     expanded so the DOM stays interactive.
+ *   • v0.14: assistant turns split into prose+html+prose segments
+ *     render each segment as its own visual block (prose bubbles + a
+ *     compact "Generated index.html — 38 KB" card). Pre-0.14 turns
+ *     without `segments` fall back to the legacy single-bubble path.
+ *   • v0.14: while `busy === true` AND no assistant message is
+ *     currently streaming, a "Claude is thinking…" placeholder appears
+ *     under the message list so the user sees activity during the
+ *     first-token gap.
  */
 export function DesignChatTranscript({
   screen,
@@ -107,6 +138,11 @@ export function DesignChatTranscript({
   error,
 }: DesignChatTranscriptProps) {
   const [draft, setDraft] = useState('');
+  // v0.14 Goal 3: "Keep theme from previous version" — only meaningful
+  // when there's at least one ready version (otherwise there's no theme
+  // to extract). Defaults off so users can pivot freely; we never persist
+  // the choice across sessions because each follow-up is its own decision.
+  const [reuseTheme, setReuseTheme] = useState(false);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   // Tracks whether the user is currently pinned to the bottom of the
@@ -114,23 +150,49 @@ export function DesignChatTranscript({
   // growth doesn't fight a user who scrolled up to read history.
   const stickToBottomRef = useRef(true);
 
+  // v0.14 Goal 3: whether the active screen has any ready versions whose
+  // theme we could reuse. Derived from the screen prop — drops to false
+  // on screen switch until the next version lands. We check `htmlPath`
+  // (not status) because a screen can be 'error' yet still have prior
+  // ready versions captured in the version list.
+  const hasReadyVersion = useMemo(() => {
+    if (!screen) return false;
+    return screen.versions.some((v) => v.htmlPath);
+  }, [screen]);
+
   // Reset draft when switching screens — half-typed prompts shouldn't
-  // bleed across designs.
+  // bleed across designs. Reuse-theme is also per-screen.
   useEffect(() => {
     setDraft('');
+    setReuseTheme(false);
     stickToBottomRef.current = true;
   }, [screen?.id]);
+
+  // v0.14: derive whether we should render the "Claude is thinking…"
+  // placeholder. Two conditions:
+  //   • A generation is in flight for this screen (`busy === true`).
+  //   • The last assistant message is NOT currently streaming — i.e.
+  //     no tokens have arrived yet, so the user otherwise sees nothing.
+  // Once the assistant message starts streaming, its own pulse +
+  // caret indicator takes over, and we hide the placeholder so we
+  // don't duplicate the affordance.
+  const lastMsg = messages.length > 0 ? messages[messages.length - 1] : null;
+  const isAssistantStreaming =
+    !!lastMsg && lastMsg.role === 'assistant' && lastMsg.streaming === true;
+  const showThinkingIndicator = busy && !isAssistantStreaming && !!screen;
 
   // Anchor scroll to bottom on initial mount / screen switch / new
   // messages. We run synchronously (useLayoutEffect) to avoid the
   // visible jump that would happen if the user saw the transcript
-  // settle one frame above the bottom.
+  // settle one frame above the bottom. The thinking indicator is also
+  // in the scroll dependency so showing/hiding it re-anchors when
+  // appropriate.
   useLayoutEffect(() => {
     if (!stickToBottomRef.current) return;
     const el = scrollRef.current;
     if (!el) return;
     el.scrollTop = el.scrollHeight;
-  }, [messages, screen?.id]);
+  }, [messages, screen?.id, showThinkingIndicator]);
 
   const handleScroll = useCallback(() => {
     const el = scrollRef.current;
@@ -158,14 +220,20 @@ export function DesignChatTranscript({
     if (!canSubmit) return;
     const text = draft.trim();
     setDraft('');
+    // v0.14: forward the reuse-theme flag when the checkbox is visible
+    // AND ticked. We never send `reuseTheme: false` explicitly — the
+    // backend treats absence as "no reuse", which keeps the IPC payload
+    // matching the pre-0.14 shape on the common path.
+    const opts =
+      hasReadyVersion && reuseTheme ? { reuseTheme: true } : undefined;
     // We optimistically clear the draft; if the parent rejects, the
     // error banner surfaces above the composer and the user can retype.
     // Restoring the draft on failure would surprise the user (their
     // text reappears) more than the cost of retyping in this rare path.
-    await onSubmit(text);
+    await onSubmit(text, opts);
     // Re-focus after submit so multi-turn iteration is fast.
     textareaRef.current?.focus();
-  }, [canSubmit, draft, onSubmit]);
+  }, [canSubmit, draft, hasReadyVersion, onSubmit, reuseTheme]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -209,6 +277,9 @@ export function DesignChatTranscript({
             />
           ))
         )}
+        {showThinkingIndicator && (
+          <ThinkingIndicator onMeasured={handleContentMeasured} />
+        )}
       </div>
 
       {error && (
@@ -234,6 +305,34 @@ export function DesignChatTranscript({
           }
           className="w-full resize-none rounded-[6px] border border-border-subtle bg-surface-3 px-2 py-1.5 text-[11.5px] leading-snug text-text placeholder:text-text-dim focus:border-accent focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
         />
+
+        {/*
+          v0.14 Goal 3 — "Keep theme from previous version" checkbox.
+          Only rendered when the screen has at least one ready version
+          (nothing to extract a theme from otherwise). The flag flows
+          through onSubmit's opts bag into the IPC payload as
+          `reuseTheme: true`.
+        */}
+        {hasReadyVersion && (
+          <label
+            className={cn(
+              'mt-2 inline-flex select-none items-center gap-1.5 text-[10.5px]',
+              busy
+                ? 'cursor-not-allowed text-text-dim opacity-60'
+                : 'cursor-pointer text-text-muted hover:text-text',
+            )}
+            title="Reuse the color tokens and font family from the most recent version"
+          >
+            <input
+              type="checkbox"
+              checked={reuseTheme}
+              onChange={(e) => setReuseTheme(e.target.checked)}
+              disabled={busy}
+              className="h-3 w-3 accent-accent"
+            />
+            Keep theme from previous version
+          </label>
+        )}
 
         <div className="mt-2 flex items-center gap-2">
           <span className="text-[10px] text-text-dim">{SUBMIT_HINT} to send</span>
@@ -291,6 +390,60 @@ function EmptyState() {
   );
 }
 
+interface ThinkingIndicatorProps {
+  onMeasured: () => void;
+}
+
+/**
+ * v0.14 placeholder shown between submit and the first assistant
+ * token. Disappears the moment the streaming assistant message starts
+ * landing (the parent flips `showThinkingIndicator` to false based on
+ * the last message's `streaming` flag). Sized + spaced to match a
+ * real assistant bubble so the swap is smooth.
+ */
+function ThinkingIndicator({ onMeasured }: ThinkingIndicatorProps) {
+  // Re-anchor scroll when this mounts so the user sees the indicator
+  // appear right under their submitted message.
+  useLayoutEffect(() => {
+    onMeasured();
+  }, [onMeasured]);
+  return (
+    <div className="flex flex-col items-start gap-1" aria-live="polite">
+      <div className="flex items-center gap-1.5 px-1">
+        <span className="text-[10px] font-semibold uppercase tracking-wide text-text-muted">
+          Claude
+        </span>
+        <span className="inline-flex items-center gap-1 text-[10px] text-text-dim">
+          <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-accent" />
+          thinking
+        </span>
+      </div>
+      <div
+        className="max-w-[92%] rounded-[8px] border border-border-subtle bg-surface-3 px-2.5 py-1.5 text-[11.5px] leading-snug text-text-muted"
+        role="status"
+      >
+        <span className="inline-flex items-center gap-1.5">
+          <span className="text-text-secondary">Claude is thinking</span>
+          <span className="inline-flex gap-0.5">
+            <span
+              className="h-1 w-1 animate-pulse rounded-full bg-text-muted"
+              style={{ animationDelay: '0ms' }}
+            />
+            <span
+              className="h-1 w-1 animate-pulse rounded-full bg-text-muted"
+              style={{ animationDelay: '150ms' }}
+            />
+            <span
+              className="h-1 w-1 animate-pulse rounded-full bg-text-muted"
+              style={{ animationDelay: '300ms' }}
+            />
+          </span>
+        </span>
+      </div>
+    </div>
+  );
+}
+
 // Heuristic: tag an assistant message as "html-heavy" so we render it
 // in monospace (matches the code that's streaming in). Prose answers
 // ("I'll restructure the hero...") should NOT get mono — that's the F2
@@ -332,6 +485,175 @@ function classifyAssistantContent(raw: string): 'prose' | 'html' {
 }
 
 function MessageBubble({ msg, onContentMeasured }: MessageBubbleProps) {
+  const isUser = msg.role === 'user';
+  const isSystem = msg.role === 'system';
+
+  // v0.14: prefer structured segments when present. The backend
+  // populates `segments` on assistant turns once the response is
+  // finalized and split into prose/html chunks. Streaming turns and
+  // user/system turns still flow through the legacy single-bubble
+  // renderer below.
+  const useSegments =
+    !isUser &&
+    !isSystem &&
+    !msg.streaming &&
+    Array.isArray(msg.segments) &&
+    msg.segments.length > 0;
+
+  if (useSegments) {
+    return (
+      <SegmentedAssistantBubble
+        segments={msg.segments as DesignMessageSegment[]}
+        onMeasured={onContentMeasured}
+      />
+    );
+  }
+
+  return (
+    <LegacyMessageBubble msg={msg} onContentMeasured={onContentMeasured} />
+  );
+}
+
+interface SegmentedAssistantBubbleProps {
+  segments: DesignMessageSegment[];
+  onMeasured: () => void;
+}
+
+/**
+ * v0.14: assistant turn split into ordered prose/html segments. Each
+ * segment renders as its own visual block — prose stays a normal chat
+ * bubble, html collapses to a compact "Generated index.html — N KB"
+ * card with a keyboard-accessible disclosure that reveals the
+ * backend-supplied preview snippet.
+ */
+function SegmentedAssistantBubble({
+  segments,
+  onMeasured,
+}: SegmentedAssistantBubbleProps) {
+  // Re-anchor scroll on mount + whenever the segment array identity
+  // changes (e.g. finalize event arrives after a stream).
+  useLayoutEffect(() => {
+    onMeasured();
+  }, [segments, onMeasured]);
+
+  return (
+    <div className="flex flex-col items-start gap-2">
+      <div className="flex items-center gap-1.5 px-1">
+        <span className="text-[10px] font-semibold uppercase tracking-wide text-text-muted">
+          Claude
+        </span>
+      </div>
+      <div className="flex w-full max-w-[92%] flex-col gap-1.5">
+        {segments.map((seg, i) =>
+          seg.kind === 'prose' ? (
+            <ProseSegment key={i} text={seg.text} />
+          ) : (
+            <HtmlSegment
+              key={i}
+              bytes={seg.bytes}
+              preview={seg.preview}
+              onMeasured={onMeasured}
+            />
+          ),
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ProseSegment({ text }: { text: string }) {
+  return (
+    <div
+      className={cn(
+        'rounded-[8px] border border-border-subtle bg-surface-3 px-2.5 py-1.5 text-[11.5px] leading-snug text-text-secondary',
+        // Cap width loosely — prose reads better on a narrow column.
+        'max-w-prose',
+      )}
+    >
+      <p className="m-0 whitespace-pre-wrap break-words">{text}</p>
+    </div>
+  );
+}
+
+interface HtmlSegmentProps {
+  bytes: number;
+  preview?: string;
+  onMeasured: () => void;
+}
+
+/**
+ * Compact "Generated index.html — 38 KB" card. Renders as a real
+ * <details> element so keyboard users (Tab → Enter / Space) can expand
+ * it and screen readers announce the disclosure state. The preview is
+ * the first ~200 chars the backend extracted from the HTML.
+ */
+function HtmlSegment({ bytes, preview, onMeasured }: HtmlSegmentProps) {
+  const [open, setOpen] = useState(false);
+
+  // Re-anchor scroll when the disclosure flips so the user sees the
+  // expanded content land naturally below their previous read position
+  // (instead of the card jumping out of view).
+  useLayoutEffect(() => {
+    onMeasured();
+  }, [open, onMeasured]);
+
+  const trimmed =
+    preview && preview.length > SEGMENT_HTML_PREVIEW_LIMIT
+      ? `${preview.slice(0, SEGMENT_HTML_PREVIEW_LIMIT)}…`
+      : (preview ?? '');
+
+  return (
+    <details
+      open={open}
+      onToggle={(e) => setOpen((e.target as HTMLDetailsElement).open)}
+      className="group rounded-[8px] border border-accent/25 bg-[rgba(76,141,255,0.06)] text-text-secondary"
+    >
+      <summary
+        className={cn(
+          // Reset native marker (Tailwind exposes `marker:` but the
+          // simpler reset on `summary::-webkit-details-marker` is
+          // already in our base CSS). Draw our own chevron instead.
+          'flex cursor-pointer list-none items-center gap-2 px-2.5 py-1.5 text-[11.5px] outline-none',
+          'focus-visible:ring-2 focus-visible:ring-accent/50',
+          'hover:bg-[rgba(76,141,255,0.1)]',
+          'rounded-[8px]',
+        )}
+      >
+        <FileCode size={12} className="shrink-0 text-accent" />
+        <span className="font-medium text-text">Generated index.html</span>
+        <span className="text-text-muted">— {formatSize(bytes)}</span>
+        <span className="flex-1" />
+        <span className="text-[10px] text-text-dim">
+          {open ? 'Hide preview' : 'Show preview'}
+        </span>
+        {open ? (
+          <ChevronUp size={11} className="text-text-muted" />
+        ) : (
+          <ChevronDown size={11} className="text-text-muted" />
+        )}
+      </summary>
+      {trimmed ? (
+        <div className="border-t border-accent/20 px-2.5 py-2">
+          <pre className="m-0 max-h-40 overflow-auto whitespace-pre-wrap break-words font-mono text-[10.5px] leading-snug text-text-secondary">
+            {trimmed}
+          </pre>
+        </div>
+      ) : (
+        <div className="border-t border-accent/20 px-2.5 py-2 text-[10.5px] italic text-text-dim">
+          No preview available for this segment.
+        </div>
+      )}
+    </details>
+  );
+}
+
+/**
+ * Legacy single-bubble renderer. Used for user/system turns and for
+ * assistant turns without `segments` (streaming, or pre-0.14 history).
+ * Preserves the v0.13 behavior verbatim: html-density classification,
+ * 4 KB clamp + show-more, streaming caret, etc.
+ */
+function LegacyMessageBubble({ msg, onContentMeasured }: MessageBubbleProps) {
   const [expanded, setExpanded] = useState(false);
   // v0.13 LOW #4: once a streaming turn flips to 'html', never downgrade
   // back to 'prose'. The reverse transition would swap the bubble font
@@ -460,7 +782,19 @@ function MessageBubble({ msg, onContentMeasured }: MessageBubbleProps) {
 }
 
 function formatBytes(n: number): string {
+  // Legacy path: counts characters of the rendered transcript content
+  // (used in "Show more (N chars total)"). Stays "chars" so the existing
+  // copy is unchanged.
   if (n < 1024) return `${n} chars`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function formatSize(n: number): string {
+  // v0.14 code-review MED-2: HTML segment card prints actual byte count
+  // ("47 B" / "38.2 KB"), not "47 chars". Used only by HtmlSegment so
+  // the legacy "show more" rendering can keep its char-count copy.
+  if (n < 1024) return `${n} B`;
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
   return `${(n / 1024 / 1024).toFixed(1)} MB`;
 }

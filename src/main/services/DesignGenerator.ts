@@ -16,7 +16,10 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 
 import { resolveClaudeBinary } from '@main/services/ClaudeCliLauncher';
-import { buildDesignPrompt } from '@main/services/DesignPromptBuilder';
+import {
+  type BuildPromptThemeTokens,
+  buildDesignPrompt,
+} from '@main/services/DesignPromptBuilder';
 import {
   type ChatRunHandle,
   newRunId,
@@ -26,6 +29,7 @@ import { resolveInteractiveShellEnv } from '@main/utils/shellEnv';
 import { createLogger } from '@shared/logger';
 import type {
   DesignMessage,
+  DesignMessageSegment,
   DesignSkill,
   DesignSystem,
   ProjectDesignProfile,
@@ -56,10 +60,26 @@ export interface GenerateDesignOptions {
   // v0.10: pre-rendered project context (framework/styling/TS/pm).
   // Injected under `## Project Context` before the brief/conversation.
   projectProfile?: ProjectDesignProfile | null;
+  // v0.14: optional page-name hint. Threaded through to the prompt
+  // builder so Claude knows which page of a larger app this design
+  // represents (e.g. "Design the Checkout page for this project's app.").
+  pageName?: string;
+  // v0.14: optional theme lock pre-computed by DesignService from the
+  // prior version's HTML. When provided, the prompt builder injects a
+  // "## Theme constraints (keep from previous version)" section that
+  // pins colors / fonts so iterative regenerations don't drift.
+  reuseThemeTokens?: BuildPromptThemeTokens;
 }
 
 export interface GenerateDesignResult {
   html: string | null;
+  // v0.14: structured assistant content split from the raw response.
+  // The first prose segment (if any) explains the design; the html
+  // segment carries byte-length + preview; the trailing prose segment
+  // (if any) suggests next iterations. Empty array on extraction
+  // failure — DesignService still emits message_finalized with this
+  // shape so renderers can fall back to `content`.
+  segments: DesignMessageSegment[];
   cancelled: boolean;
   error: string | null;
   runId: string;
@@ -157,10 +177,10 @@ export async function generateDesign(
   const completion = (async (): Promise<GenerateDesignResult> => {
     const result = await handle.promise;
     if (result.cancelled) {
-      return { html: null, cancelled: true, error: null, runId };
+      return { html: null, segments: [], cancelled: true, error: null, runId };
     }
     if (result.error) {
-      return { html: null, cancelled: false, error: result.error, runId };
+      return { html: null, segments: [], cancelled: false, error: result.error, runId };
     }
     // Read whatever claude wrote into the run's `out.jsonl` (named that
     // way by the chat runner — for design we treat it as raw text).
@@ -170,24 +190,29 @@ export async function generateDesign(
     } catch (err) {
       return {
         html: null,
+        segments: [],
         cancelled: false,
         error: `failed to read claude output: ${(err as Error).message}`,
         runId,
       };
     }
-    const html = extractHtml(raw);
+    const { html, segments } = extractGeneratedSegments(raw);
     if (!html) {
       logger.warn(
         `no HTML extracted from design run ${runId} (output length ${raw.length})`,
       );
       return {
         html: null,
+        // Even on failure we hand back a prose segment so the renderer
+        // can show the user what Claude actually said (helps debug the
+        // "no HTML" path — e.g. a refusal or a clarifying question).
+        segments,
         cancelled: false,
         error: 'claude did not return HTML — try refining your brief',
         runId,
       };
     }
-    return { html, cancelled: false, error: null, runId };
+    return { html, segments, cancelled: false, error: null, runId };
   })();
 
   return {
@@ -231,6 +256,8 @@ async function buildPrompt(opts: GenerateDesignOptions): Promise<string> {
     designSystemBody,
     messages: opts.messages,
     projectProfile: opts.projectProfile ?? null,
+    pageName: opts.pageName,
+    reuseThemeTokens: opts.reuseThemeTokens,
   });
 }
 
@@ -245,16 +272,16 @@ async function safeReadFile(file: string): Promise<string> {
 
 // ─── HTML extraction ────────────────────────────────────────────────────────
 
-// Tolerant HTML extractor — claude often wraps its output in ```html
-// fences, prefaces with a sentence ("Here's the page:"), or appends
-// closing thoughts. We accept any of those.
+// Tolerant tri-split extractor — claude's v0.14 output contract asks
+// for [prose intro] + [```html fence``` ] + [prose outro]. We slice on
+// the LAST complete html fence (preserving the v0.13 selection logic:
+// prefer complete fences over incomplete ones, latest fence over
+// earlier examples) and return the three slices as segments so the
+// chat surface can render prose as bubbles and the HTML as a compact
+// card.
 //
-// S3 hardening (v0.13): the v0.10 implementation took `firstDoctype …
-// lastClose`, which merged two HTML documents if Claude emitted an
-// example doctype inside a fenced code block AND the real one in
-// prose — bad for both UX (broken page) and security (the merged
-// document might mix two scripts that weren't reviewed together). The
-// new version:
+// Selection logic (carried over from the v0.13 extractor for the
+// regression invariants the tests pin):
 //   1. Prefer fenced ```html blocks. When SEVERAL are present, prefer
 //      a fence that has BOTH a doctype/<html> opener AND a `</html>`
 //      closer (a complete document); among complete fences, prefer the
@@ -263,36 +290,124 @@ async function safeReadFile(file: string): Promise<string> {
 //   2. Outside of fences, take the FIRST doctype/html opener and the
 //      FIRST `</html>` AFTER it (not the last) so two documents don't
 //      get merged.
-//   3. If no opener is found, return null instead of guessing.
-export function extractHtml(raw: string): string | null {
-  if (!raw) return null;
+//   3. If no opener is found, return { html: null, segments: [prose
+//      with raw response] } so the user still sees what Claude said.
+//
+// `extractHtml` is kept as a thin wrapper over `extractGeneratedSegments`
+// so legacy callers + regression tests keep working unchanged.
 
-  // 1. Scan for fenced html blocks. Prefer a complete one (has both an
-  //    `<!doctype`/`<html` and a `</html>`); among completes, take the
-  //    last (typically the "final answer"). If none are complete, pick
-  //    the longest body — that's almost certainly the real page.
+// Preview cap for the html segment. The UI shows this in a "Generated
+// index.html — N KB" card so the user can decide whether to expand the
+// full document; 200 chars is enough for the opening tags + title.
+const HTML_PREVIEW_LEN = 200;
+
+export function extractGeneratedSegments(raw: string): {
+  html: string | null;
+  segments: DesignMessageSegment[];
+} {
+  if (!raw) {
+    return { html: null, segments: [] };
+  }
+
+  // 1. Scan for fenced html blocks AND capture their start/end indices
+  // so we can slice the surrounding prose. Selection rule mirrors the
+  // pre-v0.14 logic so the existing regression tests stay green.
   const fenceRe = /```(?:html|HTML)?\s*\r?\n([\s\S]*?)\r?\n```/g;
-  let lastCompleteFence = '';
-  let longestFence = '';
+  type Fence = { body: string; outerStart: number; outerEnd: number };
+  let lastCompleteFence: Fence | null = null;
+  let longestFence: Fence | null = null;
   let m: RegExpExecArray | null;
   while ((m = fenceRe.exec(raw)) !== null) {
     const body = m[1] ?? '';
+    const fence: Fence = {
+      body,
+      outerStart: m.index,
+      outerEnd: m.index + m[0].length,
+    };
     const lower = body.toLowerCase();
     const hasOpen =
       lower.includes('<!doctype html') || lower.includes('<html');
     const hasClose = lower.includes('</html>');
-    if (hasOpen && hasClose) lastCompleteFence = body;
-    if (body.length > longestFence.length) longestFence = body;
+    if (hasOpen && hasClose) lastCompleteFence = fence;
+    if (!longestFence || body.length > longestFence.body.length) {
+      longestFence = fence;
+    }
   }
 
-  const candidate = lastCompleteFence || longestFence || raw;
+  const picked = lastCompleteFence ?? longestFence;
+  if (picked) {
+    const html = extractHtmlFromCandidate(picked.body);
+    if (html) {
+      return buildSegmentsFromFence(raw, picked.outerStart, picked.outerEnd, html);
+    }
+    // v0.14 code-review MED-1: fence existed but didn't yield extractable
+    // HTML (e.g. fence body has `<html` but no `</html>`). Still try a
+    // doctype scan over the RAW response so we recover the HTML — and
+    // preserve the prose split from the fence boundaries so Claude's
+    // explanation around the fence isn't silently dropped.
+    const recovered = extractHtmlFromCandidate(raw);
+    if (recovered) {
+      return buildSegmentsFromFence(raw, picked.outerStart, picked.outerEnd, recovered);
+    }
+  }
+
+  // 2. No usable fence — try a fence-less doctype scan over the raw
+  // response. The whole raw response acts as the "html segment" source
+  // when we find an opener; nothing else can be split as prose because
+  // we have no clean delimiter.
+  const html = extractHtmlFromCandidate(raw);
+  if (html) {
+    const segments: DesignMessageSegment[] = [
+      htmlSegmentFor(html),
+    ];
+    return { html, segments };
+  }
+
+  // 3. Nothing extractable. Hand back the trimmed raw as a single
+  // prose segment so the user still sees Claude's answer (refusal,
+  // clarifying question, etc.).
+  const trimmed = raw.trim();
+  const segments: DesignMessageSegment[] =
+    trimmed.length > 0 ? [{ kind: 'prose', text: trimmed }] : [];
+  return { html: null, segments };
+}
+
+// Build the tri-split segments[] given the raw response, the fence's
+// outer byte span, and the already-extracted html string. Empty prose
+// halves are skipped so the renderer doesn't see empty bubbles.
+function buildSegmentsFromFence(
+  raw: string,
+  outerStart: number,
+  outerEnd: number,
+  html: string,
+): { html: string; segments: DesignMessageSegment[] } {
+  const segments: DesignMessageSegment[] = [];
+  const intro = raw.slice(0, outerStart).trim();
+  if (intro.length > 0) segments.push({ kind: 'prose', text: intro });
+  segments.push(htmlSegmentFor(html));
+  const outro = raw.slice(outerEnd).trim();
+  if (outro.length > 0) segments.push({ kind: 'prose', text: outro });
+  return { html, segments };
+}
+
+function htmlSegmentFor(html: string): DesignMessageSegment {
+  const bytes = Buffer.byteLength(html, 'utf8');
+  const preview =
+    html.length > HTML_PREVIEW_LEN ? html.slice(0, HTML_PREVIEW_LEN) : html;
+  return { kind: 'html', bytes, preview };
+}
+
+// Inner HTML-from-candidate slicer. Returns the trimmed `<!doctype …
+// </html>` span (or a truncated `<!doctype …` tail when there's no
+// closing tag), or null if no opener is present. Shared by the fenced
+// and fence-less paths.
+function extractHtmlFromCandidate(candidate: string): string | null {
+  if (!candidate) return null;
   const lower = candidate.toLowerCase();
   let start = lower.indexOf('<!doctype html');
   if (start < 0) start = lower.indexOf('<html');
   if (start < 0) return null;
-
   const endTag = '</html>';
-  // Use FIRST close AFTER start, not last — avoids merging two docs.
   const endIdx = lower.indexOf(endTag, start);
   if (endIdx < 0) {
     // Tolerate truncated output — return what we have starting at the
@@ -301,4 +416,11 @@ export function extractHtml(raw: string): string | null {
     return candidate.slice(start).trim();
   }
   return candidate.slice(start, endIdx + endTag.length).trim();
+}
+
+// Thin wrapper over extractGeneratedSegments — preserved for existing
+// callers (the legacy single-string consumer) and the regression
+// tests that pin the v0.13 extraction shape.
+export function extractHtml(raw: string): string | null {
+  return extractGeneratedSegments(raw).html;
 }

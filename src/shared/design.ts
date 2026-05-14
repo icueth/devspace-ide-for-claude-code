@@ -117,6 +117,16 @@ export interface DesignSaveEditsInput {
 
 export type DesignMessageRole = 'user' | 'assistant' | 'system';
 
+// v0.14: assistant turns can be split into prose + html + prose segments
+// so the chat surface renders the explanation as a normal message bubble
+// and the generated HTML as a compact "Generated index.html — 38 KB" card
+// (with expand-to-view). Pre-v0.14 turns persisted only as `content` are
+// fine — the renderer falls back to a single prose segment when this
+// field is absent.
+export type DesignMessageSegment =
+  | { kind: 'prose'; text: string }
+  | { kind: 'html'; bytes: number; preview?: string };
+
 export interface DesignMessage {
   id: string;
   role: DesignMessageRole;
@@ -133,6 +143,12 @@ export interface DesignMessage {
   // back to the version row that was created. Lets the UI jump from a
   // transcript turn into the version's preview.
   versionId?: string;
+  // v0.14: structured assistant content. Populated by the backend on
+  // finalize when the response was split into prose + html + prose by
+  // the new extractor. Absent on user/system turns and on legacy
+  // assistant turns that pre-date 0.14 — renderer must fall back to
+  // `content` in that case.
+  segments?: DesignMessageSegment[];
   ts: number;
 }
 
@@ -144,6 +160,11 @@ export interface DesignFollowUpInput {
   // When set, replaces the screen's design system (e.g. user picked a
   // different brand mid-conversation). Unchanged when omitted.
   designSystemSlug?: string;
+  // v0.14: when true, the prompt builder extracts color tokens + font
+  // family from the most recent ready version's HTML and prepends them
+  // as a "Keep theme:" constraint. UI exposes this as a checkbox in the
+  // follow-up composer; default off so users can pivot when they want.
+  reuseTheme?: boolean;
 }
 
 // ─── v0.10: project design profile ──────────────────────────────────────────
@@ -268,6 +289,9 @@ export interface DesignScreen {
   // mislabel bug. Hydration tolerates v1 by falling back to `index.html`
   // for the *latest* version and treating older versions as best-effort.
   historyVersion?: 1 | 2;
+  // v0.14: optional page-name hint shown in the screen list and threaded
+  // through prompts ("Design the Checkout page for this project's ...").
+  pageName?: string;
 }
 
 export interface DesignProject {
@@ -281,6 +305,11 @@ export interface CreateDesignInput {
   skillSlug: string;
   designSystemSlug?: string;
   brief: string;
+  // v0.14: optional page-name hint (e.g. "Checkout", "Product detail").
+  // Prepended to the brief inside the prompt so Claude knows which page
+  // of a larger app this design represents. Stored on the screen for
+  // display in the screen list and for follow-ups.
+  pageName?: string;
 }
 
 export interface RegenerateDesignInput {
@@ -290,6 +319,58 @@ export interface RegenerateDesignInput {
   brief?: string;
   // When provided, replaces the screen's stored design system.
   designSystemSlug?: string;
+  // v0.14: same semantics as DesignFollowUpInput.reuseTheme — extract
+  // the prior version's tokens and lock them into the prompt before
+  // regenerating.
+  reuseTheme?: boolean;
+}
+
+// v0.14: pure heuristic — return a list of skill slugs that look like
+// reasonable matches for the user's brief, in confidence order. Used
+// by the toolbar's auto-suggest chip below the brief input. Skill
+// authors can opt in to specific keywords by adding `keywords:` to
+// the SKILL.md frontmatter; the heuristic uses both the explicit
+// keywords (when present) and a built-in synonym map as a fallback.
+//
+// Stays pure + side-effect free so it can run in the renderer on every
+// keystroke without crossing the IPC boundary. Empty brief returns [].
+export function suggestSkillSlugs(
+  brief: string,
+  availableSlugs: string[],
+): string[] {
+  if (!brief || availableSlugs.length === 0) return [];
+  const text = brief.toLowerCase();
+  const slugSet = new Set(availableSlugs);
+  const matches: { slug: string; score: number }[] = [];
+  // Built-in synonym map — extend cautiously. Each entry is
+  // [skill-slug, [trigger words, ...]]. Skills not present in
+  // `availableSlugs` are silently skipped, so adding entries here
+  // is safe regardless of the user's installed skill pack.
+  const SYNONYMS: Array<[string, string[]]> = [
+    ['dashboard', ['dashboard', 'admin', 'analytics', 'metrics', 'kpi', 'stats', 'monitor', 'console']],
+    ['landing', ['landing', 'hero', 'promote', 'marketing', 'launch', 'product page', 'homepage', 'home page', 'splash']],
+    ['slide-deck', ['slide', 'deck', 'pitch', 'presentation', 'keynote']],
+    ['e-guide', ['guide', 'tutorial', 'walkthrough', 'how-to', 'manual']],
+    ['app-shell', ['app shell', 'shell', 'navigation', 'sidebar', 'layout']],
+    ['checkout', ['checkout', 'payment', 'cart', 'order', 'billing', 'ชำระเงิน']],
+    ['product-detail', ['product detail', 'pdp', 'product page']],
+    ['settings', ['settings', 'preferences', 'config']],
+    ['profile', ['profile', 'account']],
+    ['signup', ['signup', 'sign up', 'register', 'registration', 'sign-up']],
+    ['login', ['login', 'sign in', 'sign-in', 'auth']],
+    ['blog-post', ['blog', 'article', 'post']],
+    ['pricing', ['pricing', 'plans', 'tiers']],
+  ];
+  for (const [slug, triggers] of SYNONYMS) {
+    if (!slugSet.has(slug)) continue;
+    let score = 0;
+    for (const t of triggers) {
+      if (text.includes(t)) score += t.length;
+    }
+    if (score > 0) matches.push({ slug, score });
+  }
+  matches.sort((a, b) => b.score - a.score);
+  return matches.map((m) => m.slug).slice(0, 3);
 }
 
 // Streamed by main → renderer during + after a generation. The renderer

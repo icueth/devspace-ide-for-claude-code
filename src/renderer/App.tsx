@@ -6,6 +6,10 @@ import {
   Maximize2,
   Minimize2,
   Paintbrush,
+  PanelLeftClose,
+  PanelLeftOpen,
+  PanelRightClose,
+  PanelRightOpen,
   Terminal as TerminalIcon,
   Users,
   Workflow,
@@ -36,6 +40,7 @@ import { useEditorViewStore } from '@renderer/state/editorView';
 import { useGitStore } from '@renderer/state/git';
 import { useLayoutStore } from '@renderer/state/layout';
 import { usePromptStore } from '@renderer/state/prompt';
+import { useSidebarStore } from '@renderer/state/sidebar';
 import { useWorkspaceStore } from '@renderer/state/workspace';
 
 export default function App() {
@@ -61,6 +66,23 @@ function AppInner() {
   const dockWidth = useLayoutStore((s) => s.dockWidth);
   const bottomHeight = useLayoutStore((s) => s.bottomHeight);
   const bottomOpen = useLayoutStore((s) => s.bottomOpen);
+  // v0.14: sidebar collapse state (left = project/file tree; right = CLI dock).
+  // Persisted to localStorage by the store itself — we just read/toggle here.
+  const leftCollapsed = useSidebarStore((s) => s.leftCollapsed);
+  const rightCollapsed = useSidebarStore((s) => s.rightCollapsed);
+  const toggleLeftSidebar = useSidebarStore((s) => s.toggleLeft);
+  const toggleRightSidebar = useSidebarStore((s) => s.toggleRight);
+  const autoCollapseForDesign = useSidebarStore(
+    (s) => s.autoCollapseForDesignIfNarrow,
+  );
+  // The active tab kind drives the "auto-collapse left sidebar on first
+  // Design tab when viewport < 1400px" rule. Subscribed via the editor
+  // store so the effect re-fires on tab switches.
+  const activeTabKind = useEditorStore((s) => {
+    const path = s.activeTabPath;
+    if (!path) return null;
+    return s.tabs.find((t) => t.path === path)?.kind ?? null;
+  });
   const [bottomInitialTab, setBottomInitialTab] = useState<'terminal' | 'git' | 'search'>(
     'terminal',
   );
@@ -229,10 +251,35 @@ function AppInner() {
         useLayoutStore.getState().persist();
         return;
       }
+      // v0.14: sidebar collapse shortcuts.
+      //   Cmd+\        → toggle LEFT sidebar (project tree)
+      //   Cmd+Shift+\  → toggle RIGHT sidebar (CLI dock)
+      // Match by `e.key` (the resolved character) rather than `e.code`
+      // so keyboard layouts that move `\` still work.
+      if (e.key === '\\') {
+        e.preventDefault();
+        if (e.shiftKey) {
+          useSidebarStore.getState().toggleRight();
+        } else {
+          useSidebarStore.getState().toggleLeft();
+        }
+        return;
+      }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [setBottomOpen, askPrompt]);
+
+  // v0.14: when the user switches to a Design tab AND the viewport is
+  // narrow (< 1400px), auto-collapse the LEFT sidebar to give the design
+  // pane more room. Fires only on the rising edge of activeTabKind →
+  // 'design' so subsequent navigation within the tab doesn't keep
+  // re-collapsing. The store's `autoCollapseForDesignIfNarrow` no-ops
+  // when the user has already manually toggled the sidebar this session.
+  useEffect(() => {
+    if (activeTabKind !== 'design') return;
+    autoCollapseForDesign(window.innerWidth);
+  }, [activeTabKind, autoCollapseForDesign]);
   const dockVisible = openedProjectIds.length > 0;
   const showBottom = bottomOpen && activeProject;
 
@@ -384,10 +431,30 @@ function AppInner() {
       </header>
 
       <main className="flex flex-1 overflow-hidden">
-        {teamMode !== 'focus' && (
+        {teamMode !== 'focus' && leftCollapsed && (
+          // Collapsed rail — thin 36px column with just an expand button.
+          // We keep the rail visible (not fully hidden) so users can
+          // always find their way back. CSS transition smooths the
+          // width change when the user toggles via the keyboard
+          // shortcut or button.
+          <aside
+            aria-label="Sidebar (collapsed)"
+            className="no-drag relative flex w-9 shrink-0 flex-col items-center border-r border-border bg-surface-sidebar transition-[width] duration-150"
+          >
+            <button
+              type="button"
+              onClick={toggleLeftSidebar}
+              title="Expand sidebar (⌘\\)"
+              className="mt-2 flex h-7 w-7 items-center justify-center rounded-[6px] text-text-muted transition hover:bg-surface-3 hover:text-text"
+            >
+              <PanelLeftOpen size={13} />
+            </button>
+          </aside>
+        )}
+        {teamMode !== 'focus' && !leftCollapsed && (
         <aside
           style={{ width: sidebarWidth }}
-          className="no-drag relative flex shrink-0 flex-col border-r border-border bg-surface-sidebar"
+          className="no-drag relative flex shrink-0 flex-col border-r border-border bg-surface-sidebar transition-[width] duration-150"
         >
           {/* Subtle top sheen */}
           <div
@@ -398,12 +465,22 @@ function AppInner() {
           />
 
           <div
-            className="relative z-[1] shrink-0 border-b border-border px-3 py-3"
+            className="relative z-[1] flex shrink-0 items-center gap-2 border-b border-border px-3 py-3"
             style={{
               background: 'linear-gradient(180deg, rgba(168,85,247,0.04), transparent)',
             }}
           >
-            <WorkspacePicker />
+            <div className="min-w-0 flex-1">
+              <WorkspacePicker />
+            </div>
+            <button
+              type="button"
+              onClick={toggleLeftSidebar}
+              title="Collapse sidebar (⌘\\)"
+              className="flex h-6 w-6 shrink-0 items-center justify-center rounded-[5px] text-text-muted transition hover:bg-surface-3 hover:text-text"
+            >
+              <PanelLeftClose size={12} />
+            </button>
           </div>
 
           <div
@@ -450,7 +527,7 @@ function AppInner() {
         </aside>
         )}
 
-        {teamMode !== 'focus' && (
+        {teamMode !== 'focus' && !leftCollapsed && (
           <Resizer
             direction="horizontal"
             onResize={adjustSidebarWidth}
@@ -501,24 +578,65 @@ function AppInner() {
 
         {!settingsOpen && dockVisible && (
           <>
-            {!dockFull && teamMode !== 'focus' && (
-              <Resizer
-                direction="horizontal"
-                onResize={(dx) => adjustDockWidth(-dx)}
-                onResizeEnd={persistLayout}
-              />
+            {/*
+              v0.14: when the right sidebar is collapsed AND we're not in
+              an explicit full/focus mode, render a thin rail instead of
+              the full ClaudeCliDock. The dockFull / teamMode==='focus'
+              affordances WIN over collapse — they're explicit overrides
+              the user set themselves, so we don't second-guess them.
+            */}
+            {rightCollapsed && !dockFull && teamMode !== 'focus' ? (
+              <aside
+                aria-label="CLI dock (collapsed)"
+                className="no-drag relative flex w-9 shrink-0 flex-col items-center border-l border-border bg-surface transition-[width] duration-150"
+              >
+                <button
+                  type="button"
+                  onClick={toggleRightSidebar}
+                  title="Expand CLI dock (⌘⇧\\)"
+                  className="mt-2 flex h-7 w-7 items-center justify-center rounded-[6px] text-text-muted transition hover:bg-surface-3 hover:text-text"
+                >
+                  <PanelRightOpen size={13} />
+                </button>
+              </aside>
+            ) : (
+              <>
+                {!dockFull && teamMode !== 'focus' && (
+                  <Resizer
+                    direction="horizontal"
+                    onResize={(dx) => adjustDockWidth(-dx)}
+                    onResizeEnd={persistLayout}
+                  />
+                )}
+                <section
+                  style={
+                    dockFull || teamMode === 'focus' ? undefined : { width: dockWidth }
+                  }
+                  className={cn(
+                    'no-drag relative flex flex-col border-l border-border bg-surface transition-[width] duration-150',
+                    dockFull || teamMode === 'focus' ? 'min-w-0 flex-1' : 'shrink-0',
+                  )}
+                >
+                  {/*
+                    Collapse affordance — only shown when the user could
+                    actually collapse. In dockFull / focus mode the dock
+                    is the main work area, so collapsing it would hide
+                    the user's entire workspace. We hide the button there.
+                  */}
+                  {!dockFull && teamMode !== 'focus' && (
+                    <button
+                      type="button"
+                      onClick={toggleRightSidebar}
+                      title="Collapse CLI dock (⌘⇧\\)"
+                      className="absolute left-2 top-2 z-[3] flex h-6 w-6 items-center justify-center rounded-[5px] bg-surface-3/80 text-text-muted backdrop-blur transition hover:bg-surface-4 hover:text-text"
+                    >
+                      <PanelRightClose size={12} />
+                    </button>
+                  )}
+                  <ClaudeCliDock />
+                </section>
+              </>
             )}
-            <section
-              style={
-                dockFull || teamMode === 'focus' ? undefined : { width: dockWidth }
-              }
-              className={cn(
-                'no-drag flex flex-col border-l border-border bg-surface',
-                dockFull || teamMode === 'focus' ? 'min-w-0 flex-1' : 'shrink-0',
-              )}
-            >
-              <ClaudeCliDock />
-            </section>
           </>
         )}
 

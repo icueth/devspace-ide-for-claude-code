@@ -5,6 +5,124 @@ All notable changes to DevSpace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.14.0] — 2026-05-14
+
+Design Studio matures into a real conversational surface. The chat panel
+now shows what Claude is doing while it works; assistant turns are split
+into prose + generated-HTML cards instead of a raw HTML dump; the
+preview shows a clear loading state during generation. Plus four
+quality-of-life features: page-name hint, keep-theme follow-ups, skill
+auto-suggest from the brief, and left/right sidebar collapsibility.
+
+### Added
+
+- **Multi-segment assistant turns.** Generation responses are parsed
+  into prose intro + ` ```html ` fence + prose outro. The chat surface
+  renders the prose as normal message bubbles and the HTML as a compact
+  "Generated index.html — 38.2 KB" card with click-to-expand preview.
+  Pre-v0.14 assistant turns persist without `segments` and fall back to
+  the legacy single-bubble renderer — no migration needed.
+- **Page name hint.** Optional toolbar field ("Checkout", "Product
+  detail", "Dashboard") that anchors the prompt with `Design the {page}
+  page for this project's app.` Set at creation time and immutable
+  for the screen's lifetime — disabled with a tooltip once a screen
+  exists.
+- **Keep theme from previous version.** Follow-up composer checkbox.
+  When checked, the generator extracts colors + fonts + body bg/fg
+  from the last ready version's `<style>` block and prepends them as
+  a hard theme constraint in the next prompt. Tokens are passed
+  through a strict allowlist (letters/digits/space/hyphen for fonts;
+  digits/comma/dot/percent for color function bodies) so a poisoned
+  prior HTML can't smuggle instructions into the next prompt.
+- **Skill auto-suggest.** Chips under the brief textarea suggest up
+  to 3 skill slugs based on the brief text (heuristic synonym map:
+  `dashboard|admin|analytics` → `dashboard`, `landing|hero|promote`
+  → `landing`, `checkout|cart|ชำระเงิน` → `checkout`, etc.). Hides
+  once the user has manually picked a skill; resets when the brief
+  changes.
+- **Sidebar collapsibility.** Left + right sidebars now have collapse
+  buttons + keyboard shortcuts (Cmd+\ for left, Cmd+Shift+\ for
+  right). When collapsed, sidebars become a 36px rail with just the
+  expand button — never fully hidden so users can always navigate
+  back. State persists per side via localStorage. Entering a Design
+  tab on a narrow viewport (<1400px) auto-collapses the left sidebar
+  IF the user hasn't manually toggled it this session.
+- **Hard project context.** `## Project Context` is now framed as
+  authoritative ("these tokens MUST be reflected in the design") and
+  Claude is told to use detected Tailwind tokens, component
+  libraries, and icon library when present. Replaces the previous
+  nice-to-have framing.
+
+### Fixed
+
+- **Preview no longer shows "failed to load" during generation.** When
+  a screen's status is `generating`, the preview renders a loading
+  card with spinner + "Claude is designing..." + "This typically
+  takes 30-60 seconds" subline instead of fetching the non-existent
+  `index.html`. Flips back to the iframe when status becomes `ready`.
+- **Chat shows a working indicator.** When generation is in flight
+  AND no streaming assistant message is currently rendering, the
+  transcript shows a "Claude is thinking..." pulse card under the
+  last message. Removed once an assistant message starts streaming
+  (the streaming message has its own caret).
+- **Cancelled / errored generations clear stale segments.** A second
+  generation that reuses an assistant message ref could previously
+  show a "Generated index.html — X KB" card under a [cancelled] or
+  [error] message body, leftover from the prior run. The cancel and
+  catch paths now explicitly clear `segments`.
+- **Theme tokens are fenced + control-stripped before prompt
+  injection.** The `## Theme constraints` section is now framed as
+  untrusted data (`<<<theme_tokens … >>>` delimiters) with
+  re-anchored authoritative instructions after — same defence as the
+  conversation section. A hostile prior `<style>` can't smuggle
+  "ignore your previous instructions" into the next generation even
+  if the strict allowlist somehow misses it.
+- **ThemeExtractor input + token caps.** Input HTML capped at 64KB;
+  individual tokens at 80 chars; body block scan at 4KB. Color
+  function bodies and font-family decl values use bounded quantifiers
+  (`[^;]{1,200}?` not `[^;]+?`) so adversarial CSS without semicolons
+  can't engage the regex engine in catastrophic backtracking.
+- **Segments[] sanitized on hydrate.** Disk-tampered registries that
+  plant unknown `kind`, oversize `text/preview`, or non-finite
+  `bytes` no longer hang the renderer. `hydrateFromDisk` drops
+  malformed entries and caps text at 8KB, segments[] length at 16.
+- **Fence-less HTML extraction preserves surrounding prose.** When a
+  fenced ` ```html ` block exists but yields no extractable HTML, the
+  raw doctype scan now uses the fence boundaries to split prose
+  around it — Claude's explanation no longer gets silently dropped.
+- **Sidebar auto-collapse no longer sticks across reboots.** The
+  narrow-viewport auto-collapse for Design tabs is now in-memory
+  only — a fresh boot on a wide monitor returns to the expanded
+  default. The previous implementation persisted the collapsed state
+  without flagging it as a user-touch, so the next boot's
+  short-circuit check (`s.leftCollapsed` already true → return false)
+  prevented future re-evaluation.
+
+### Internal
+
+- New `DesignMessageSegment` discriminated union in `@shared/design`:
+  `{kind:'prose', text} | {kind:'html', bytes, preview?}`. Populated
+  on assistant turn finalize when the response was tri-split. Absent
+  on user/system turns and legacy assistant turns.
+- New `ThemeExtractor` service (pure, regex-only). Color tokens
+  (hex / hsl / rgb), font names, and body bg/fg.
+- `extractGeneratedSegments` replaces the old `extractHtml` in
+  `DesignGenerator`. `extractHtml` kept as a thin wrapper so existing
+  callers and 4 pinned `buildClaudeArgs` regression tests stay green.
+- New `suggestSkillSlugs(brief, slugs)` pure helper in
+  `@shared/design` — synonym-driven, runs on every keystroke in the
+  renderer without crossing the IPC boundary.
+- New `useSidebarStore` (Zustand) with synchronous localStorage
+  hydration to avoid first-paint flicker.
+
+### Tests
+
+311 vitest tests pass (was 284) — +27 covering: prompt builder v3
+structure, `extractGeneratedSegments` tri-split, `ThemeExtractor`
+hex/hsl/rgb/font/body extraction, ThemeExtractor security regressions
+(font/color injection rejection, oversize input cap), `sanitizeSegments`
+disk-tamper defence.
+
 ## [0.13.1] — 2026-05-13
 
 Hotfix for two visible regressions introduced by the v0.13.0 S1+S2

@@ -13,7 +13,7 @@ import {
   Sparkles,
   X,
 } from 'lucide-react';
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 
 import { cn } from '@renderer/lib/utils';
 import type {
@@ -23,6 +23,7 @@ import type {
   DesignSkill,
   DesignSystem,
 } from '@shared/design';
+import { suggestSkillSlugs } from '@shared/design';
 
 // Radix Select forbids `<Select.Item value="">` because empty string is
 // reserved for the "no selection" state on `<Select.Root>`. We surface
@@ -48,6 +49,19 @@ export interface DesignToolbarProps {
    * flight. Parent decides — toolbar only renders.
    */
   canGenerate: boolean;
+  /**
+   * v0.14: optional page-name hint. Empty string means "the page"
+   * generic; rendered alongside the brief textarea as a small input.
+   */
+  pageName: string;
+  onPageNameChange: (name: string) => void;
+  /**
+   * v0.14 code-review HIGH-2: once a screen exists, page name is
+   * immutable (it's set at create-time and persists). DesignView passes
+   * `true` for existing screens; the toolbar then renders the field
+   * read-only with a hint instead of letting users edit a no-op input.
+   */
+  pageNameLocked?: boolean;
   onSkillChange: (slug: string) => void;
   onSystemChange: (slug: string | null) => void;
   onBriefChange: (brief: string) => void;
@@ -82,6 +96,9 @@ export function DesignToolbar({
   status,
   errorMessage,
   canGenerate,
+  pageName,
+  onPageNameChange,
+  pageNameLocked = false,
   onSkillChange,
   onSystemChange,
   onBriefChange,
@@ -95,6 +112,24 @@ export function DesignToolbar({
 }: DesignToolbarProps) {
   const skillGroups = useMemo(() => groupByScope(skills), [skills]);
   const systemGroups = useMemo(() => groupByScope(systems), [systems]);
+  // v0.14 Goal 7: track whether the user has manually changed the skill
+  // since the last brief edit. We hide chip suggestions while the user
+  // has an explicit pick — but allow them to "release" their pick by
+  // continuing to type (any new brief edit resets the manual flag so
+  // suggestions kick back in).
+  const [skillManuallyPicked, setSkillManuallyPicked] = useState(false);
+  // Available skill slug set drives `suggestSkillSlugs` from the shared
+  // helper. Memoized so the suggestion list doesn't churn on every brief
+  // keystroke unless the skill catalog itself changed.
+  const availableSlugs = useMemo(() => skills.map((s) => s.slug), [skills]);
+  const suggestions = useMemo(() => {
+    if (skillManuallyPicked) return [];
+    if (!brief.trim()) return [];
+    const all = suggestSkillSlugs(brief, availableSlugs);
+    // Filter out the currently-selected slug — chip-clicking the same
+    // skill you already have is a non-action.
+    return all.filter((slug) => slug !== selectedSkillSlug);
+  }, [brief, availableSlugs, selectedSkillSlug, skillManuallyPicked]);
 
   const selectedSkillLabel =
     skills.find((s) => s.slug === selectedSkillSlug)?.name ??
@@ -121,7 +156,12 @@ export function DesignToolbar({
         <PickerLabel icon={<Paintbrush size={11} />} label="Skill" />
         <PickerSelect
           value={selectedSkillSlug ?? ''}
-          onValueChange={(v) => onSkillChange(v)}
+          onValueChange={(v) => {
+            // Manual pick — silence the auto-suggest chips until the user
+            // edits the brief again. See `skillManuallyPicked` above.
+            setSkillManuallyPicked(true);
+            onSkillChange(v);
+          }}
           placeholder={selectedSkillLabel}
           disabled={skills.length === 0 || busy}
           ariaLabel="Design skill"
@@ -205,15 +245,101 @@ export function DesignToolbar({
       </div>
 
       <div className="flex items-start gap-2">
-        <textarea
-          value={brief}
-          onChange={(e) => onBriefChange(e.target.value)}
-          onKeyDown={submitOnEnter}
-          rows={2}
-          disabled={busy}
-          placeholder="Describe the screen you want to generate. Use ⌘↵ to submit."
-          className="min-h-[44px] flex-1 resize-none rounded-[7px] border border-border-subtle bg-surface-3 px-3 py-2 text-[12px] text-text placeholder:text-text-dim focus:border-accent focus:outline-none disabled:opacity-60"
-        />
+        <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+          <textarea
+            value={brief}
+            onChange={(e) => {
+              // Editing the brief releases the user's manual skill pick
+              // so auto-suggest can re-engage with the new text. The
+              // suggestion list itself filters out the current slug so
+              // the user never sees a chip for the skill they already
+              // have selected.
+              if (skillManuallyPicked) setSkillManuallyPicked(false);
+              onBriefChange(e.target.value);
+            }}
+            onKeyDown={submitOnEnter}
+            rows={2}
+            disabled={busy}
+            placeholder="Describe the screen you want to generate. Use ⌘↵ to submit."
+            className="min-h-[44px] w-full resize-none rounded-[7px] border border-border-subtle bg-surface-3 px-3 py-2 text-[12px] text-text placeholder:text-text-dim focus:border-accent focus:outline-none disabled:opacity-60"
+          />
+          {/*
+            Goal 7 — skill auto-detect chips. Only rendered when the
+            user hasn't manually picked a skill since their last brief
+            edit AND we have at least one suggestion that's NOT the
+            currently selected slug. Clicking a chip sets the selector
+            (but does NOT mark as manually picked — the user might keep
+            typing and we want to keep adapting).
+          */}
+          {suggestions.length > 0 && (
+            <div
+              className="flex flex-wrap items-center gap-1.5 px-0.5 text-[10.5px] text-text-muted"
+              aria-label="Suggested skills"
+            >
+              <span className="uppercase tracking-wide">Suggested:</span>
+              {suggestions.map((slug) => (
+                <button
+                  key={slug}
+                  type="button"
+                  onClick={() => {
+                    onSkillChange(slug);
+                    // Selecting a chip is an explicit pick — silence
+                    // further suggestions until the user edits the
+                    // brief again (mirrors the picker-select behavior).
+                    setSkillManuallyPicked(true);
+                  }}
+                  disabled={busy}
+                  className={cn(
+                    'inline-flex items-center gap-1 rounded-full border px-2 py-[2px] font-mono text-[10px] transition',
+                    busy
+                      ? 'pointer-events-none border-border-subtle bg-surface-3 text-text-muted opacity-60'
+                      : 'border-accent/30 bg-[rgba(76,141,255,0.10)] text-accent hover:bg-[rgba(76,141,255,0.18)]',
+                  )}
+                  title={`Use skill: ${slug}`}
+                >
+                  <Sparkles size={9} />
+                  {slug}
+                </button>
+              ))}
+            </div>
+          )}
+          {/*
+            Goal 2 — page name field. Optional, threaded through to
+            DesignView's create/regenerate calls. Empty string maps to
+            "the page" in the prompt builder.
+          */}
+          <div className="flex items-center gap-2">
+            <label
+              htmlFor="design-toolbar-page-name"
+              className="inline-flex shrink-0 items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-text-muted"
+            >
+              Page name
+              <span className="text-[9.5px] font-normal normal-case tracking-normal text-text-dim">
+                (optional)
+              </span>
+            </label>
+            <input
+              id="design-toolbar-page-name"
+              type="text"
+              value={pageName}
+              onChange={(e) => onPageNameChange(e.target.value)}
+              disabled={busy || pageNameLocked}
+              readOnly={pageNameLocked}
+              placeholder={
+                pageNameLocked
+                  ? '(locked — create a new design to change)'
+                  : 'e.g. Checkout, Product detail, Settings'
+              }
+              title={
+                pageNameLocked
+                  ? 'Page name is set at creation. Create a new design to change it.'
+                  : undefined
+              }
+              className="h-[26px] min-w-0 flex-1 rounded-[6px] border border-border-subtle bg-surface-3 px-2 text-[11px] text-text placeholder:text-text-dim focus:border-accent focus:outline-none disabled:opacity-60"
+              maxLength={80}
+            />
+          </div>
+        </div>
         {busy ? (
           <button
             type="button"

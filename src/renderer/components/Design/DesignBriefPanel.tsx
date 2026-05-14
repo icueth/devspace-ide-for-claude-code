@@ -43,8 +43,16 @@ export interface DesignBriefPanelProps {
    * `onRegenerate` callback — instead of a wholesale brief swap, every
    * submit appends to the transcript and feeds the prior conversation
    * back into the prompt.
+   *
+   * v0.14: opts bag accepts `reuseTheme` — when true, the prompt
+   * builder will extract color tokens + font family from the most
+   * recent ready version's HTML and prepend them as a "Keep theme:"
+   * constraint. The composer surfaces this as a checkbox.
    */
-  onFollowUp: (text: string) => Promise<void> | void;
+  onFollowUp: (
+    text: string,
+    opts?: { reuseTheme?: boolean },
+  ) => Promise<void> | void;
   /**
    * Abort the in-flight generation. Surfaced as a "Cancel" button in
    * the composer while `busy` is true.

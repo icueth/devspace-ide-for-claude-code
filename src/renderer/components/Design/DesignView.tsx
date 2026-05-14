@@ -111,6 +111,10 @@ export function DesignView({ projectPath }: DesignViewProps) {
   const [skillSlug, setSkillSlug] = useState<string | null>(null);
   const [systemSlug, setSystemSlug] = useState<string | null>(null);
   const [brief, setBrief] = useState('');
+  // v0.14 Goal 2 — optional page-name hint. Threaded through both the
+  // create call (initial generation) and follow-ups. Empty string =
+  // "the page" generic; the prompt builder collapses it to nothing.
+  const [pageName, setPageName] = useState('');
   const [briefPanelOpen, setBriefPanelOpen] = useState(true);
   const [preview, setPreview] = useState<PreviewOverride | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
@@ -404,14 +408,21 @@ export function DesignView({ projectPath }: DesignViewProps) {
     setToolbarError(null);
     setCreating(true);
     try {
+      const trimmedPageName = pageName.trim();
       const screen = await api.design.create({
         projectPath,
         // Use a short slug derived from the brief so the sidebar reads
-        // sensibly even before the backend renames things.
-        name: brief.trim().split(/\n/)[0]!.slice(0, 60) || 'Untitled screen',
+        // sensibly even before the backend renames things. Prefer the
+        // page-name hint when present — it's a more user-meaningful
+        // label than a brief excerpt.
+        name:
+          trimmedPageName ||
+          brief.trim().split(/\n/)[0]!.slice(0, 60) ||
+          'Untitled screen',
         skillSlug,
         designSystemSlug: systemSlug ?? undefined,
         brief: brief.trim(),
+        pageName: trimmedPageName || undefined,
       });
       // Optimistic insert — the streaming event will overwrite this in
       // place, but inserting now keeps the sidebar from flickering.
@@ -427,12 +438,15 @@ export function DesignView({ projectPath }: DesignViewProps) {
       );
       setActiveScreenId(optimistic.id);
       setBrief('');
+      // Reset the page-name hint after submit — it's a per-screen
+      // choice, not a sticky preference.
+      setPageName('');
     } catch (err) {
       setToolbarError((err as Error).message);
     } finally {
       setCreating(false);
     }
-  }, [brief, canGenerate, projectPath, skillSlug, systemSlug]);
+  }, [brief, canGenerate, pageName, projectPath, skillSlug, systemSlug]);
 
   const handleCancel = useCallback(async () => {
     if (!activeScreenId) return;
@@ -449,7 +463,7 @@ export function DesignView({ projectPath }: DesignViewProps) {
   // backend streams the assistant reply through `message_*` events,
   // which the local handler routes into `messages` state.
   const handleFollowUp = useCallback(
-    async (text: string) => {
+    async (text: string, opts?: { reuseTheme?: boolean }) => {
       if (!activeScreenId) return;
       setToolbarError(null);
       try {
@@ -458,6 +472,10 @@ export function DesignView({ projectPath }: DesignViewProps) {
           screenId: activeScreenId,
           message: text,
           designSystemSlug: systemSlug ?? undefined,
+          // v0.14 Goal 3: forward the composer's keep-theme checkbox
+          // state. Omit the field entirely when false so the IPC payload
+          // matches the pre-0.14 shape on the common path.
+          ...(opts?.reuseTheme ? { reuseTheme: true } : {}),
         });
       } catch (err) {
         setToolbarError((err as Error).message);
@@ -930,6 +948,13 @@ export function DesignView({ projectPath }: DesignViewProps) {
         status={activeScreen?.status ?? null}
         errorMessage={activeScreen?.errorMessage ?? toolbarError}
         canGenerate={canGenerate}
+        pageName={activeScreen?.pageName ?? pageName}
+        onPageNameChange={setPageName}
+        // v0.14 code-review HIGH-2: pageName is set at create-time and
+        // immutable for the screen's lifetime. Once a screen exists,
+        // disable the field so users don't see edits that have no effect.
+        // Re-enables on the empty/creating state for new screens.
+        pageNameLocked={activeScreen != null}
         onSkillChange={setSkillSlug}
         onSystemChange={setSystemSlug}
         onBriefChange={setBrief}
@@ -1001,6 +1026,7 @@ export function DesignView({ projectPath }: DesignViewProps) {
                 mode={mode}
                 iframeRef={iframeRef}
                 onBridgeMessage={handleBridgeMessage}
+                status={activeScreen?.status}
                 emptyLabel="Select a screen"
                 emptyHint="Pick a screen from the left to preview it."
               />

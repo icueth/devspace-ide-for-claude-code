@@ -7,7 +7,11 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { buildClaudeArgs, extractHtml } from './DesignGenerator';
+import {
+  buildClaudeArgs,
+  extractGeneratedSegments,
+  extractHtml,
+} from './DesignGenerator';
 
 describe('extractHtml', () => {
   it('returns null for empty input', () => {
@@ -139,5 +143,92 @@ describe('buildClaudeArgs', () => {
     const idx = args.indexOf('--allowed-tools');
     expect(idx).toBeGreaterThanOrEqual(0);
     expect(args[idx + 1]).toBe('Glob,Grep');
+  });
+});
+
+// v0.14: extractGeneratedSegments slices the response into prose + html
+// + prose so the chat surface can render the prose as message bubbles
+// and the HTML as a compact "Generated index.html — N KB" card. The
+// regression invariants extractHtml pins above must hold here too (we
+// share the same fence-picking logic).
+describe('extractGeneratedSegments', () => {
+  it('tri-splits a prose / ```html / prose response', () => {
+    const intro = 'This is a clean dashboard with a sidebar and KPI row.';
+    const html = '<!DOCTYPE html>\n<html><body><h1>K</h1></body></html>';
+    const outro = 'Try asking for a darker theme or tighter spacing next.';
+    const raw = `${intro}\n\n\`\`\`html\n${html}\n\`\`\`\n\n${outro}`;
+    const out = extractGeneratedSegments(raw);
+    expect(out.html).toBe(html);
+    expect(out.segments).toHaveLength(3);
+    expect(out.segments[0]).toEqual({ kind: 'prose', text: intro });
+    expect(out.segments[1]).toMatchObject({
+      kind: 'html',
+      bytes: Buffer.byteLength(html, 'utf8'),
+    });
+    // Preview is the first <=200 chars of the html.
+    if (out.segments[1].kind === 'html') {
+      expect(out.segments[1].preview).toBe(html);
+    }
+    expect(out.segments[2]).toEqual({ kind: 'prose', text: outro });
+  });
+
+  it('returns only an html segment when neither prose half is present', () => {
+    const html = '<!DOCTYPE html>\n<html><body>x</body></html>';
+    const raw = `\`\`\`html\n${html}\n\`\`\``;
+    const out = extractGeneratedSegments(raw);
+    expect(out.html).toBe(html);
+    expect(out.segments).toHaveLength(1);
+    expect(out.segments[0].kind).toBe('html');
+  });
+
+  it('returns prose+html when only the intro is present', () => {
+    const html = '<!DOCTYPE html>\n<html><body>x</body></html>';
+    const raw = `Here it is:\n\n\`\`\`html\n${html}\n\`\`\``;
+    const out = extractGeneratedSegments(raw);
+    expect(out.html).toBe(html);
+    expect(out.segments.map((s) => s.kind)).toEqual(['prose', 'html']);
+    expect(out.segments[0]).toEqual({ kind: 'prose', text: 'Here it is:' });
+  });
+
+  it('returns prose-only segments when no html fence and no doctype', () => {
+    const raw = 'I cannot fulfil that request. Please refine the brief.';
+    const out = extractGeneratedSegments(raw);
+    expect(out.html).toBeNull();
+    expect(out.segments).toHaveLength(1);
+    expect(out.segments[0]).toEqual({ kind: 'prose', text: raw });
+  });
+
+  it('falls back to bare-doctype extraction (no fence) and emits a single html segment', () => {
+    const raw = "Here's the page:\n<!DOCTYPE html>\n<html><body>hi</body></html>\nDone.";
+    const out = extractGeneratedSegments(raw);
+    // The doctype-scan path doesn't try to split prose halves (no
+    // delimiter), but the html itself MUST be extracted correctly.
+    expect(out.html).toBe('<!DOCTYPE html>\n<html><body>hi</body></html>');
+    expect(out.segments).toHaveLength(1);
+    expect(out.segments[0].kind).toBe('html');
+  });
+
+  it('returns empty segments and null html on empty input', () => {
+    expect(extractGeneratedSegments('')).toEqual({
+      html: null,
+      segments: [],
+    });
+  });
+
+  it('truncates the html preview to 200 chars', () => {
+    const inner = 'a'.repeat(500);
+    const html = `<!DOCTYPE html>\n<html><body>${inner}</body></html>`;
+    const raw = `intro\n\n\`\`\`html\n${html}\n\`\`\``;
+    const out = extractGeneratedSegments(raw);
+    expect(out.segments[1].kind).toBe('html');
+    if (out.segments[1].kind === 'html') {
+      expect(out.segments[1].preview?.length).toBe(200);
+    }
+  });
+
+  it('keeps extractHtml as a thin wrapper that returns the same html string', () => {
+    const html = '<!DOCTYPE html>\n<html><body>x</body></html>';
+    const raw = `intro\n\`\`\`html\n${html}\n\`\`\`\nbye`;
+    expect(extractHtml(raw)).toBe(extractGeneratedSegments(raw).html);
   });
 });

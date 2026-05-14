@@ -1,4 +1,4 @@
-import { Paintbrush } from 'lucide-react';
+import { Loader2, Paintbrush } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 
 import { api } from '@renderer/lib/api';
@@ -9,6 +9,7 @@ import {
 import type {
   DesignBridgeInbound,
   DesignBridgeMode,
+  DesignScreenStatus,
 } from '@shared/design';
 
 /**
@@ -34,6 +35,12 @@ import type {
  * `iframeRef` (so DesignView can `sendToBridge(iframeRef.current, …)`)
  * and an `onBridgeMessage` callback for inbound protocol events. When
  * `mode` changes we ping the iframe with a `setMode` message.
+ *
+ * v0.14: when the screen is mid-generation we suppress the iframe load
+ * entirely and show a friendly "Claude is designing…" loading state.
+ * Previously the component tried to fetch an `index.html` that didn't
+ * exist yet and rendered "Preview failed to load" — a major UX bug
+ * since the generation was actually working as intended.
  */
 export interface DesignPreviewProps {
   /** Project root. Pass an empty string to render the empty state. */
@@ -73,6 +80,14 @@ export interface DesignPreviewProps {
    * from this iframe's contentWindow.
    */
   onBridgeMessage?: (msg: DesignBridgeInbound) => void;
+  /**
+   * v0.14: active screen status. When `'generating'`, the preview
+   * suppresses the iframe and shows a centered loading card instead
+   * of attempting to load HTML that doesn't yet exist on disk. The
+   * caller (DesignView) passes `activeScreen?.status`. Optional for
+   * backwards compat — undefined treats the preview as "ready".
+   */
+  status?: DesignScreenStatus;
 }
 
 export function DesignPreview({
@@ -85,14 +100,30 @@ export function DesignPreview({
   mode = 'view',
   iframeRef,
   onBridgeMessage,
+  status,
 }: DesignPreviewProps) {
   const [blobUrl, setBlobUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const localRef = useRef<HTMLIFrameElement | null>(null);
   const ref = iframeRef ?? localRef;
 
+  // v0.14: while generating, skip the fetch entirely. Loading an empty
+  // / partial index.html during a stream would either 404 (-> error
+  // state -> "Preview failed to load") or flash stale prior-version
+  // content; both are confusing. The generating placeholder is
+  // self-contained and the next ready-state effect run will pick up
+  // the fresh HTML when status flips back to 'ready'.
+  const isGenerating = status === 'generating';
+
   useEffect(() => {
     if (!projectPath || !screenId) {
+      setBlobUrl(null);
+      setError(null);
+      return;
+    }
+    if (isGenerating) {
+      // Drop any stale URL so the moment generation completes we run a
+      // clean fetch instead of briefly showing the previous version.
       setBlobUrl(null);
       setError(null);
       return;
@@ -129,7 +160,7 @@ export function DesignPreview({
       cancelled = true;
       if (createdUrl) URL.revokeObjectURL(createdUrl);
     };
-  }, [projectPath, screenId, versionId, reloadKey]);
+  }, [projectPath, screenId, versionId, reloadKey, isGenerating]);
 
   // Subscribe to inbound bridge messages from this iframe. The hook
   // filters by `event.source === ref.current.contentWindow` so we don't
@@ -144,6 +175,14 @@ export function DesignPreview({
     if (!blobUrl) return;
     sendSetMode(ref.current, mode);
   }, [mode, blobUrl, ref]);
+
+  // v0.14: generating state takes priority over both error and empty
+  // states. The user just clicked "Generate" or sent a follow-up —
+  // they need to see that something is happening, not a stale error
+  // from the previous run or the "No designs yet" empty card.
+  if (isGenerating) {
+    return <GeneratingState />;
+  }
 
   if (error) {
     return (
@@ -199,5 +238,54 @@ export function DesignPreview({
       title="Design preview"
       className="h-full w-full border-0 bg-white"
     />
+  );
+}
+
+/**
+ * Centered "Claude is designing…" card shown while a generation is in
+ * flight. Replaces the broken "Preview failed to load" state that
+ * appeared between submit and first ready HTML write. Visuals reuse
+ * the gradient + spinner pattern from elsewhere in Design Studio so
+ * the surface feels cohesive.
+ */
+function GeneratingState() {
+  return (
+    <div
+      className="flex h-full w-full items-center justify-center bg-surface"
+      role="status"
+      aria-live="polite"
+      aria-label="Generating design"
+    >
+      <div className="max-w-sm px-6 text-center">
+        <div
+          className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-[10px]"
+          style={{
+            background:
+              'linear-gradient(135deg, rgba(76,141,255,0.18), rgba(168,85,247,0.18))',
+            boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.05)',
+          }}
+        >
+          <Loader2 size={20} className="animate-spin text-accent" />
+        </div>
+        <div className="text-[13px] font-medium text-text">
+          Claude is designing…
+        </div>
+        <div className="mt-1.5 text-[11px] text-text-muted">
+          This typically takes 30-60 seconds.
+        </div>
+        {/* Indeterminate shimmer bar — pure CSS, no extra deps. The
+            gradient slides across the track via `animate-pulse` on a
+            child slab so we don't need a bespoke keyframe. */}
+        <div className="mx-auto mt-4 h-1 w-40 overflow-hidden rounded-full bg-surface-3">
+          <div
+            className="h-full w-1/2 animate-pulse rounded-full"
+            style={{
+              background:
+                'linear-gradient(90deg, rgba(76,141,255,0), rgba(76,141,255,0.7), rgba(168,85,247,0.7), rgba(168,85,247,0))',
+            }}
+          />
+        </div>
+      </div>
+    </div>
   );
 }

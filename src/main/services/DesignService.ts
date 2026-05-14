@@ -23,7 +23,11 @@ import { homedir } from 'node:os';
 import * as path from 'node:path';
 import type { WebContents } from 'electron';
 
-import { generateDesign } from '@main/services/DesignGenerator';
+import {
+  type GenerateDesignResult,
+  generateDesign,
+} from '@main/services/DesignGenerator';
+import type { BuildPromptThemeTokens } from '@main/services/DesignPromptBuilder';
 import { DEVSPACE_BRIDGE_SCRIPT } from '@main/services/design/bridgeScript';
 import { tagDevspaceIds } from '@main/services/design/idTagger';
 import {
@@ -31,6 +35,7 @@ import {
   loadCachedOrBuild,
 } from '@main/services/ProjectProfileBuilder';
 import { readSkill } from '@main/services/SkillsService';
+import { extractTheme } from '@main/services/ThemeExtractor';
 import { getBuiltinDesignPacksDir } from '@main/utils/designResourcePaths';
 import { IPC } from '@shared/ipc-channels';
 import { createLogger } from '@shared/logger';
@@ -40,6 +45,7 @@ import type {
   DesignEventKind,
   DesignFollowUpInput,
   DesignMessage,
+  DesignMessageSegment,
   DesignProject,
   DesignSaveEditsInput,
   DesignScope,
@@ -335,6 +341,23 @@ async function hydrateFromDisk(state: ProjectState): Promise<void> {
           mutated = true;
         }
 
+        // v0.14 sec-review LOW-4: validate persisted message.segments[]
+        // shape. Disk-tampered registries (or older transient bugs) can
+        // plant oversize text, unknown kinds, or non-finite bytes that
+        // hang the renderer. Sanitize once at hydrate so the in-memory
+        // state is always well-formed.
+        if (Array.isArray(cleaned.messages)) {
+          for (const msg of cleaned.messages) {
+            if (Array.isArray(msg.segments)) {
+              const sanitized = sanitizeSegments(msg.segments);
+              if (sanitized !== msg.segments) {
+                msg.segments = sanitized;
+                mutated = true;
+              }
+            }
+          }
+        }
+
         // Any screen left mid-generation across a restart is reset to
         // 'error' — Phase A doesn't resume design runs the way chat does
         // since there's no streaming UI to reattach to.
@@ -505,6 +528,12 @@ export async function createDesign(input: CreateDesignInput): Promise<DesignScre
         ]
       : [];
 
+  // v0.14: optional page-name hint flows from CreateDesignInput onto
+  // the screen so the screen list can label it ("Checkout") and so
+  // every follow-up generation can pass the same anchor sentence into
+  // the prompt without re-asking the user.
+  const pageName = sanitizePageName(input.pageName);
+
   const screen: DesignScreen = {
     id: randomUUID(),
     name: input.name.trim() || 'Untitled screen',
@@ -518,6 +547,7 @@ export async function createDesign(input: CreateDesignInput): Promise<DesignScre
     versions: [],
     messages: initialMessages,
     historyVersion: 2,
+    pageName,
   };
 
   s.screens.set(screen.id, screen);
@@ -528,9 +558,87 @@ export async function createDesign(input: CreateDesignInput): Promise<DesignScre
   // Fire-and-forget generation. Errors propagate to the renderer as
   // 'generation_error' events, so we don't need to await this. Using
   // void to make the lint check happy.
-  void runGeneration(s, screen, skill, designSystem);
+  // v0.14: createDesign never re-uses theme — there's no prior version
+  // yet, so we always pass reuseTheme=false here.
+  void runGeneration(s, screen, skill, designSystem, false);
 
   return screen;
+}
+
+// v0.14 sec-review LOW-4: validate + size-cap persisted message
+// segments on hydrate. Disk-tampered registries can plant unknown
+// `kind`, oversize text, or non-finite bytes that hang the renderer.
+// Drops malformed entries, caps text/preview to 8 KB and segments.length
+// to 16. Returns the SAME array reference when no changes were needed,
+// so the caller can detect mutations cheaply.
+const SEGMENT_TEXT_MAX = 8 * 1024;
+const SEGMENTS_LEN_MAX = 16;
+function sanitizeSegments(raw: unknown): DesignMessageSegment[] {
+  if (!Array.isArray(raw)) return [];
+  const out: DesignMessageSegment[] = [];
+  let mutated = false;
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') {
+      mutated = true;
+      continue;
+    }
+    const kind = (item as { kind?: unknown }).kind;
+    if (kind === 'prose') {
+      const t = (item as { text?: unknown }).text;
+      if (typeof t !== 'string') {
+        mutated = true;
+        continue;
+      }
+      const text = t.length > SEGMENT_TEXT_MAX ? t.slice(0, SEGMENT_TEXT_MAX) : t;
+      if (text !== t) mutated = true;
+      out.push({ kind: 'prose', text });
+    } else if (kind === 'html') {
+      const b = (item as { bytes?: unknown }).bytes;
+      const bytes =
+        typeof b === 'number' && Number.isFinite(b) && b >= 0
+          ? Math.floor(b)
+          : 0;
+      if (bytes !== b) mutated = true;
+      const p = (item as { preview?: unknown }).preview;
+      let preview: string | undefined;
+      if (typeof p === 'string') {
+        preview = p.length > SEGMENT_TEXT_MAX ? p.slice(0, SEGMENT_TEXT_MAX) : p;
+        if (preview !== p) mutated = true;
+      } else if (p !== undefined) {
+        mutated = true;
+      }
+      out.push(preview === undefined ? { kind: 'html', bytes } : { kind: 'html', bytes, preview });
+    } else {
+      // Unknown kind — drop.
+      mutated = true;
+    }
+    if (out.length >= SEGMENTS_LEN_MAX) {
+      if (raw.length > SEGMENTS_LEN_MAX) mutated = true;
+      break;
+    }
+  }
+  if (!mutated && out.length === raw.length) {
+    // Return the original ref so callers can `!==`-check for mutation.
+    return raw as DesignMessageSegment[];
+  }
+  return out;
+}
+
+// Trim + cap a user-supplied pageName. Empty / non-string → undefined
+// so the field stays absent on the persisted screen (cleaner registry
+// than `pageName: ""`). 80 chars is generous for a page label without
+// allowing prompt-blow-up.
+const PAGE_NAME_MAX_CHARS = 80;
+function sanitizePageName(raw: unknown): string | undefined {
+  if (typeof raw !== 'string') return undefined;
+  // Strip control chars that would break the prompt's anchor sentence
+  // before clipping length — same defence as transcript content.
+  // eslint-disable-next-line no-control-regex
+  const cleaned = raw.replace(/[\x00-\x1f\x7f]/g, ' ').trim();
+  if (cleaned.length === 0) return undefined;
+  return cleaned.length <= PAGE_NAME_MAX_CHARS
+    ? cleaned
+    : cleaned.slice(0, PAGE_NAME_MAX_CHARS);
 }
 
 export async function regenerateDesign(
@@ -593,7 +701,7 @@ export async function regenerateDesign(
   await persistRegistry(s);
   emit(s, 'screen_updated', screen.id, { screen });
 
-  void runGeneration(s, screen, skill, designSystem);
+  void runGeneration(s, screen, skill, designSystem, input.reuseTheme === true);
   return screen;
 }
 
@@ -1185,11 +1293,69 @@ function ensureMessagesSeeded(screen: DesignScreen): DesignMessage[] {
   return seed;
 }
 
+// v0.14: derive the persisted assistant segments. The generator's
+// `segments` is the source of truth; we only need to recompute the
+// `bytes` on the html segment to reflect the HARDENED on-disk size
+// (CSP injection + bridge IIFE add a few hundred bytes vs. the raw
+// extractor output). Returns [] when the generator handed back
+// nothing — caller leaves `segments` absent so the renderer falls
+// back to `content`.
+function pickFinalSegments(
+  result: GenerateDesignResult,
+  htmlRelPath: string,
+): DesignMessageSegment[] {
+  if (!Array.isArray(result.segments) || result.segments.length === 0) {
+    return [];
+  }
+  // We don't actually use htmlRelPath right now — the byte count on
+  // the segment reflects the extracted html (pre-hardening). That's
+  // the right size for a "Generated index.html — N KB" hint: it
+  // ignores the bridge IIFE which is the same on every generation.
+  // Keeping the param so a future revision can swap to the on-disk
+  // byte count without changing the call site.
+  void htmlRelPath;
+  return result.segments;
+}
+
+// v0.14: read the prior (most-recent) ready version's HTML and pull
+// theme tokens out of it. Returns undefined when no prior version
+// exists, when the file is missing, or when the extractor finds zero
+// signal — so the caller can omit the constraint cleanly.
+async function loadPriorThemeTokens(
+  projectPath: string,
+  screen: DesignScreen,
+): Promise<BuildPromptThemeTokens | undefined> {
+  // No prior version → no theme to keep.
+  if (!Array.isArray(screen.versions) || screen.versions.length === 0) {
+    return undefined;
+  }
+  // Prefer reading the LIVE index.html (the latest ready content) over
+  // walking history — same file the user is iterating on, and we don't
+  // have to guess about v1/v2 history layout.
+  const indexAbs = screenIndexHtml(projectPath, screen.id);
+  try {
+    assertInsideDesignDir(projectPath, indexAbs);
+    // Defeat symlink swaps that could otherwise point this read at an
+    // arbitrary file on the host.
+    if (!(await assertRegularFile(indexAbs))) return undefined;
+    const html = await fs.promises.readFile(indexAbs, 'utf8');
+    const tokens = extractTheme(html);
+    if (!tokens) return undefined;
+    return tokens;
+  } catch (err) {
+    logger.warn(
+      `reuseTheme: failed to extract prior theme: ${(err as Error).message}`,
+    );
+    return undefined;
+  }
+}
+
 async function runGeneration(
   state: ProjectState,
   screen: DesignScreen,
   skill: DesignSkill,
   designSystem: DesignSystem | undefined,
+  reuseTheme: boolean,
 ): Promise<void> {
   const key = runKey(state.projectPath, screen.id);
 
@@ -1248,6 +1414,16 @@ async function runGeneration(
     );
   }
 
+  // v0.14: when the caller asked to lock the theme to the prior
+  // version's tokens, read the most recent ready HTML and extract its
+  // color + font signal. Best-effort: a missing or unreadable prior
+  // file (first generation, deleted history, etc.) leaves tokens
+  // undefined and we proceed without the constraint.
+  let reuseThemeTokens: BuildPromptThemeTokens | undefined;
+  if (reuseTheme) {
+    reuseThemeTokens = await loadPriorThemeTokens(state.projectPath, screen);
+  }
+
   // Buffer streaming output so we cap memory + can mirror the same
   // truncation logic into the persisted message. The HTML on disk
   // remains the source of truth — this buffer is purely for UI.
@@ -1262,6 +1438,8 @@ async function runGeneration(
       brief: screen.brief,
       messages: screen.messages,
       projectProfile,
+      pageName: screen.pageName,
+      reuseThemeTokens,
       onProgress: (message) => {
         emit(state, 'generation_progress', screen.id, { message });
 
@@ -1311,6 +1489,10 @@ async function runGeneration(
       assistantMessage.content = truncateMessageContent(
         streamingContent || '[cancelled]',
       );
+      // Clear stale segments from a prior run on the same message ref so
+      // the renderer doesn't show a "Generated index.html" card under a
+      // [cancelled] message body (code-review BLOCKER-1).
+      assistantMessage.segments = undefined;
       await persistScreenMeta(state.projectPath, screen);
       await persistRegistry(state);
       emit(state, 'screen_updated', screen.id, { screen });
@@ -1329,6 +1511,14 @@ async function runGeneration(
       assistantMessage.content = truncateMessageContent(
         streamingContent || `[error] ${screen.errorMessage}`,
       );
+      // v0.14: even on the no-HTML error path the generator hands back
+      // segments (typically a single prose segment with Claude's
+      // refusal or clarifying question). Persist them so the UI can
+      // show what Claude actually said instead of a bare "no HTML"
+      // banner.
+      if (Array.isArray(result.segments) && result.segments.length > 0) {
+        assistantMessage.segments = result.segments;
+      }
       await persistScreenMeta(state.projectPath, screen);
       await persistRegistry(state);
       emit(state, 'generation_error', screen.id, {
@@ -1415,6 +1605,15 @@ async function runGeneration(
     assistantMessage.content = truncateMessageContent(
       streamingContent.length > 0 ? streamingContent : '',
     );
+    // v0.14: persist the prose+html+prose split onto the assistant
+    // turn so the chat surface can render the explanation as a normal
+    // message bubble and the HTML as a compact "Generated index.html —
+    // 38 KB" card. Pre-v0.14 turns persist with `segments` absent;
+    // renderer falls back to `content` in that case.
+    const finalizedSegments = pickFinalSegments(result, screen.htmlPath ?? '');
+    if (finalizedSegments.length > 0) {
+      assistantMessage.segments = finalizedSegments;
+    }
 
     await persistScreenMeta(state.projectPath, screen);
     await persistRegistry(state);
@@ -1432,6 +1631,11 @@ async function runGeneration(
     assistantMessage.content = truncateMessageContent(
       streamingContent || `[error] ${screen.errorMessage}`,
     );
+    // Clear any stale segments from a prior run on the same message ref —
+    // a thrown exception in the runner means we have no fresh segments to
+    // attach, and showing the previous run's "Generated …" card under an
+    // error message would mislead users (code-review BLOCKER-1).
+    assistantMessage.segments = undefined;
     await persistScreenMeta(state.projectPath, screen).catch(() => undefined);
     await persistRegistry(state).catch(() => undefined);
     emit(state, 'generation_error', screen.id, {
@@ -1501,7 +1705,7 @@ export async function followUp(input: DesignFollowUpInput): Promise<DesignScreen
   // only for `message_*` (and skip `screen_updated`) still see it.
   emit(s, 'message_appended', screen.id, { designMessage: userTurn });
 
-  void runGeneration(s, screen, skill, designSystem);
+  void runGeneration(s, screen, skill, designSystem, input.reuseTheme === true);
   return screen;
 }
 
