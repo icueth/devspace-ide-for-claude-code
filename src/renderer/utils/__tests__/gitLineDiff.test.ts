@@ -57,4 +57,45 @@ describe('computeLineDiff', () => {
     // the changed log call → mod
     expect([...markers.values()].some((m) => m.kind === 'mod')).toBe(true);
   });
+
+  // v0.18.2 — deletion content is now preserved so the editor can show
+  // a phantom widget of the removed lines (Cursor-style inline diff).
+  it('records deleted-line content at the boundary', () => {
+    const { deletions } = computeLineDiff('a\nGONE\nc', 'a\nc');
+    // Removal of "GONE" anchors at the new-side line that now sits where
+    // it used to be, which is line 2 ("c").
+    const block = deletions.get(2);
+    expect(block).toBeDefined();
+    expect(block!.lines).toEqual(['GONE']);
+  });
+
+  it('records replaced-line content as a deletion paired with the mod line', () => {
+    const { markers, deletions } = computeLineDiff('a\nOLD\nc', 'a\nNEW\nc');
+    expect(markers.get(2)?.kind).toBe('mod');
+    // The OLD line surfaces as a deletion anchored at the same mod row.
+    expect(deletions.get(2)?.lines).toEqual(['OLD']);
+  });
+
+  it('records trailing deletions past EOF', () => {
+    const { deletions } = computeLineDiff('a\nb\nc\nd\ne', 'a\nb');
+    // Three lines (c, d, e) removed past EOF → anchor at newLines+1 (=3).
+    const block = deletions.get(3);
+    expect(block).toBeDefined();
+    expect(block!.lines).toEqual(['c', 'd', 'e']);
+  });
+
+  it('truncates excessively long deleted lines for the phantom display', () => {
+    const long = 'x'.repeat(500);
+    const { deletions } = computeLineDiff(`a\n${long}\nc`, 'a\nc');
+    const block = deletions.get(2);
+    expect(block).toBeDefined();
+    // Capped at 240 chars + ellipsis sentinel.
+    expect(block!.lines[0]!.length).toBeLessThanOrEqual(241);
+    expect(block!.lines[0]!.endsWith('…')).toBe(true);
+  });
+
+  it('returns empty deletions map for unchanged content', () => {
+    const { deletions } = computeLineDiff('a\nb\nc', 'a\nb\nc');
+    expect(deletions.size).toBe(0);
+  });
 });

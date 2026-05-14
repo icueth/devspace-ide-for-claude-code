@@ -5,6 +5,35 @@ All notable changes to DevSpace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.18.2] — 2026-05-14
+
+Editor git diff now shows what changed, not just where — full-line tints
+plus inline phantom widgets that display the actual removed lines with
+strikethrough. Same visual language as the chat's inline diff cards so
+you can read the change in place without opening a diff tab.
+
+### Added
+
+- **Full-line background tints in the editor.** Added lines get a subtle
+  green wash, modified lines get amber. Visible at any scroll position.
+- **Phantom deleted-line widgets.** When you remove lines, the editor
+  inserts a non-doc block above the deletion boundary showing the OLD
+  text with red background + strikethrough — mirrors the chat unified
+  diff so you see *what* was taken out, not just *that* something was.
+- **Deleted-line content preserved through LCS backtrack.** `computeLineDiff`
+  now returns a `deletions: Map<anchorLine, { lines: string[] }>` alongside
+  the existing markers. Per-line content capped at 240 chars (with ellipsis)
+  so minified-line removals don't blow up the rendered widget.
+
+### Internal
+
+- 5 new vitest regression tests pin the new `deletions` shape: boundary
+  attachment, mod-paired deletion, trailing past-EOF deletions, the
+  240-char truncation, and empty-on-unchanged.
+- `decorationsField` derives from `baselineField` so existing baseline
+  refresh hooks (git store fingerprint changes) automatically refresh
+  line tints + phantom widgets — no new wiring required.
+
 ## [0.18.1] — 2026-05-14
 
 Sidebar file tree is more discoverable.
