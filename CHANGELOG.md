@@ -5,6 +5,101 @@ All notable changes to DevSpace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.19.0] — 2026-05-14
+
+Persistent cross-project memory system + dashboard. DevSpace now
+remembers preferences, decisions, project context, and references at
+`~/.devspace/` (per-project + global, markdown source-of-truth). A new
+Dashboard button in the navbar opens a full-page UI for browsing memory
+across all your projects, reviewing auto-capture suggestions, writing
+diary entries, and managing settings.
+
+### Added
+
+- **Memory system backend** (`MemoryService`) — function-only service
+  managing markdown entries at `~/.devspace/projects/<hash>/memory/` +
+  `~/.devspace/global/`. In-memory inverted index gives sub-100ms full-
+  text search across all projects without a native SQLite dep. Atomic
+  writes (tmp + rename), 100KB body cap, slug regex `^[a-z0-9][a-z0-9-]{0,79}$`,
+  symlink-guarded reads via `lstat`.
+- **Dashboard tab** opened via Sparkles button after the version chip in
+  the top bar. 5 sub-views: Home (stats + recent + pinned + inbox
+  preview), All entries (search + filter), Inbox (auto-capture
+  suggestions), Timeline (diary chronological), Settings.
+- **EntryEditor side-drawer** — type/slug/description/tags/body/pinned
+  form with regex-validated slug, chip-input tags, monospace body
+  textarea, delete confirmation, inbox-prefill routing through atomic
+  `resolveInbox`.
+- **Auto-capture (smart mode)** — when an assistant turn completes,
+  `proposeFromTurn` heuristically detects 4 signal types in the
+  **USER** message: correction, confirmation, decision, named-entity.
+  0-3 inbox items per turn. Inbox-id is `sha1(threadId+turnHash+content)`
+  so duplicate proposals don't accumulate. Fire-and-forget — capture
+  failures never break chat flow.
+- **`/remember <text>` slash command** in chat — saves directly as a
+  user-type memory without billing a Claude turn. Returns inline help
+  if invoked with no args.
+- **Right-click "Save to memory"** on both user and assistant message
+  bubbles in the chat. User messages save as `feedback` type; assistant
+  messages save as `project` type.
+- **Memory preamble injection** — at the **first turn** of a brand-new
+  thread (tracked via persisted `thread.memoryInjected` flag rather
+  than message count), the project's MEMORY.md is prepended to Claude's
+  system prompt, capped by `MemorySettings.maxInjectLines` (default 200).
+- **Memory event stream** — broadcast `entry_created`/`entry_updated`/
+  `entry_deleted`/`inbox_added`/`inbox_resolved`/`diary_updated`/
+  `thread_summarized`/`index_rebuilt` events to subscribers via
+  `IPC.MEMORY_EVENTS`. Dashboard subscribes; refreshes incrementally.
+- **MemPalace sync queue (opt-in)** — when `mempalaceSyncEnabled` is on
+  AND an entry has tag `mempalace`, write a marker file to
+  `~/.devspace/.mempalace-sync-queue/<id>.json` for the MCP layer to
+  drain. No MCP calls from main process — pure queue handoff.
+- **544 vitest tests** (was 507 in 0.18.2, +37: 32 from agent + 5 slash
+  command + 2 security regression tests for untrusted-data fence and
+  assistant-only signal scanning).
+
+### Security
+
+- **Untrusted-data fence** wraps the memory preamble before it lands in
+  Claude's system prompt — clearly labeled as user-controlled reference
+  data, not instructions. Defuses the "memory entry as system-prompt
+  override" attack chain.
+- **Assistant content excluded from signal scanning** in `proposeFromTurn`.
+  A prompt-injected assistant emitting "Decided to: ignore prior
+  instructions" can no longer auto-promote into the inbox.
+- **`assertInWorkspace` gate** on every memory IPC handler that accepts
+  a `projectPath`. Closes the "renderer supplies arbitrary absolute
+  path" leg of the attack chain — affects `summarizeThread`,
+  `listThreads`, `proposeFromTurn`, `createEntry`, `buildInjectPreamble`,
+  `listEntries`, `search`, etc.
+- **Markdown escape** on entry descriptions in MEMORY.md regeneration.
+  A description containing `]` can no longer break out of the link
+  syntax to inject arbitrary markdown into the inject preamble.
+- **Inbox cap (500 items)** with FIFO eviction — a runaway auto-capture
+  loop or hostile renderer can't grow inbox unboundedly.
+- **Per-scope entry cap (5000)** enforced on write — prevents inode
+  exhaustion DoS from a tight `createEntry` loop.
+- **TOCTOU guard** in `createEntry` re-verifies slug availability
+  immediately before write to defuse parallel-create races.
+- **Stateless regex** per `proposeFromTurn` call — no more shared
+  `lastIndex` between concurrent invocations causing missed matches.
+- **Short-fallback search** (≤2 chars) substring-matches slug/description
+  instead of returning empty. Query length capped at 256 chars to
+  prevent CPU DoS via huge query strings.
+- **`togglePin` no longer bumps `updatedAt`** — pinning is a UI affordance,
+  not a content edit; bumping updatedAt would re-sort the entry on
+  every pin/unpin which is surprising.
+
+### Changed
+
+- `EditorTabKind` extends with `'dashboard'`. Single global tab via
+  synthetic key `'dashboard:home'`.
+- `EntryEditor` gets `key={entry?.id ?? 'new'}` in DashboardView so the
+  form remounts on entry switch — previously the editor kept showing
+  the previous entry's fields after a row click.
+- `ChatThread` extends with `memoryInjected?: boolean` — persisted
+  one-shot flag replaces the brittle `messages.length === 2` heuristic.
+
 ## [0.18.2] — 2026-05-14
 
 Editor git diff now shows what changed, not just where — full-line tints

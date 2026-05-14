@@ -11,14 +11,41 @@
 import { randomUUID } from 'node:crypto';
 
 import { broadcast, type ProjectState } from '@main/services/ChatTranscript';
+import { proposeFromTurn } from '@main/services/MemoryService';
 import { computeToolDiffStats } from '@main/utils/diffStats';
 import { computeToolDiffPreview } from '@main/utils/diffPreview';
+import { createLogger } from '@shared/logger';
 import type {
   ChatMessage,
   ChatMessageSegment,
   ChatThread,
   TeamStep,
 } from '@shared/types';
+
+const logger = createLogger('ChatLineHandler');
+
+// Auto-capture the just-finished user/assistant pair into the memory
+// inbox. Fire-and-forget — failures must never break the chat finalize
+// path, so we swallow rejections at the boundary. Settings gating (smart
+// vs manual vs off) happens inside MemoryService.proposeFromTurn.
+function dispatchAutoCapture(
+  state: ProjectState,
+  thread: ChatThread,
+  assistantContent: string,
+): void {
+  const lastUser = [...thread.messages]
+    .reverse()
+    .find((m) => m.role === 'user');
+  if (!lastUser || !lastUser.content) return;
+  proposeFromTurn({
+    projectPath: state.projectPath,
+    threadId: thread.id,
+    userMessage: lastUser.content,
+    assistantMessage: assistantContent,
+  }).catch((err) => {
+    logger.warn(`auto-capture failed: ${(err as Error).message}`);
+  });
+}
 
 // Shape of one JSONL event emitted by `claude --output-format stream-json`.
 export interface ClaudeStreamEvent {
@@ -177,6 +204,9 @@ export function makeSoloLineHandler(
         outputTokens: e.usage.output_tokens,
         ts: Date.now(),
       });
+      // Turn complete — best-effort auto-capture into the memory inbox.
+      // No-op when MemorySettings.autoCapture !== 'smart'. Never blocks.
+      dispatchAutoCapture(state, thread, assistant.content);
     }
   };
 }
@@ -275,6 +305,11 @@ export function makeStepLineHandler(
         stepIndex,
         ts: Date.now(),
       });
+      // Team-step auto-capture: each step's output is a distinct
+      // assistant turn from the user's POV. Use the step's content as
+      // the assistant message so corrections/decisions per-step still
+      // land in the inbox. No-op when settings disable smart capture.
+      dispatchAutoCapture(state, thread, stepTarget.content);
     }
   };
 }

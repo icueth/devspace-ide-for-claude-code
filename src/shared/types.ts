@@ -325,6 +325,13 @@ export interface ChatThread {
   // events into the assistant message. Cleared when the run terminates
   // (done / error / cancelled).
   activeRun?: ChatActiveRun;
+  // v0.19: set true after the project's memory preamble has been
+  // injected into a turn on this thread. Inject is one-shot per thread
+  // (not per turn) so a user can resume a long thread without the
+  // memory file getting tacked on every send. Set explicitly rather
+  // than inferred from messages.length so retries / errors don't cause
+  // double-inject or skipped-inject edge cases.
+  memoryInjected?: boolean;
 }
 
 // Metadata describing an in-flight chat run that was spawned inside a
@@ -1041,5 +1048,166 @@ export interface CodeflowGraph {
     // ghost files.
     fingerprint: string;
   };
+}
+
+// ─── Memory system (v0.19) ─────────────────────────────────────────────────
+//
+// Persistent per-project + global memory stored under ~/.devspace/. Markdown
+// is the source of truth (open in Obsidian/VS Code); an in-memory inverted
+// index gives sub-100ms FTS across all projects. MemPalace integration is
+// opt-in sync, not a hard runtime dep — DevSpace owns its store.
+//
+// Storage layout:
+//   ~/.devspace/
+//     projects/<sha1-of-abspath>/
+//       manifest.json              {path, name, lastAccessedAt, threadCount}
+//       memory/MEMORY.md           index, like auto-memory
+//       memory/<type>_<slug>.md    individual entries
+//       threads/<thread-id>.md     thread summaries (not raw transcripts)
+//       diary/YYYY-MM-DD.md        chronological diary
+//       pinned.json                ["slug-1", "slug-2"]
+//     global/
+//       MEMORY.md + <type>_<slug>.md   user-wide memories
+//     settings.json                {autoCapture, mempalaceSync, ...}
+//
+// `id` is `<scope>/<slug>` (e.g. "project:abc123/feedback_no-mocks" or
+// "global/user_role"). slugs are kebab-case, ASCII, ≤ 80 chars.
+
+export type MemoryType = 'user' | 'feedback' | 'project' | 'reference';
+
+export type MemoryScope = 'project' | 'global';
+
+export interface MemoryEntry {
+  // Stable id of the form `<scopeKey>/<slug>` where scopeKey is `global` or
+  // `project:<projectHash>`. Used as the React key + dedupe identity.
+  id: string;
+  scope: MemoryScope;
+  // For project scope, the SHA-1 of the abspath (`crypto.createHash('sha1')`).
+  // Empty string for global.
+  projectHash: string;
+  type: MemoryType;
+  slug: string;
+  // Single-line summary from frontmatter `description:`.
+  description: string;
+  // Full markdown body (frontmatter + content). Loaded lazily by the
+  // dashboard; the index keeps a truncated preview only.
+  body?: string;
+  // Optional tags from frontmatter `tags: [a, b]`. Lowercased on parse.
+  tags: string[];
+  pinned: boolean;
+  createdAt: number;
+  updatedAt: number;
+  // Wikilinks `[[other-slug]]` discovered in body. Resolved at search time
+  // against the index — missing targets are kept as dangling strings.
+  links: string[];
+  // First 280 chars of body for preview cards.
+  preview: string;
+}
+
+export interface DiaryEntry {
+  // YYYY-MM-DD
+  date: string;
+  scope: MemoryScope;
+  projectHash: string;
+  body: string;
+  // Word count for stats.
+  wordCount: number;
+  updatedAt: number;
+}
+
+export interface ThreadSummary {
+  threadId: string;
+  projectHash: string;
+  // Human-readable title (first user message or model-derived).
+  title: string;
+  // 1-3 sentence summary of what happened in the thread.
+  summary: string;
+  // Decisions/learnings the auto-capture flagged.
+  highlights: string[];
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface MemoryProject {
+  hash: string;
+  path: string;
+  name: string;
+  lastAccessedAt: number;
+  // How many memory entries this project has (across types).
+  memoryCount: number;
+  // How many thread summaries.
+  threadCount: number;
+  // How many diary entries.
+  diaryCount: number;
+}
+
+export interface MemoryInboxItem {
+  // Stable id for dedup across capture batches. Hash of (thread+turn+content).
+  id: string;
+  // Source thread (so dashboard can deep-link).
+  threadId: string;
+  projectHash: string;
+  // Suggested type — user can change on accept.
+  suggestedType: MemoryType;
+  suggestedSlug: string;
+  suggestedDescription: string;
+  body: string;
+  // Why the auto-capture flagged this — drives the explanation chip.
+  signal: 'correction' | 'confirmation' | 'decision' | 'named-entity' | 'manual';
+  createdAt: number;
+}
+
+export interface MemorySearchHit {
+  entry: MemoryEntry;
+  // Match score (higher = better).
+  score: number;
+  // Which fields matched — drives the highlight chip in dashboard.
+  matchedFields: Array<'slug' | 'description' | 'body' | 'tags'>;
+}
+
+export interface MemoryStats {
+  totalProjects: number;
+  totalMemories: number;
+  totalThreads: number;
+  totalDiaryDays: number;
+  // Day-streak: consecutive days with at least one diary entry, ending today.
+  diaryStreak: number;
+  // Top tags by count, capped to 12.
+  topTags: Array<{ tag: string; count: number }>;
+}
+
+export interface MemorySettings {
+  // Master switch — when false, capture/recall both no-op.
+  enabled: boolean;
+  // Auto-capture mode. 'smart' = capture only when signal detected
+  // (correction/confirmation/decision/named-entity). 'manual' = only via
+  // /remember or right-click. 'off' = disabled (entries still surface via
+  // recall, just no new ones land in inbox).
+  autoCapture: 'smart' | 'manual' | 'off';
+  // Whether to auto-inject MEMORY.md into Claude system prompt on new
+  // threads. Bounded by `maxInjectLines`.
+  injectOnNewThread: boolean;
+  maxInjectLines: number;
+  // MemPalace MCP sync — opt-in. When true, memories tagged with
+  // `[mempalace]` get pushed to MemPalace via the MCP server. Pure one-way
+  // push for now (no pull-back).
+  mempalaceSyncEnabled: boolean;
+}
+
+export interface MemoryEvent {
+  kind:
+    | 'entry_created'
+    | 'entry_updated'
+    | 'entry_deleted'
+    | 'inbox_added'
+    | 'inbox_resolved'
+    | 'diary_updated'
+    | 'thread_summarized'
+    | 'index_rebuilt';
+  // The affected entry/inbox-item/thread id, when applicable.
+  targetId?: string;
+  // The scope key (`global` or `project:<hash>`) the event belongs to.
+  scopeKey?: string;
+  ts: number;
 }
 

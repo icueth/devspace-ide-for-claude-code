@@ -109,6 +109,13 @@ const SLASH_COMMANDS: SlashCommand[] = [
     argHint: '<append text>',
   },
   {
+    id: 'remember',
+    trigger: 'remember',
+    description: 'Save the rest of this line to project memory',
+    hasArgs: true,
+    argHint: '<what to save>',
+  },
+  {
     id: 'help',
     trigger: 'help',
     description: 'Show this command palette',
@@ -523,9 +530,30 @@ export function ChatPanel({ projectPath }: ChatPanelProps) {
     [activeId, projectPath, selectedTeamId, runInNewThread, teams],
   );
 
+  // executeSlash is defined later in this component (it needs to see
+  // setSettingsOpen, projectPath, etc.). We stash it in a ref so onSend
+  // can call it without creating a render-time TDZ reference. The ref
+  // is rebound each render via the useEffect below.
+  const executeSlashRef = useRef<
+    (trigger: string, args: string) => Promise<boolean>
+  >(async () => false);
+
   const onSend = useCallback(async () => {
     if (!activeId || !input.trim() || sending) return;
     const text = input.trim();
+    // Slash commands are UI-only — never bill the user a Claude turn for
+    // them. Intercept BEFORE the queue/streaming branches so /remember
+    // works even while another turn is in flight.
+    if (text.startsWith('/') && !text.includes('\n')) {
+      const parsed = parseSlashInput(text);
+      const exact =
+        parsed && SLASH_COMMANDS.find((c) => c.trigger === parsed.trigger);
+      if (exact) {
+        const clear = await executeSlashRef.current(exact.trigger, parsed!.args);
+        if (clear) setInput('');
+        return;
+      }
+    }
     // v0.16: if the assistant is mid-reply, don't refuse the submit —
     // park it in the queue and clear the textarea so the user can keep
     // typing. The auto-send effect below picks it up when streaming ends.
@@ -735,6 +763,39 @@ export function ChatPanel({ projectPath }: ChatPanelProps) {
     [extractBrief, projectPath],
   );
 
+  // Save a message (or its highlighted selection) into project memory.
+  // User messages land as `feedback` (the user told us something they
+  // want remembered); assistant messages land as `project` (factual
+  // note about the project that came out of a turn).
+  const saveMessageToMemory = useCallback(
+    async (message: ChatMessage, selection: string): Promise<void> => {
+      const text = (selection || message.content || joinProseSegments(message)).trim();
+      if (!text) {
+        setNotice('Nothing to save — empty selection.');
+        return;
+      }
+      const description = text.split('\n')[0]!.slice(0, 80);
+      const type = message.role === 'user' ? 'feedback' : 'project';
+      try {
+        const entry = await api.memory.createEntry({
+          scope: 'project',
+          projectPath,
+          type,
+          description,
+          body: text.slice(0, 8192),
+          tags: [],
+        });
+        setNotice(`Saved to memory: ${entry.slug}`);
+      } catch (err) {
+        console.error('[chat] save to memory failed', err);
+        setNotice(
+          `Save to memory failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    },
+    [projectPath],
+  );
+
   // Build the menu items snapshot for the floating menu. Memo not
   // strictly needed — this fn runs at most once per right-click — but
   // keeping it inline makes the disabled-state logic obvious.
@@ -743,6 +804,29 @@ export function ChatPanel({ projectPath }: ChatPanelProps) {
       const slugs = new Set(skillsRef.current.map((s) => s.slug));
       const brief = extractBrief(message, selection);
       const hasBrief = brief.length > 0;
+      // User-message menu is a slim subset — Design generation only
+      // makes sense for assistant prose; user messages are typically
+      // requests / corrections / feedback, which we surface as
+      // memory-save first.
+      if (message.role === 'user') {
+        return [
+          {
+            id: 'save-memory',
+            label: selection ? 'Save selection to memory' : 'Save to memory',
+            disabled: !hasBrief,
+            onSelect: () => void saveMessageToMemory(message, selection),
+          },
+          { id: 'sep-1', label: '', separator: true },
+          {
+            id: 'copy',
+            label: 'Copy text',
+            disabled: !message.content,
+            onSelect: () => {
+              if (message.content) void navigator.clipboard.writeText(message.content);
+            },
+          },
+        ];
+      }
       return [
         {
           id: 'gen-design',
@@ -768,6 +852,12 @@ export function ChatPanel({ projectPath }: ChatPanelProps) {
         },
         { id: 'sep-1', label: '', separator: true },
         {
+          id: 'save-memory',
+          label: selection ? 'Save selection to memory' : 'Save to memory',
+          disabled: !hasBrief,
+          onSelect: () => void saveMessageToMemory(message, selection),
+        },
+        {
           id: 'copy',
           label: 'Copy text',
           disabled: !message.content && !joinProseSegments(message),
@@ -778,7 +868,7 @@ export function ChatPanel({ projectPath }: ChatPanelProps) {
         },
       ];
     },
-    [extractBrief, sendToDesign],
+    [extractBrief, sendToDesign, saveMessageToMemory],
   );
 
   // Execute a parsed slash command. Returns true if the input should be
@@ -820,12 +910,45 @@ export function ChatPanel({ projectPath }: ChatPanelProps) {
           setInput('/');
           return false;
         }
+        case 'remember': {
+          // /remember <description> — save the description as a project
+          // memory entry without billing a Claude turn. Empty args =
+          // inline help notice.
+          const description = args.trim();
+          if (!description) {
+            setNotice('Usage: /remember <what to save>');
+            return true;
+          }
+          try {
+            const entry = await api.memory.createEntry({
+              scope: 'project',
+              projectPath,
+              type: 'user',
+              description,
+              body: description,
+              tags: [],
+            });
+            setNotice(`Saved to memory: ${entry.slug}`);
+          } catch (err) {
+            console.error('[chat] /remember failed', err);
+            setNotice(
+              `Save to memory failed: ${err instanceof Error ? err.message : String(err)}`,
+            );
+          }
+          return true;
+        }
         default:
           return false;
       }
     },
     [projectPath, activeId],
   );
+
+  // Keep the ref pointed at the latest executeSlash so onSend's slash
+  // intercept (defined earlier) always sees the current closure. Without
+  // this the ref'd version captures the very first render's
+  // dependencies and stops reflecting state updates.
+  executeSlashRef.current = executeSlash;
 
   return (
     <div className="flex h-full min-h-0 w-full flex-col bg-surface">
@@ -929,14 +1052,10 @@ export function ChatPanel({ projectPath }: ChatPanelProps) {
                 <MessageBubble
                   key={m.id}
                   message={m}
-                  onAssistantContextMenu={
-                    m.role === 'assistant'
-                      ? (e) => {
-                          e.preventDefault();
-                          openBubbleMenu(e.clientX, e.clientY, m);
-                        }
-                      : undefined
-                  }
+                  onBubbleContextMenu={(e) => {
+                    e.preventDefault();
+                    openBubbleMenu(e.clientX, e.clientY, m);
+                  }}
                 />
               ))}
             </div>
@@ -1222,17 +1341,19 @@ function basename(p: string): string {
 
 function MessageBubble({
   message,
-  onAssistantContextMenu,
+  onBubbleContextMenu,
 }: {
   message: ChatMessage;
-  // Right-click handler attached only to assistant bubbles. ChatPanel
+  // Right-click handler attached to both user AND assistant bubbles
+  // (v0.19+: "Save to memory" surfaces on user feedback too). ChatPanel
   // owns menu state; the bubble stays dumb and just forwards the event
-  // (with x/y + the message identity) up.
-  onAssistantContextMenu?: (e: ReactMouseEvent<HTMLDivElement>) => void;
+  // (with x/y + the message identity) up. Menu entries are filtered
+  // per-role in ChatPanel.buildMenuItems.
+  onBubbleContextMenu?: (e: ReactMouseEvent<HTMLDivElement>) => void;
 }) {
   if (message.role === 'user') {
     return (
-      <div className="flex gap-2.5">
+      <div className="flex gap-2.5" onContextMenu={onBubbleContextMenu}>
         <div className="flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-full bg-surface-4">
           <User size={12} className="text-text-muted" />
         </div>
@@ -1248,13 +1369,13 @@ function MessageBubble({
   // teamRun.steps[].
   if (message.teamRun) {
     return (
-      <div onContextMenu={onAssistantContextMenu}>
+      <div onContextMenu={onBubbleContextMenu}>
         <TeamRunBubble message={message} />
       </div>
     );
   }
   return (
-    <div className="flex gap-2.5" onContextMenu={onAssistantContextMenu}>
+    <div className="flex gap-2.5" onContextMenu={onBubbleContextMenu}>
       <div
         className="flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-full text-[10px] font-semibold text-white"
         style={{

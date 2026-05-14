@@ -24,11 +24,16 @@ import {
 import {
   type ProjectState,
   broadcast,
+  deleteThread as transcriptDeleteThread,
   getState,
   lookupState,
   persistThread,
   registerPostHydrate,
 } from '@main/services/ChatTranscript';
+import {
+  buildInjectPreamble,
+  summarizeThread as memorySummarizeThread,
+} from '@main/services/MemoryService';
 import { getTeam } from '@main/services/TeamsService';
 import {
   type ChatRunHandle,
@@ -52,13 +57,37 @@ const logger = createLogger('Chat');
 
 // Re-export thread CRUD / config-IPC surface from the storage layer so
 // the IPC registration file (main/ipc/chat.ts) imports stay stable.
+// Note: `deleteThread` is intentionally NOT re-exported as-is — we wrap
+// it below so the memory subsystem gets a chance to summarize the
+// thread before its JSON file is unlinked.
 export {
   createThread,
-  deleteThread,
   listThreads,
   subscribe,
   updateThreadConfig,
 } from '@main/services/ChatTranscript';
+
+/**
+ * Delete a chat thread, but first ask MemoryService to persist a
+ * thread summary so the Dashboard's "Threads" view keeps content
+ * even after the raw JSON is gone. The summarize call is
+ * fire-and-forget at the failure level — if it throws we log and
+ * continue with the delete (losing the thread is worse than losing
+ * its summary).
+ */
+export async function deleteThread(
+  projectPath: string,
+  threadId: string,
+): Promise<void> {
+  try {
+    await memorySummarizeThread({ projectPath, threadId });
+  } catch (err) {
+    logger.warn(
+      `memory.summarizeThread failed for ${threadId.slice(0, 8)}: ${(err as Error).message}`,
+    );
+  }
+  await transcriptDeleteThread(projectPath, threadId);
+}
 
 // Project-level default chat config — applied to every new thread unless
 // the thread itself sets a config override. One file per project so
@@ -218,7 +247,32 @@ export async function sendMessage(req: ChatSendRequest): Promise<{ messageId: st
   // reference. Highest precedence: turn override (req.config) → thread
   // override (thread.config) → project default on disk.
   const projectDefault = await getProjectConfig(s.projectPath);
-  const effective = mergeConfig(projectDefault, thread.config, req.config);
+  let effective = mergeConfig(projectDefault, thread.config, req.config);
+
+  // Memory injection: ONCE per thread, on whichever turn happens first
+  // after the thread is created — not "first turn after resume". A
+  // persisted `thread.memoryInjected` flag avoids count-based heuristics
+  // that mis-fire on hydrated/retried threads. Capped server-side by
+  // MemorySettings.maxInjectLines. Best-effort: empty preamble or
+  // failure = pass-through. SEC: the preamble is fenced as untrusted
+  // reference data by buildInjectPreamble — Claude won't treat memory
+  // content as system-prompt instructions.
+  if (!thread.memoryInjected) {
+    try {
+      const preamble = await buildInjectPreamble(s.projectPath);
+      if (preamble) {
+        const prior = effective.systemPromptAppend ?? '';
+        effective = mergeConfig(effective, {
+          systemPromptAppend:
+            `## Project memory\n\n${preamble}\n\n---\n\n${prior}`.trimEnd(),
+        });
+      }
+      thread.memoryInjected = true;
+      await persistThread(s.projectPath, thread);
+    } catch (err) {
+      logger.warn(`memory inject failed: ${(err as Error).message}`);
+    }
+  }
 
   // Resolve team (if any) and branch on its mode. Orchestrator just
   // appends a system prompt and runs the normal turn. Sequential takes

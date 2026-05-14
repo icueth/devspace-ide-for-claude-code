@@ -11,7 +11,8 @@ export type EditorTabKind =
   | 'pdf'
   | 'codeflow'
   | 'design'
-  | 'live-preview';
+  | 'live-preview'
+  | 'dashboard';
 
 export interface EditorTab {
   path: string;
@@ -103,6 +104,9 @@ interface EditorState {
   // the view (focus another tab + return).
   consumeDesignPrefill: (tabPath: string) => void;
   openLivePreview: (projectPath: string, projectName: string) => void;
+  // v0.19: opens the cross-project memory dashboard. Synthetic tab key
+  // "dashboard:home" — one global tab, not per-project.
+  openDashboard: () => void;
   close: (path: string, pane?: PaneId) => void;
   closeOthers: (path: string, pane?: PaneId) => void;
   closeToRight: (path: string, pane?: PaneId) => void;
@@ -313,6 +317,24 @@ export const useEditorStore = create<
           : t,
       ),
     }));
+  },
+
+  openDashboard() {
+    const tabPath = 'dashboard:home';
+    const existing = get().tabs.find((t) => t.path === tabPath);
+    if (existing) {
+      set({ activeTabPath: tabPath });
+      return;
+    }
+    const tab: EditorTab = {
+      path: tabPath,
+      name: 'Dashboard',
+      kind: 'dashboard',
+      content: '',
+      savedContent: '',
+      loading: false,
+    };
+    set((s) => ({ tabs: [...s.tabs, tab], activeTabPath: tabPath }));
   },
 
   openLivePreview(projectPath, projectName) {

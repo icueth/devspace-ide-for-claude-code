@@ -220,6 +220,33 @@ export const IPC = {
   CODEFLOW_AUGMENT_FUNCTIONS_LOAD: 'codeflow:augment-functions-load',
   CODEFLOW_AUGMENT_FUNCTIONS_PROGRESS: 'codeflow:augment-functions-progress',
   CODEFLOW_PROGRESS: 'codeflow:progress',
+
+  // Memory system (v0.19)
+  MEMORY_LIST_PROJECTS: 'memory:list-projects',
+  MEMORY_LIST_ENTRIES: 'memory:list-entries',
+  MEMORY_GET_ENTRY: 'memory:get-entry',
+  MEMORY_CREATE_ENTRY: 'memory:create-entry',
+  MEMORY_UPDATE_ENTRY: 'memory:update-entry',
+  MEMORY_DELETE_ENTRY: 'memory:delete-entry',
+  MEMORY_TOGGLE_PIN: 'memory:toggle-pin',
+  MEMORY_SEARCH: 'memory:search',
+  MEMORY_GET_STATS: 'memory:get-stats',
+  MEMORY_LIST_INBOX: 'memory:list-inbox',
+  MEMORY_RESOLVE_INBOX: 'memory:resolve-inbox',
+  MEMORY_DISMISS_INBOX: 'memory:dismiss-inbox',
+  MEMORY_PROPOSE_FROM_TURN: 'memory:propose-from-turn',
+  MEMORY_LIST_DIARY: 'memory:list-diary',
+  MEMORY_GET_DIARY: 'memory:get-diary',
+  MEMORY_WRITE_DIARY: 'memory:write-diary',
+  MEMORY_LIST_THREADS: 'memory:list-threads',
+  MEMORY_GET_THREAD: 'memory:get-thread',
+  MEMORY_SUMMARIZE_THREAD: 'memory:summarize-thread',
+  MEMORY_BUILD_RECALL_CONTEXT: 'memory:build-recall-context',
+  MEMORY_BUILD_INJECT_PREAMBLE: 'memory:build-inject-preamble',
+  MEMORY_GET_SETTINGS: 'memory:get-settings',
+  MEMORY_SET_SETTINGS: 'memory:set-settings',
+  MEMORY_OPEN_DIR: 'memory:open-dir',
+  MEMORY_EVENTS: 'memory:events',
 } as const;
 
 export type IpcChannel = (typeof IPC)[keyof typeof IPC];

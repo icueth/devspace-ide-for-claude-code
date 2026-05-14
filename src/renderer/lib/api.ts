@@ -41,6 +41,19 @@ import type {
   Workspace,
 } from '@shared/types';
 import type {
+  DiaryEntry,
+  MemoryEntry,
+  MemoryEvent,
+  MemoryInboxItem,
+  MemoryProject,
+  MemoryScope,
+  MemorySearchHit,
+  MemorySettings,
+  MemoryStats,
+  MemoryType,
+  ThreadSummary,
+} from '@shared/types';
+import type {
   ApprovePlanInput,
   CreateDesignInput,
   DesignAdapterDetectResult,
@@ -387,6 +400,86 @@ export interface DevspaceApi {
     onAugmentFunctionsProgress: (projectPath: string, cb: (msg: string) => void) => () => void;
     onProgress: (projectPath: string, cb: (status: CodeflowStatus) => void) => () => void;
   };
+  memory: {
+    listProjects: () => Promise<MemoryProject[]>;
+    listEntries: (input: {
+      scope: MemoryScope;
+      projectPath?: string;
+      type?: MemoryType;
+      pinnedOnly?: boolean;
+    }) => Promise<MemoryEntry[]>;
+    getEntry: (id: string) => Promise<MemoryEntry | null>;
+    createEntry: (input: {
+      scope: MemoryScope;
+      projectPath?: string;
+      type: MemoryType;
+      slug?: string;
+      description: string;
+      body: string;
+      tags?: string[];
+    }) => Promise<MemoryEntry>;
+    updateEntry: (input: {
+      id: string;
+      description?: string;
+      body?: string;
+      tags?: string[];
+    }) => Promise<MemoryEntry>;
+    deleteEntry: (id: string) => Promise<void>;
+    togglePin: (id: string) => Promise<MemoryEntry>;
+    search: (input: {
+      query: string;
+      scope?: MemoryScope;
+      projectPath?: string;
+      types?: MemoryType[];
+      tags?: string[];
+      limit?: number;
+    }) => Promise<MemorySearchHit[]>;
+    getStats: () => Promise<MemoryStats>;
+    listInbox: (projectPath?: string) => Promise<MemoryInboxItem[]>;
+    resolveInbox: (input: {
+      inboxId: string;
+      type: MemoryType;
+      slug?: string;
+      description?: string;
+      body?: string;
+    }) => Promise<MemoryEntry>;
+    dismissInbox: (inboxId: string) => Promise<void>;
+    proposeFromTurn: (input: {
+      projectPath: string;
+      threadId: string;
+      userMessage: string;
+      assistantMessage: string;
+    }) => Promise<MemoryInboxItem[]>;
+    listDiary: (input: {
+      scope: MemoryScope;
+      projectPath?: string;
+      from?: string;
+      to?: string;
+    }) => Promise<DiaryEntry[]>;
+    getDiary: (date: string, projectPath?: string) => Promise<DiaryEntry | null>;
+    writeDiary: (input: {
+      date: string;
+      scope: MemoryScope;
+      projectPath?: string;
+      body: string;
+    }) => Promise<DiaryEntry>;
+    listThreads: (projectPath: string) => Promise<ThreadSummary[]>;
+    getThread: (threadId: string) => Promise<ThreadSummary | null>;
+    summarizeThread: (input: {
+      projectPath: string;
+      threadId: string;
+    }) => Promise<ThreadSummary>;
+    buildRecallContext: (input: {
+      query: string;
+      projectPath?: string;
+      limit?: number;
+    }) => Promise<string>;
+    buildInjectPreamble: (projectPath: string) => Promise<string>;
+    getSettings: () => Promise<MemorySettings>;
+    setSettings: (patch: Partial<MemorySettings>) => Promise<MemorySettings>;
+    openDir: (scope: MemoryScope, projectPath?: string) => Promise<void>;
+    onEvent: (cb: (event: MemoryEvent) => void) => () => void;
+  };
 }
 
 declare global {
@@ -620,6 +713,48 @@ function makeStubApi(): DevspaceApi {
       onAugmentProgress: () => () => undefined,
       onAugmentFunctionsProgress: () => () => undefined,
       onProgress: () => () => undefined,
+    },
+    memory: {
+      listProjects: () => Promise.resolve([]),
+      listEntries: () => Promise.resolve([]),
+      getEntry: () => Promise.resolve(null),
+      createEntry: notWired('memory.createEntry'),
+      updateEntry: notWired('memory.updateEntry'),
+      deleteEntry: notWired('memory.deleteEntry'),
+      togglePin: notWired('memory.togglePin'),
+      search: () => Promise.resolve([]),
+      getStats: () =>
+        Promise.resolve({
+          totalProjects: 0,
+          totalMemories: 0,
+          totalThreads: 0,
+          totalDiaryDays: 0,
+          diaryStreak: 0,
+          topTags: [],
+        } satisfies MemoryStats),
+      listInbox: () => Promise.resolve([]),
+      resolveInbox: notWired('memory.resolveInbox'),
+      dismissInbox: notWired('memory.dismissInbox'),
+      proposeFromTurn: () => Promise.resolve([]),
+      listDiary: () => Promise.resolve([]),
+      getDiary: () => Promise.resolve(null),
+      writeDiary: notWired('memory.writeDiary'),
+      listThreads: () => Promise.resolve([]),
+      getThread: () => Promise.resolve(null),
+      summarizeThread: notWired('memory.summarizeThread'),
+      buildRecallContext: () => Promise.resolve(''),
+      buildInjectPreamble: () => Promise.resolve(''),
+      getSettings: () =>
+        Promise.resolve({
+          enabled: true,
+          autoCapture: 'smart',
+          injectOnNewThread: true,
+          maxInjectLines: 200,
+          mempalaceSyncEnabled: false,
+        } satisfies MemorySettings),
+      setSettings: notWired('memory.setSettings'),
+      openDir: notWired('memory.openDir'),
+      onEvent: () => () => undefined,
     },
   } as unknown as DevspaceApi;
 }

@@ -438,6 +438,61 @@ const api = {
       return () => ipcRenderer.off(IPC.CODEFLOW_PROGRESS, listener);
     },
   },
+  memory: {
+    listProjects: () => ipcRenderer.invoke(IPC.MEMORY_LIST_PROJECTS),
+    listEntries: (input: unknown) =>
+      ipcRenderer.invoke(IPC.MEMORY_LIST_ENTRIES, input),
+    getEntry: (id: string) => ipcRenderer.invoke(IPC.MEMORY_GET_ENTRY, id),
+    createEntry: (input: unknown) =>
+      ipcRenderer.invoke(IPC.MEMORY_CREATE_ENTRY, input),
+    updateEntry: (input: unknown) =>
+      ipcRenderer.invoke(IPC.MEMORY_UPDATE_ENTRY, input),
+    deleteEntry: (id: string) => ipcRenderer.invoke(IPC.MEMORY_DELETE_ENTRY, id),
+    togglePin: (id: string) => ipcRenderer.invoke(IPC.MEMORY_TOGGLE_PIN, id),
+    search: (input: unknown) => ipcRenderer.invoke(IPC.MEMORY_SEARCH, input),
+    getStats: () => ipcRenderer.invoke(IPC.MEMORY_GET_STATS),
+    listInbox: (projectPath?: string) =>
+      ipcRenderer.invoke(IPC.MEMORY_LIST_INBOX, projectPath),
+    resolveInbox: (input: unknown) =>
+      ipcRenderer.invoke(IPC.MEMORY_RESOLVE_INBOX, input),
+    dismissInbox: (inboxId: string) =>
+      ipcRenderer.invoke(IPC.MEMORY_DISMISS_INBOX, inboxId),
+    proposeFromTurn: (input: unknown) =>
+      ipcRenderer.invoke(IPC.MEMORY_PROPOSE_FROM_TURN, input),
+    listDiary: (input: unknown) =>
+      ipcRenderer.invoke(IPC.MEMORY_LIST_DIARY, input),
+    getDiary: (date: string, projectPath?: string) =>
+      ipcRenderer.invoke(IPC.MEMORY_GET_DIARY, date, projectPath),
+    writeDiary: (input: unknown) =>
+      ipcRenderer.invoke(IPC.MEMORY_WRITE_DIARY, input),
+    listThreads: (projectPath: string) =>
+      ipcRenderer.invoke(IPC.MEMORY_LIST_THREADS, projectPath),
+    getThread: (threadId: string) =>
+      ipcRenderer.invoke(IPC.MEMORY_GET_THREAD, threadId),
+    summarizeThread: (input: unknown) =>
+      ipcRenderer.invoke(IPC.MEMORY_SUMMARIZE_THREAD, input),
+    buildRecallContext: (input: unknown) =>
+      ipcRenderer.invoke(IPC.MEMORY_BUILD_RECALL_CONTEXT, input),
+    buildInjectPreamble: (projectPath: string) =>
+      ipcRenderer.invoke(IPC.MEMORY_BUILD_INJECT_PREAMBLE, projectPath),
+    getSettings: () => ipcRenderer.invoke(IPC.MEMORY_GET_SETTINGS),
+    setSettings: (patch: unknown) =>
+      ipcRenderer.invoke(IPC.MEMORY_SET_SETTINGS, patch),
+    openDir: (scope: 'project' | 'global', projectPath?: string) =>
+      ipcRenderer.invoke(IPC.MEMORY_OPEN_DIR, scope, projectPath),
+    onEvent: (
+      cb: (event: import('@shared/types').MemoryEvent) => void,
+    ) => {
+      const listener = (
+        _e: unknown,
+        ev: import('@shared/types').MemoryEvent,
+      ) => {
+        cb(ev);
+      };
+      ipcRenderer.on(IPC.MEMORY_EVENTS, listener);
+      return () => ipcRenderer.off(IPC.MEMORY_EVENTS, listener);
+    },
+  },
 };
 
 try {

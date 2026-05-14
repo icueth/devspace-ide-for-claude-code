@@ -34,6 +34,7 @@ import { registerFsIpc } from '@main/ipc/fs';
 import { registerGitIpc } from '@main/ipc/git';
 import { registerLlmIpc } from '@main/ipc/llm';
 import { registerMcpIpc } from '@main/ipc/mcp';
+import { registerMemoryIpc } from '@main/ipc/memory';
 import { registerSkillsIpc } from '@main/ipc/skills';
 import { registerStyleAdapterIpc } from '@main/ipc/styleAdapter';
 import { registerTeamsIpc } from '@main/ipc/teams';
@@ -48,6 +49,7 @@ import {
 } from '@main/services/ClaudeCliLauncher';
 import { shutdownAll as shutdownDevServers } from '@main/services/DevServerService';
 import { shutdownWatchers } from '@main/services/FileWatcherService';
+import { init as initMemory } from '@main/services/MemoryService';
 import { shutdownAll as shutdownPtyPool } from '@main/services/PtyPool';
 import { getTmuxConfigSync } from '@main/services/TmuxConfigService';
 import { resolveInteractiveShellEnv } from '@main/utils/shellEnv';
@@ -261,6 +263,15 @@ app.whenReady().then(async () => {
   registerDesignIpc();
   registerDevServerIpc();
   registerStyleAdapterIpc();
+  registerMemoryIpc();
+
+  // Warm the memory index in the background so the dashboard doesn't
+  // pay the walk cost on first open. ensureInit() is idempotent — every
+  // memory handler awaits it internally, so this is purely an early
+  // start.
+  void initMemory().catch((err) => {
+    console.error('[main] memory init failed:', (err as Error).message);
+  });
 
   await createWindow();
 
