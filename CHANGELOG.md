@@ -5,6 +5,32 @@ All notable changes to DevSpace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.16.1] — 2026-05-14
+
+Sidebar hotfix — empty workspaces are usable again.
+
+### Fixed
+
+- **Sidebar dead-end when workspace is an empty folder.** Picking an
+  empty folder (or a folder with only loose files and no `.git` /
+  runtime markers) as the workspace used to land the sidebar at
+  "No projects found in {workspace}" with no active project, which
+  meant the FileTree never rendered and the right-click "New File…"
+  context menu was unreachable. You had to create something from
+  outside the app before DevSpace would acknowledge the folder.
+  Scanner now falls back to registering the workspace itself as a
+  workspace-root project when nothing else turned up, so the FileTree
+  renders, the "Empty folder. Right-click to create a file." hint
+  appears, and the root context menu (New File / New Folder /
+  Refresh / Reveal in Finder) is reachable immediately.
+
+### Internal
+
+- `+4` regression tests covering empty folder, files-only folder,
+  workspace-with-subfolders (fallback must NOT fire), and
+  workspace-with-marker (root project surfaces normally). Total
+  vitest count: 464.
+
 ## [0.16.0] — 2026-05-14
 
 Three-pronged feature release: Live Preview gets a lot smarter about

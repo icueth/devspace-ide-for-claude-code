@@ -184,6 +184,21 @@ export async function scanWorkspace(
     logger.warn(`scan failed for ${workspacePath}:`, (err as Error).message);
   }
 
+  // Empty-workspace fallback: if scan turned up nothing (user picked an
+  // empty folder, or a folder with only files and no recognized markers),
+  // register the workspace itself as a project so the sidebar/FileTree
+  // still renders and the user can create files via right-click instead
+  // of being stuck at "No projects found".
+  if (projects.length === 0) {
+    const forced = await detectProject(workspacePath, workspaceId, {
+      forceInclude: true,
+    });
+    if (forced) {
+      forced.isWorkspaceRoot = true;
+      projects.push(forced);
+    }
+  }
+
   projects.sort((a, b) => {
     // Workspace-root project always sorts first so the sidebar can pin it.
     if (a.isWorkspaceRoot && !b.isWorkspaceRoot) return -1;
