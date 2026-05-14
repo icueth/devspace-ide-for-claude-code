@@ -402,6 +402,7 @@ export interface DevspaceApi {
   };
   memory: {
     listProjects: () => Promise<MemoryProject[]>;
+    pruneGhostProjects: () => Promise<{ prunedHashes: string[]; keptGhosts: number }>;
     listEntries: (input: {
       scope: MemoryScope;
       projectPath?: string;
@@ -716,6 +717,8 @@ function makeStubApi(): DevspaceApi {
     },
     memory: {
       listProjects: () => Promise.resolve([]),
+      pruneGhostProjects: () =>
+        Promise.resolve({ prunedHashes: [], keptGhosts: 0 }),
       listEntries: () => Promise.resolve([]),
       getEntry: () => Promise.resolve(null),
       createEntry: notWired('memory.createEntry'),

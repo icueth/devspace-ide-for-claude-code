@@ -440,6 +440,7 @@ const api = {
   },
   memory: {
     listProjects: () => ipcRenderer.invoke(IPC.MEMORY_LIST_PROJECTS),
+    pruneGhostProjects: () => ipcRenderer.invoke(IPC.MEMORY_PRUNE_GHOSTS),
     listEntries: (input: unknown) =>
       ipcRenderer.invoke(IPC.MEMORY_LIST_ENTRIES, input),
     getEntry: (id: string) => ipcRenderer.invoke(IPC.MEMORY_GET_ENTRY, id),

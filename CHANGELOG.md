@@ -5,6 +5,33 @@ All notable changes to DevSpace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.19.2] — 2026-05-14
+
+### Fixed
+
+- **Ghost projects in Dashboard.** Test fixtures from v0.19.0 development
+  leaked into `~/.devspace/projects/` and showed up in the Dashboard as
+  six unnamed entries pointing at deleted `/var/folders/.../T/memsvc-*`
+  paths. `MemoryService.loadProjects` and `refreshProjectCounts` now
+  stat the manifest's `path` on every load and stamp
+  `MemoryProject.pathExists` accordingly so the dashboard can surface
+  ghosts instead of treating them as live projects.
+
+### Added
+
+- **`pruneGhostProjects` API + Dashboard control.** New
+  `MEMORY_PRUNE_GHOSTS` IPC channel deletes project dirs whose on-disk
+  path is gone AND that hold no captured memories/threads/diary entries.
+  Ghosts with content are kept so users can still read memories captured
+  before the folder was moved. Surfaced as a `FolderX` button under
+  Memory Settings with live ghost counts and a "kept (has content)"
+  breakdown.
+- **Two-line project rows in Dashboard sidebar.** Each project now shows
+  its `name` (from manifest) on the first line and the parent directory
+  on the muted second line, with full path in the tooltip. Ghost rows
+  render at 55% opacity with an inline `missing` chip and an extended
+  tooltip noting the path is gone.
+
 ## [0.19.1] — 2026-05-14
 
 ### Added

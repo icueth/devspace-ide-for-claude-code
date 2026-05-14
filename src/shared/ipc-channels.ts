@@ -223,6 +223,7 @@ export const IPC = {
 
   // Memory system (v0.19)
   MEMORY_LIST_PROJECTS: 'memory:list-projects',
+  MEMORY_PRUNE_GHOSTS: 'memory:prune-ghosts',
   MEMORY_LIST_ENTRIES: 'memory:list-entries',
   MEMORY_GET_ENTRY: 'memory:get-entry',
   MEMORY_CREATE_ENTRY: 'memory:create-entry',

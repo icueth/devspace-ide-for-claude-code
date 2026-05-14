@@ -1139,6 +1139,12 @@ export interface MemoryProject {
   threadCount: number;
   // How many diary entries.
   diaryCount: number;
+  // False when the manifest's `path` no longer exists on disk (e.g. an
+  // earlier session worked inside a temp dir, or the user moved the
+  // project). Ghosts stay in the list so users can find leftover
+  // memories, but the dashboard renders them dimmed and routes them
+  // through `pruneGhostProjects` for deletion.
+  pathExists: boolean;
 }
 
 export interface MemoryInboxItem {
@@ -1203,7 +1209,8 @@ export interface MemoryEvent {
     | 'inbox_resolved'
     | 'diary_updated'
     | 'thread_summarized'
-    | 'index_rebuilt';
+    | 'index_rebuilt'
+    | 'project_list_changed';
   // The affected entry/inbox-item/thread id, when applicable.
   targetId?: string;
   // The scope key (`global` or `project:<hash>`) the event belongs to.

@@ -533,6 +533,10 @@ async function readManifest(hash: string): Promise<MemoryProject | null> {
       memoryCount: 0,
       threadCount: 0,
       diaryCount: 0,
+      // Filled in by loadProjects / ensureProjectHash via fs.stat — defaults
+      // to false so a manifest with no follow-up check renders as ghost
+      // (fail closed for missing-data UI).
+      pathExists: false,
     };
   } catch (err) {
     logger.warn(`manifest.json parse failed: ${(err as Error).message}`);
@@ -552,6 +556,19 @@ async function writeManifest(
     lastAccessedAt: existing?.lastAccessedAt ?? Date.now(),
   };
   await atomicWrite(manifestFile(hash), JSON.stringify(payload, null, 2));
+}
+
+// ─── ghost detection ───────────────────────────────────────────────────────
+
+// True when a project is safe to delete: its on-disk path is gone AND it
+// has no memory/thread/diary content the user might still want.
+function projectIsEmptyGhost(p: MemoryProject): boolean {
+  return (
+    !p.pathExists &&
+    p.memoryCount === 0 &&
+    p.threadCount === 0 &&
+    p.diaryCount === 0
+  );
 }
 
 async function readPinned(scope: MemoryScope, hash: string): Promise<Set<string>> {
@@ -733,9 +750,19 @@ async function loadProjects(): Promise<void> {
     const hash = d.name;
     const manifest = await readManifest(hash);
     if (!manifest) continue;
+    manifest.pathExists = await dirExists(manifest.path);
     state.projects.set(`project:${hash}`, manifest);
     await walkEntries('project', hash);
     await walkThreads(hash);
+  }
+}
+
+async function dirExists(absPath: string): Promise<boolean> {
+  try {
+    const st = await fs.promises.stat(absPath);
+    return st.isDirectory();
+  } catch {
+    return false;
   }
 }
 
@@ -775,6 +802,9 @@ async function refreshProjectCounts(): Promise<void> {
     project.memoryCount = await countDir(memoryDir('project', hash), '.md');
     project.threadCount = await countDir(threadsDir(hash), '.md');
     project.diaryCount = await countDir(diaryDir('project', hash), '.md');
+    // Refresh ghost flag on every list so users see paths that vanish
+    // mid-session (Finder move/delete) without restarting the app.
+    project.pathExists = await dirExists(project.path);
   }
 }
 
@@ -825,10 +855,14 @@ async function ensureProjectHash(absPath: string): Promise<string> {
       memoryCount: 0,
       threadCount: 0,
       diaryCount: 0,
+      pathExists: true,
     });
   } else {
     const project = state.projects.get(sk)!;
     project.lastAccessedAt = Date.now();
+    // A path being re-touched means the dir is reachable right now —
+    // mark it live so any stale ghost flag from boot-time stat clears.
+    project.pathExists = true;
     await writeManifest(hash, project.path, project.name);
   }
   return hash;
@@ -917,6 +951,44 @@ export async function listProjects(): Promise<MemoryProject[]> {
   return [...state.projects.values()].sort(
     (a, b) => b.lastAccessedAt - a.lastAccessedAt,
   );
+}
+
+// ─── public: prune empty ghosts ────────────────────────────────────────────
+
+// Deletes project dirs whose on-disk path no longer exists AND that hold
+// no user content (memories/threads/diary). Returns the hashes that were
+// pruned. Ghosts with content are left alone — users may still want to
+// look at memories they captured before moving the folder.
+export async function pruneGhostProjects(): Promise<{
+  prunedHashes: string[];
+  keptGhosts: number;
+}> {
+  await ensureInit();
+  await refreshProjectCounts();
+  const prunedHashes: string[] = [];
+  let keptGhosts = 0;
+  for (const [sk, project] of [...state.projects]) {
+    if (!sk.startsWith('project:')) continue;
+    if (project.pathExists) continue;
+    if (!projectIsEmptyGhost(project)) {
+      keptGhosts++;
+      continue;
+    }
+    try {
+      await fs.promises.rm(projectDir(project.hash), {
+        recursive: true,
+        force: true,
+      });
+      state.projects.delete(sk);
+      prunedHashes.push(project.hash);
+    } catch (err) {
+      logger.warn(`prune ghost ${project.hash} failed: ${(err as Error).message}`);
+    }
+  }
+  if (prunedHashes.length > 0) {
+    emit({ kind: 'project_list_changed', ts: Date.now() });
+  }
+  return { prunedHashes, keptGhosts };
 }
 
 // ─── public: list entries ──────────────────────────────────────────────────

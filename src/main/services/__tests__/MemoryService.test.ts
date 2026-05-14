@@ -20,8 +20,10 @@ import {
   listDiary,
   listEntries,
   listInbox,
+  listProjects,
   projectHashFor,
   proposeFromTurn,
+  pruneGhostProjects,
   resolveInbox,
   search,
   setSettings,
@@ -633,5 +635,89 @@ describe('MemoryService.listEntries', () => {
     });
     expect(pinned.every((e) => e.pinned)).toBe(true);
     expect(pinned.length).toBe(1);
+  });
+});
+
+describe('ghost projects (0.19.2 regression)', () => {
+  it('flags pathExists=false when manifest path is gone', async () => {
+    // Create a real project so a manifest exists, then yank the dir out
+    // from under it without going through any service API — this models
+    // the test-fixture leak the user hit in production.
+    await createEntry({
+      scope: 'project',
+      projectPath: projectAbs,
+      type: 'project',
+      description: 'live entry',
+      body: 'still here',
+    });
+    fs.rmSync(projectAbs, { recursive: true, force: true });
+
+    const projects = await listProjects();
+    const me = projects.find((p) => p.hash === projectHash());
+    expect(me).toBeDefined();
+    expect(me!.pathExists).toBe(false);
+    expect(me!.memoryCount).toBe(1);
+  });
+
+  it('pruneGhostProjects deletes empty ghosts and keeps ghosts with content', async () => {
+    // Ghost A: no content → should be pruned.
+    const ghostA = fs.mkdtempSync(path.join(os.tmpdir(), 'devspace-ghost-A-'));
+    await createEntry({
+      scope: 'project',
+      projectPath: ghostA,
+      type: 'project',
+      description: 'placeholder',
+      body: 'x',
+    });
+    // Remove the seed entry so the project is empty.
+    const aHash = projectHashFor(ghostA);
+    const entries = await listEntries({ scope: 'project', projectPath: ghostA });
+    for (const e of entries) await deleteEntry(e.id);
+    fs.rmSync(ghostA, { recursive: true, force: true });
+
+    // Ghost B: has content → must be kept.
+    const ghostB = fs.mkdtempSync(path.join(os.tmpdir(), 'devspace-ghost-B-'));
+    await createEntry({
+      scope: 'project',
+      projectPath: ghostB,
+      type: 'project',
+      description: 'still has content',
+      body: 'preserve me',
+    });
+    const bHash = projectHashFor(ghostB);
+    fs.rmSync(ghostB, { recursive: true, force: true });
+
+    const result = await pruneGhostProjects();
+    expect(result.prunedHashes).toContain(aHash);
+    expect(result.prunedHashes).not.toContain(bHash);
+    expect(result.keptGhosts).toBeGreaterThanOrEqual(1);
+
+    // Filesystem proof: ghost A's project dir is gone, ghost B's remains.
+    expect(fs.existsSync(path.join(tmpRoot, 'projects', aHash))).toBe(false);
+    expect(fs.existsSync(path.join(tmpRoot, 'projects', bHash))).toBe(true);
+
+    // listProjects reflects the prune.
+    const after = await listProjects();
+    expect(after.find((p) => p.hash === aHash)).toBeUndefined();
+    expect(after.find((p) => p.hash === bHash)).toBeDefined();
+  });
+
+  it('pathExists=true once a missing path is recreated', async () => {
+    // Touch the project first so listProjects has a manifest to find.
+    await createEntry({
+      scope: 'project',
+      projectPath: projectAbs,
+      type: 'project',
+      description: 'seed',
+      body: 'x',
+    });
+    // Stamp a ghost, then restore the dir before the next listProjects.
+    fs.rmSync(projectAbs, { recursive: true, force: true });
+    let projects = await listProjects();
+    expect(projects.find((p) => p.hash === projectHash())!.pathExists).toBe(false);
+
+    fs.mkdirSync(projectAbs, { recursive: true });
+    projects = await listProjects();
+    expect(projects.find((p) => p.hash === projectHash())!.pathExists).toBe(true);
   });
 });

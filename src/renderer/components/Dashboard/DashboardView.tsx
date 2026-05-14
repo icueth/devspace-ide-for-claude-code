@@ -8,6 +8,7 @@ import {
   ExternalLink,
   FileText,
   FolderOpen,
+  FolderX,
   Hash,
   Home,
   Inbox,
@@ -502,24 +503,44 @@ function DashboardSidebar({
           ) : (
             projects.slice(0, 50).map((p) => {
               const active = selectedProjectHash === p.hash;
+              const ghost = !p.pathExists;
+              // Trim the file basename off the absolute path so the
+              // secondary line shows the parent dir — much more useful
+              // than re-displaying the project name beside its own label.
+              const parentDir = p.path.replace(/\/[^/]+$/, '') || '/';
               return (
                 <button
                   key={p.hash}
                   type="button"
                   onClick={() => onSelectProject(active ? null : p.hash)}
                   className={cn(
-                    'group flex items-center justify-between rounded-[5px] px-2.5 py-1 text-[11.5px] transition',
+                    'group flex items-start justify-between gap-2 rounded-[5px] px-2.5 py-1 text-left text-[11.5px] transition',
                     active
                       ? 'bg-accent/15 text-accent'
                       : 'text-text-secondary hover:bg-surface-3 hover:text-text',
+                    ghost && !active && 'opacity-55',
                   )}
-                  title={p.path}
+                  title={
+                    ghost
+                      ? `${p.path}\n(folder missing on disk)`
+                      : p.path
+                  }
                 >
-                  <span className="flex min-w-0 items-center gap-1.5">
-                    <FolderOpen size={10} />
-                    <span className="truncate">{p.name}</span>
+                  <span className="flex min-w-0 flex-col gap-px">
+                    <span className="flex items-center gap-1.5">
+                      <FolderOpen size={10} className="shrink-0" />
+                      <span className="truncate">{p.name}</span>
+                      {ghost && (
+                        <span className="ml-1 shrink-0 rounded-sm bg-surface-3 px-1 py-px font-mono text-[9px] uppercase tracking-wider text-text-dim">
+                          missing
+                        </span>
+                      )}
+                    </span>
+                    <span className="truncate pl-3.5 font-mono text-[9.5px] text-text-dim">
+                      {parentDir}
+                    </span>
                   </span>
-                  <span className="ml-2 shrink-0 font-mono text-[9.5px] text-text-dim">
+                  <span className="mt-0.5 shrink-0 font-mono text-[9.5px] text-text-dim">
                     {p.memoryCount}
                   </span>
                 </button>
@@ -1165,6 +1186,8 @@ function SettingsView() {
         />
       </SettingRow>
 
+      <PruneGhostsRow onError={setError} />
+
       <div className="border-t border-border-subtle pt-4">
         <button
           type="button"
@@ -1329,6 +1352,92 @@ function ShortcutTile({
         <span className="truncate text-[10.5px] text-text-muted">{hint}</span>
       </div>
     </button>
+  );
+}
+
+// Counts ghosts in real time + offers a one-click prune for empty
+// ones. Ghosts with content are preserved (user may still want to read
+// memories captured before moving the folder).
+function PruneGhostsRow({ onError }: { onError: (msg: string | null) => void }) {
+  const [projects, setProjects] = useState<MemoryProject[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [lastPruned, setLastPruned] = useState<number | null>(null);
+
+  const refresh = useCallback(async () => {
+    try {
+      const list = await api.memory.listProjects();
+      setProjects(list);
+    } catch (err) {
+      console.error('[dashboard] listProjects failed', err);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  const ghosts = projects.filter((p) => !p.pathExists);
+  const emptyGhosts = ghosts.filter(
+    (p) => p.memoryCount === 0 && p.threadCount === 0 && p.diaryCount === 0,
+  );
+  const ghostsWithContent = ghosts.length - emptyGhosts.length;
+
+  const handlePrune = async () => {
+    setBusy(true);
+    onError(null);
+    try {
+      const result = await api.memory.pruneGhostProjects();
+      setLastPruned(result.prunedHashes.length);
+      await refresh();
+    } catch (err) {
+      onError((err as Error).message ?? 'Failed to prune.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="flex items-start justify-between gap-4 rounded-[8px] border border-border-subtle bg-surface-2 px-3 py-3">
+      <div className="min-w-0 flex-1">
+        <div className="text-[12px] font-medium text-text">Prune ghost projects</div>
+        <p className="mt-0.5 text-[11px] leading-relaxed text-text-muted">
+          Removes projects whose on-disk folder no longer exists AND have
+          no captured memories. Ghosts with content are kept so you can
+          still read them.
+        </p>
+        <div className="mt-1.5 flex flex-wrap items-center gap-3 text-[10.5px] text-text-dim">
+          <span>
+            <strong className="text-text-secondary">{emptyGhosts.length}</strong> empty ghost
+            {emptyGhosts.length === 1 ? '' : 's'} ready to prune
+          </span>
+          {ghostsWithContent > 0 && (
+            <span>
+              <strong className="text-text-secondary">{ghostsWithContent}</strong> ghost
+              {ghostsWithContent === 1 ? '' : 's'} kept (has content)
+            </span>
+          )}
+          {lastPruned !== null && (
+            <span className="text-semantic-success">
+              Pruned {lastPruned} {lastPruned === 1 ? 'project' : 'projects'}.
+            </span>
+          )}
+        </div>
+      </div>
+      <button
+        type="button"
+        onClick={() => void handlePrune()}
+        disabled={busy || emptyGhosts.length === 0}
+        className={cn(
+          'inline-flex shrink-0 items-center gap-1.5 rounded-[6px] border px-2.5 py-1.5 text-[11px] transition',
+          emptyGhosts.length === 0
+            ? 'cursor-not-allowed border-border-subtle bg-surface-3 text-text-dim'
+            : 'border-semantic-error/30 bg-semantic-error/10 text-semantic-error hover:bg-semantic-error/20',
+        )}
+      >
+        <FolderX size={11} />
+        {busy ? 'Pruning…' : `Prune ${emptyGhosts.length || ''}`.trim()}
+      </button>
+    </div>
   );
 }
 

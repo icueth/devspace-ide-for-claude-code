@@ -29,6 +29,7 @@ import {
   listThreads,
   openDir,
   proposeFromTurn,
+  pruneGhostProjects,
   resolveInbox,
   search,
   setSettings,
@@ -116,6 +117,11 @@ export function registerMemoryIpc(): void {
   ipcMain.handle(IPC.MEMORY_LIST_PROJECTS, (event) => {
     setupSubscriber(event);
     return listProjects();
+  });
+
+  ipcMain.handle(IPC.MEMORY_PRUNE_GHOSTS, (event) => {
+    setupSubscriber(event);
+    return pruneGhostProjects();
   });
 
   ipcMain.handle(
