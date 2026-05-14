@@ -12,6 +12,10 @@ import { useLayoutStore } from '@renderer/state/layout';
 import { usePromptStore } from '@renderer/state/prompt';
 import { useWorkspaceStore } from '@renderer/state/workspace';
 import { getFileIcon } from '@renderer/utils/fileIcons';
+import {
+  aggregateFolderChanges,
+  type FolderChangeStats,
+} from '@renderer/utils/gitFolderAggregate';
 import type { DirEntry, GitChangeType } from '@shared/types';
 
 function dirname(p: string): string {
@@ -42,6 +46,15 @@ const GIT_BADGE: Record<GitChangeType, string> = {
   conflict: '!',
 };
 
+function folderChangeTitle(stat: FolderChangeStats): string {
+  const parts: string[] = [];
+  if (stat.modified) parts.push(`${stat.modified} modified`);
+  if (stat.added) parts.push(`${stat.added} added`);
+  if (stat.deleted) parts.push(`${stat.deleted} deleted`);
+  if (stat.conflict) parts.push(`${stat.conflict} conflict`);
+  return parts.length ? parts.join(', ') : `${stat.total} change${stat.total === 1 ? '' : 's'}`;
+}
+
 interface NodeState {
   entries: DirEntry[] | null;
   loading: boolean;
@@ -70,6 +83,13 @@ export function FileTree({ rootPath, onOpenFile }: FileTreeProps) {
     gitSnapshot?.files.forEach((f) => m.set(f.absolutePath, f.type));
     return m;
   }, [gitSnapshot]);
+
+  // Folder-level rollup so an unexpanded folder still shows a dot/count
+  // for changes inside it. Recomputed only when the git snapshot changes.
+  const folderStats = useMemo(
+    () => aggregateFolderChanges(gitSnapshot?.files ?? [], rootPath),
+    [gitSnapshot, rootPath],
+  );
 
   // Build absolute paths for everything git's `ls-files --ignored --directory`
   // reported. We split into two lists: exact-match files and directory
@@ -260,6 +280,9 @@ export function FileTree({ rootPath, onOpenFile }: FileTreeProps) {
     const node = tree[entry.path];
     const expanded = node?.expanded ?? false;
     const gitType = !entry.isDirectory ? gitByPath.get(entry.path) : undefined;
+    const folderStat: FolderChangeStats | undefined = entry.isDirectory
+      ? folderStats.get(entry.path)
+      : undefined;
     const isActiveFile = !entry.isDirectory && entry.path === activeEditorPath;
     // Tracked changes (modified/added/etc.) win over the dim "ignored" state.
     // Otherwise an untracked file in an ignored directory would lose its
@@ -383,6 +406,26 @@ export function FileTree({ rootPath, onOpenFile }: FileTreeProps) {
                   }}
                 >
                   {GIT_BADGE[gitType]}
+                </span>
+              )}
+              {folderStat && (
+                <span
+                  className={cn(
+                    'relative z-[1] inline-flex items-center gap-[3px] rounded-[3px] px-[5px] py-[1px] font-mono text-[9px] font-semibold tabular-nums',
+                    GIT_CLASS[folderStat.dominant],
+                  )}
+                  style={{
+                    background: `color-mix(in srgb, currentColor 12%, transparent)`,
+                  }}
+                  title={folderChangeTitle(folderStat)}
+                  aria-label={folderChangeTitle(folderStat)}
+                >
+                  <span
+                    aria-hidden
+                    className="h-[5px] w-[5px] rounded-full"
+                    style={{ background: 'currentColor' }}
+                  />
+                  {folderStat.total}
                 </span>
               )}
             </button>

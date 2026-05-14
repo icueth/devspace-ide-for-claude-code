@@ -5,7 +5,45 @@ All notable changes to DevSpace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
-## [0.17.0] — 2026-05-14
+## [0.18.0] — 2026-05-14
+
+Git changes now visible at a glance everywhere they matter — folders in the
+sidebar carry a colored dot + count badge that rolls up every change inside
+them, and the code editor paints a per-line gutter bar (green = added,
+yellow = modified, red wedge = deleted) so you can see exactly what differs
+from HEAD without leaving the file.
+
+### Added
+
+- Sidebar folder change badges — every directory in the file tree now
+  shows a colored dot + count whenever its descendants have uncommitted
+  changes. Dot color follows the dominant change kind (conflict > deleted
+  > modified > added). Hover for a per-kind breakdown
+  (`12 modified, 3 added`).
+  - `aggregateFolderChanges()` walks each changed file up to every
+    ancestor folder under the workspace root, so collapsed folders still
+    reveal that something inside has changed.
+- CodeMirror git-diff gutter — every line that differs from the
+  committed (HEAD) version of the file gets a 3px colored marker in a
+  dedicated gutter to the left of line numbers.
+  - Green bar = added line, yellow bar = modified line, red wedge =
+    deletion happened above this line.
+  - Doc edits recompute the diff client-side via a CodeMirror state
+    field — instant feedback as you type.
+  - Baseline refreshes whenever the git store snapshot changes (commit,
+    stage, discard, external file change) so the gutter always reflects
+    the *current* HEAD.
+- 15 new vitest regression tests covering folder-aggregate priority,
+  out-of-root filtering, and LCS line diff edge cases.
+
+### Notes
+
+- Both helpers bound at 400 lines / 1 MB per side — files past the cap
+  fall back to "treat the whole new file as modified" rather than freeze
+  the LCS table, with a `truncated` flag the gutter could surface
+  visually in a future patch.
+
+
 
 Cursor-style inline unified diff inside every Edit/MultiEdit/Write/NotebookEdit
 tool card — when Claude edits a file in chat, expand the card to see the

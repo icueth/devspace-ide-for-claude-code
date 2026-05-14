@@ -35,6 +35,10 @@ import * as ContextMenu from '@radix-ui/react-context-menu';
 import { Clipboard, Copy, Scissors, Trash2 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 
+import {
+  gitDiffGutter,
+  setGitBaseline,
+} from '@renderer/components/Editor/gitDiffGutter';
 import { inlineCompletion } from '@renderer/components/Editor/inlineCompletion';
 import {
   SelectionEditDialog,
@@ -48,7 +52,9 @@ import {
 } from '@renderer/utils/codemirrorLanguages';
 import { baseEditorTheme } from '@renderer/utils/codemirrorTheme';
 import { computeCursor, useEditorViewStore } from '@renderer/state/editorView';
+import { useGitStore } from '@renderer/state/git';
 import { useLayoutStore } from '@renderer/state/layout';
+import { useWorkspaceStore } from '@renderer/state/workspace';
 
 interface CodeMirrorPaneProps {
   path: string;
@@ -228,6 +234,7 @@ export function CodeMirrorPane({
           bracketMatching(),
           closeBrackets(),
           autocompletion(),
+          gitDiffGutter(),
           // LLM-driven inline ghost-text autocomplete. The extension
           // polls the latest persisted config on every keystroke (cheap
           // — it's a synchronous lookup of the cached config the main
@@ -307,6 +314,62 @@ export function CodeMirrorPane({
       changes: { from: 0, to: view.state.doc.length, insert: value },
     });
   }, [value]);
+
+  // Resolve the project this file belongs to so we can fetch its HEAD
+  // baseline. We pick the longest-prefix-matching project path so a
+  // monorepo with nested projects attributes the file to the deepest one.
+  const activeProjectPath = useWorkspaceStore((s) => {
+    let best: string | null = null;
+    for (const p of s.projects) {
+      if (path === p.path || path.startsWith(`${p.path}/`)) {
+        if (!best || p.path.length > best.length) best = p.path;
+      }
+    }
+    return best;
+  });
+
+  // Re-fetch baseline whenever git store fingerprint changes (any commit,
+  // stage, discard, or external file change rolls the snapshot forward).
+  // Tracking `files.length + branch` is a cheap proxy — close enough; we
+  // only need correctness for "did anything tracked by git change". Doc
+  // edits themselves recompute the diff client-side via the state field.
+  const gitFingerprint = useGitStore((s) => {
+    if (!activeProjectPath) return '';
+    const project = useWorkspaceStore
+      .getState()
+      .projects.find((p) => p.path === activeProjectPath);
+    const snap = project ? s.byProject[project.id] : undefined;
+    return `${snap?.branch ?? ''}:${snap?.files.length ?? 0}`;
+  });
+
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view || !activeProjectPath) return;
+    let cancelled = false;
+    const rel = path.startsWith(`${activeProjectPath}/`)
+      ? path.slice(activeProjectPath.length + 1)
+      : null;
+    if (!rel) {
+      view.dispatch({ effects: setGitBaseline.of(null) });
+      return;
+    }
+    (async () => {
+      try {
+        const { oldContent } = await api.git.diff(activeProjectPath, rel);
+        if (cancelled) return;
+        // oldContent === '' typically means "untracked / brand-new" — in
+        // that case every line is an addition, which is exactly what
+        // computeLineDiff() yields when baseline is empty.
+        view.dispatch({ effects: setGitBaseline.of(oldContent) });
+      } catch {
+        if (cancelled) return;
+        view.dispatch({ effects: setGitBaseline.of(null) });
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [path, activeProjectPath, gitFingerprint]);
 
   // Consume pending navigation requests (Quick Open, search click, Cmd+G).
   useEffect(() => {
