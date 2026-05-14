@@ -56,6 +56,8 @@ import type {
   DesignWriteBackResult,
   DevServerEvent,
   DevServerInfo,
+  DevServerInstallInput,
+  DevServerInstallResult,
   DevServerStartInput,
   ExtractProjectTokensInput,
   PlanAppInput,
@@ -324,6 +326,16 @@ export interface DevspaceApi {
     // Symmetric tear-down. Called by the renderer on tab unmount so dead
     // tabs don't keep receiving events.
     unsubscribe: (projectPath: string) => Promise<void>;
+    // v0.16: re-run detection only. Used by the toolbar Refresh button
+    // when the user has added a config file or installed dependencies in
+    // another terminal. For a running server the detection-derived fields
+    // (kind, scriptName, candidateScripts, preflight) update in place;
+    // status / url / logTail are preserved.
+    refresh: (projectPath: string) => Promise<DevServerInfo>;
+    // v0.16: run `<pm> install` in a managed PTY. Streams `install_progress`
+    // events through the existing onEvent subscription. Resolves when the
+    // underlying PTY exits.
+    installDependencies: (input: DevServerInstallInput) => Promise<DevServerInstallResult>;
     // Streamed lifecycle + log events for a single project. Returns an
     // unsubscribe handle; calling it tears down the IPC listener.
     onEvent: (
@@ -565,6 +577,15 @@ function makeStubApi(): DevspaceApi {
         } as DevServerInfo),
       subscribe: () => Promise.resolve(),
       unsubscribe: () => Promise.resolve(),
+      refresh: () =>
+        Promise.resolve({
+          kind: 'unknown',
+          scriptName: '',
+          url: null,
+          status: 'idle',
+          logTail: [],
+        } as DevServerInfo),
+      installDependencies: notWired('devServer.installDependencies'),
       onEvent: () => () => undefined,
     },
     styleAdapter: {

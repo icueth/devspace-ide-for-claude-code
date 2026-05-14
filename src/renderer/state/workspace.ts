@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 
 import { api } from '@renderer/lib/api';
+import { useChatQueueStore } from '@renderer/state/chatQueue';
 import { useCliTabsStore } from '@renderer/state/cliTabs';
 import { useEditorStore } from '@renderer/state/editor';
 import type { Project, Workspace } from '@shared/types';
@@ -211,6 +212,21 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       cli.setActiveDockedProject(id);
     }
     evicted.forEach(killProjectPtys);
+    // v0.16.0 review-fix M4: drop chat-queue entries for evicted projects
+    // too, not just closeProject. Otherwise the queue store grows forever
+    // when a user cycles through more than MAX_OPEN projects in a session.
+    if (evicted.length > 0) {
+      const projectsById = new Map(get().projects.map((p) => [p.id, p]));
+      try {
+        const queueStore = useChatQueueStore.getState();
+        for (const evictedId of evicted) {
+          const evictedPath = projectsById.get(evictedId)?.path;
+          if (evictedPath) queueStore.clearProject(evictedPath);
+        }
+      } catch {
+        /* store may be uninitialised in some test harnesses */
+      }
+    }
     persistSnapshot(get());
   },
 
@@ -246,6 +262,17 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     // Tell main to release PTYs / dev-server / file watcher for this project.
     if (root) {
       void window.devspace?.workspace?.close?.(id, root).catch(() => undefined);
+    }
+    // v0.16: drop any in-memory chat-queue entries scoped to this project
+    // so they don't linger and surprise the user if they re-open the
+    // project later in the same session. Keyed by path (ChatPanel keys
+    // its queues by `projectPath`, not `projectId`).
+    if (root) {
+      try {
+        useChatQueueStore.getState().clearProject(root);
+      } catch {
+        /* store may be uninitialised in some test harnesses */
+      }
     }
     persistSnapshot(get());
   },

@@ -183,6 +183,16 @@ export interface ChatMessage {
     input: Record<string, unknown>;
     result?: string;
     isError?: boolean;
+    // Cursor-style additions / deletions for file-mutating tools
+    // (Edit, Write, MultiEdit, NotebookEdit). Computed in
+    // ChatLineHandler from the tool_use input; null for tools that
+    // don't touch the filesystem. `path` is project-relative when
+    // possible, absolute otherwise.
+    diffStats?: {
+      additions: number;
+      deletions: number;
+      path: string;
+    };
   }>;
   // Ordered text / tool_group segments — see ChatMessageSegment. Optional
   // so messages from v0.10.x and earlier still parse cleanly.
@@ -225,6 +235,11 @@ export interface TeamStep {
     input: Record<string, unknown>;
     result?: string;
     isError?: boolean;
+    diffStats?: {
+      additions: number;
+      deletions: number;
+      path: string;
+    };
   }>;
   // Same chronological segmentation as ChatMessage.segments — present
   // for v0.11+ runs, absent for legacy steps where the renderer falls
@@ -559,7 +574,15 @@ export interface DirEntry {
   isSymlink?: boolean;
 }
 
-export type PtySessionKind = 'claude-cli' | 'shell' | 'agent' | 'dev-server';
+export type PtySessionKind =
+  | 'claude-cli'
+  | 'shell'
+  | 'agent'
+  | 'dev-server'
+  // v0.16: `pm install` runs in a dedicated PTY so its lifetime can be
+  // tracked separately from the dev-server (an install is one-shot and
+  // exits, but its lifetime may overlap with the workspace close).
+  | 'install';
 
 export interface PtyCreateOptions {
   projectId: string;

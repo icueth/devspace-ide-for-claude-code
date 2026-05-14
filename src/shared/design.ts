@@ -717,11 +717,21 @@ export type DesignBridgeInbound =
 // element came from, even though it cannot yet WRITE to it.
 
 export type DevServerKind =
-  | 'vite'      // detected: vite in dependencies + vite.config.*
-  | 'next'      // detected: next in dependencies + next.config.*
-  | 'astro'     // detected: astro in dependencies + astro.config.*
-  | 'remix'     // detected: @remix-run/* in dependencies + remix.config.*
-  | 'unknown';  // fallback — user can still point at a manual URL
+  | 'vite'        // vite in deps + vite.config.*
+  | 'next'        // next in deps + next.config.*
+  | 'astro'       // astro in deps + astro.config.*
+  | 'remix'       // @remix-run/* in deps + remix.config.*
+  | 'sveltekit'   // @sveltejs/kit in deps + svelte.config.*
+  | 'nuxt'        // nuxt in deps + nuxt.config.*
+  | 'gatsby'      // gatsby in deps + gatsby-config.*
+  | 'angular'     // @angular/cli in deps + angular.json
+  | 'vue-cli'     // @vue/cli-service in deps + vue.config.*
+  | 'cra'         // react-scripts in deps
+  | 'storybook'   // storybook in deps + .storybook/ dir
+  | 'vitepress'   // vitepress in deps
+  | 'docusaurus'  // @docusaurus/core in deps
+  | 'static'      // serve/http-server/live-server/browser-sync — generic static
+  | 'unknown';    // fallback — user can supply manual URL or custom command
 
 export type DevServerStatus =
   | 'idle'
@@ -751,6 +761,19 @@ export interface DevServerInfo {
   ptyId?: string;
   // Set once the server emits its URL. Lets the UI compute uptime.
   startedAt?: number;
+  // Preflight check populated by detectDevServer. UI shows "Install
+  // dependencies" CTA when hasNodeModules is false — avoids the cryptic
+  // "exit code 127" that npm/pnpm produce on a fresh clone.
+  preflight?: {
+    hasNodeModules: boolean;
+    packageManager: 'pnpm' | 'yarn' | 'npm' | 'bun';
+  };
+  // Detected dev scripts the user can pick between. Surfaced as a dropdown
+  // when more than one is plausible (turbo/nx monorepo, multiple targets).
+  candidateScripts?: Array<{ name: string; body: string }>;
+  // True when the user explicitly entered a URL (manual override mode).
+  // Skips PTY spawn — webview points at user-supplied URL directly.
+  manualUrl?: boolean;
 }
 
 export interface DevServerStartInput {
@@ -764,13 +787,37 @@ export interface DevServerStartInput {
   // Optional override of the package manager. Defaults to detection
   // (pnpm-lock.yaml → pnpm, yarn.lock → yarn, else npm).
   packageManager?: 'pnpm' | 'yarn' | 'npm' | 'bun';
+  // Manual URL mode — skips PTY spawn entirely. User entered the URL of
+  // an already-running dev server. Validated against the same localhost
+  // allowlist as auto-detected URLs.
+  manualUrl?: string;
+}
+
+export interface DevServerInstallInput {
+  projectPath: string;
+  // Defaults to detection from lockfiles. Surfaced so the user can pick
+  // a different manager if detection is wrong (e.g., pnpm-lock.yaml but
+  // user wants yarn).
+  packageManager?: 'pnpm' | 'yarn' | 'npm' | 'bun';
+}
+
+export interface DevServerInstallResult {
+  ok: boolean;
+  // Captured tail of stdout/stderr if install failed.
+  errorMessage?: string;
+  // Wallclock duration in ms.
+  durationMs: number;
 }
 
 export type DevServerEventKind =
   | 'status_changed'
   | 'log'
   | 'url_resolved'
-  | 'crashed';
+  | 'crashed'
+  // Emitted while `pnpm/npm install` is running. Renderer shows a progress
+  // pill in the empty-state CTA. Payload uses `line` for log lines, `status`
+  // = 'starting' on begin, 'running' on success, 'error' on fail.
+  | 'install_progress';
 
 export interface DevServerEvent {
   kind: DevServerEventKind;

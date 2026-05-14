@@ -5,6 +5,115 @@ All notable changes to DevSpace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.16.0] — 2026-05-14
+
+Three-pronged feature release: Live Preview gets a lot smarter about
+detecting how a project actually starts, the chat panel learns Cursor's
++N / -N diff chips for every file Claude edits, and you can now keep
+typing while the assistant is mid-reply — queued messages pop into
+editable / deletable pills that auto-fire when the current turn ends.
+
+### Added — Live Preview Option B
+
+- **10 new framework detectors.** Was 4 (Vite/Next/Astro/Remix), now
+  14: SvelteKit, Nuxt, Gatsby, Angular, Vue CLI, Create React App,
+  Storybook, VitePress, Docusaurus, generic static (serve/http-server/
+  live-server/browser-sync). Each has its own dep + config-file
+  signature. Storybook is intentionally checked BEFORE Vite so a
+  storybook-over-vite project routes correctly.
+- **Preflight check for `node_modules/`.** Empty-state now shows a
+  first-class "Install with {pm}" CTA instead of letting the user hit
+  the cryptic `exit code 127` you got on a fresh clone. Uses the
+  detected package manager (pnpm → yarn → bun → npm) and streams
+  install progress with the last 8 lines visible.
+- **Manual URL mode.** If auto-detect fails or the user is already
+  running a dev server elsewhere, paste `http://localhost:NNNN` (or
+  `http://127.0.0.1:NNNN`) and Live Preview points the webview at it
+  directly — no PTY spawn. Validated against the same loopback
+  allowlist used for auto-detected URLs.
+- **Refresh button on the toolbar.** Re-runs framework / script /
+  preflight detection without touching a running PTY. Useful when
+  `package.json` changes or you just installed deps in another
+  terminal.
+- **Candidate scripts picker.** Turbo / Nx monorepos expose multiple
+  `dev:*` scripts — the empty state now shows them as a radio list
+  and remembers your choice. While the server is running you can
+  switch scripts via a toolbar dropdown (with a confirm dialog so an
+  accidental click doesn't blow away HMR state).
+- **`127.0.0.1` URL acceptance.** Backend now rewrites loopback IPs
+  to `localhost` for canonical equality, instead of rejecting them.
+  `0.0.0.0` and LAN IPs are still rejected.
+
+### Added — Chat diff stats
+
+- **Cursor-style +N / -N chips** on every `Edit`, `Write`,
+  `MultiEdit`, and `NotebookEdit` tool call. Path is project-relative
+  when the file lives inside the workspace, absolute otherwise.
+  Aggregate chip on tool-group headers when every grouped call has
+  stats (e.g. "Edited 3 files +47 -12").
+- New `src/main/utils/diffStats.ts` — pure helper, 27 unit tests.
+  Computed in ChatLineHandler at `tool_use` time so the value is
+  persisted on the transcript and survives app restart.
+
+### Added — Chat message queue
+
+- **Type while the assistant is replying.** Submit during streaming
+  now enqueues instead of disabling — your message lands in a pill
+  below the textarea, editable inline, deletable with X, drag-drop
+  reorderable. When the current turn finishes, the queue auto-drains
+  in order.
+- **Pause-on-error.** If an auto-sent turn errors or gets cancelled,
+  the queue pauses and shows a banner with Resume / Discard buttons
+  so you decide what happens next instead of getting a cascade of
+  failed sends.
+- New `src/renderer/state/chatQueue.ts` — Zustand store keyed by
+  `${projectPath}::${threadId}`. In-memory only (no persist
+  middleware) so a half-typed thought doesn't fire after restart.
+
+### Fixed
+
+- **Next.js `start` fallback bug.** When a project had no `dev`
+  script the backend used to fall back to `next start`, which needs
+  `next build` first and broke the preview. Now returns "no
+  runnable dev script" instead. Same logic for Nuxt / Gatsby /
+  SvelteKit / Docusaurus where `start` is production-only.
+- **Manual URL paths silently stripped.** Renderer validator now
+  rejects paths/queries/fragments so what the user sees in the input
+  matches what the backend will actually open. Privileged ports
+  (1-1023) are also rejected now — the error message already
+  claimed "non-privileged port" but the validator didn't enforce it.
+
+### Security
+
+- **Diff-stats DoS guard.** `countLines` and `computeToolDiffStats`
+  now bound input at 1 MB; over-cap strings drop the chip rather
+  than burn CPU on multi-megabyte hostile/buggy `tool_use` payloads.
+- **`installDependencies` race fix.** Slot claim now happens
+  synchronously before any await so a double-clicked "Install"
+  can't spawn two `pnpm install` PTYs against the same lockfile.
+- **`refreshDevServer` preserves user intent.** No longer wipes the
+  `manualUrl` flag or a user-picked `scriptName` when those are
+  still valid against the freshly-detected candidates.
+- **Chat queue auto-send error path.** If a queued send fails, the
+  message gets re-enqueued at the head and the queue pauses
+  instead of vanishing silently — preserves user intent under
+  network blips / claude-binary failures.
+- **NotebookEdit unknown `edit_mode`.** Logs a warning so future
+  Anthropic API additions don't silently mis-classify as `replace`.
+
+### Internal
+
+- `DevServerKind` union expanded from 5 to 15 values.
+- `DevServerInfo` gains optional `preflight`, `candidateScripts`,
+  `manualUrl` fields. All backwards-compatible.
+- `ChatMessage.toolCalls[]` (and `TeamStep.toolCalls[]`) gain an
+  optional `diffStats` field. Old transcripts without it render
+  fine — renderer guards via `&& call.diffStats`.
+- New IPC channels: `DEVSERVER_REFRESH`, `DEVSERVER_INSTALL`.
+- Workspace LRU eviction now calls `chatQueueStore.clearProject()`
+  for evicted projects so the queue map doesn't grow forever.
+- 460 vitest tests pass (was 364 at 0.15.1, +96 net new for v0.16).
+
 ## [0.15.1] — 2026-05-14
 
 Tiny UX patch over 0.15.0: bring file references into the main chat

@@ -1,11 +1,14 @@
 import 'highlight.js/styles/github-dark.css';
 
 import {
+  AlertTriangle,
   ArrowDown,
   Brain,
+  Check,
   CheckCircle2,
   Circle,
   CircleSlash,
+  Clock,
   FileText,
   Folder,
   Globe,
@@ -22,6 +25,7 @@ import {
   User,
   Users,
   Wrench,
+  X,
   XCircle,
 } from 'lucide-react';
 import {
@@ -33,6 +37,7 @@ import {
   useRef,
   useState,
   type MouseEvent as ReactMouseEvent,
+  type ReactNode,
 } from 'react';
 import ReactMarkdown from 'react-markdown';
 import rehypeHighlight from 'rehype-highlight';
@@ -51,6 +56,11 @@ import {
 import { api } from '@renderer/lib/api';
 import { onChatPrefill } from '@renderer/lib/chatBridge';
 import { cn } from '@renderer/lib/utils';
+import {
+  queueKey,
+  useChatQueueStore,
+  type QueuedMessage,
+} from '@renderer/state/chatQueue';
 import { useEditorStore } from '@renderer/state/editor';
 import { suggestSkillSlugs, type DesignSkill } from '@shared/design';
 import type {
@@ -106,6 +116,13 @@ const SLASH_COMMANDS: SlashCommand[] = [
 interface ChatPanelProps {
   projectPath: string;
 }
+
+// Stable empty-array reference for the queue selector. Returning a fresh
+// `[]` literal from a zustand selector would re-trigger the consumer on
+// every store change (identity mismatch); using a module-level constant
+// pins identity so consumers only re-render when there's actually queue
+// content.
+const EMPTY_QUEUE: QueuedMessage[] = [];
 
 /**
  * Beta chat surface — claude --print stream-json output rendered as
@@ -376,6 +393,49 @@ export function ChatPanel({ projectPath }: ChatPanelProps) {
     [threads, activeId],
   );
 
+  // True while the active thread has at least one assistant message in
+  // 'streaming' state. Drives the Send→Stop button swap AND the v0.16 queue
+  // mode (typing while this is true lands in the queue instead of failing
+  // the submit). Computed against current thread state — switching threads
+  // mid-stream correctly flips this for the new thread's state.
+  const isStreaming = !!activeThread?.messages.some(
+    (m) => m.status === 'streaming',
+  );
+
+  // Did the most recent turn in this thread fail or get cancelled? Used
+  // to decide whether the auto-send loop should pause the queue when
+  // streaming ends. We pause on:
+  //   • 'error'     — the model / network coughed; user should review
+  //                   what happened before more queued sends fire.
+  //   • 'cancelled' — the user explicitly hit Stop. They probably don't
+  //                   want the next queued message to immediately barge in.
+  // We check the LAST message specifically so an earlier transient
+  // error doesn't keep the queue paused forever.
+  const lastTurnFailed = useMemo(() => {
+    const msgs = activeThread?.messages;
+    if (!msgs || msgs.length === 0) return false;
+    const last = msgs[msgs.length - 1];
+    return (
+      last?.role === 'assistant' &&
+      (last.status === 'error' || last.status === 'cancelled')
+    );
+  }, [activeThread]);
+
+  // Queue key tied to (project, thread). Re-derived on every render but
+  // it's just two strings — cheap. Null when no thread is active so we
+  // don't drop queue entries against a phantom key.
+  const qKey = activeId ? queueKey(projectPath, activeId) : null;
+
+  // Subscribe to the queued items for this thread. Returns a NEW array
+  // reference whenever the queue changes (zustand handles equality), so
+  // the pill list re-renders on enqueue/remove/update.
+  const queuedItems = useChatQueueStore((s) =>
+    qKey ? s.queues[qKey] ?? EMPTY_QUEUE : EMPTY_QUEUE,
+  );
+  const queuePaused = useChatQueueStore((s) =>
+    qKey ? s.paused[qKey] ?? false : false,
+  );
+
   // Wheel/touch scroll handler — flips the stick flag based on distance
   // from bottom. 60px threshold means a small overshoot at the bottom
   // still counts as "near bottom" and keeps sticking engaged. Updates
@@ -416,43 +476,183 @@ export function ChatPanel({ projectPath }: ChatPanelProps) {
     if (el) el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
   }, []);
 
+  // Low-level send — takes the text directly, skips the input + queue
+  // checks. Used by both the user-driven onSend AND the auto-send loop
+  // that drains the queue once streaming completes.
+  //
+  // v0.16.0 review-fix: re-throws on failure so callers can decide
+  // whether to surface, pause queue, or re-enqueue. The previous version
+  // swallowed errors here → auto-send loop lost messages with no UI
+  // signal at all. Manual onSend wraps its own catch to keep UX quiet.
+  const submitText = useCallback(
+    async (text: string) => {
+      if (!activeId) return;
+      setSending(true);
+      try {
+        // If team mode + "new thread" toggle, create a fresh thread first
+        // so the run starts with empty context. Reset the toggle after
+        // use — it's per-send, not sticky.
+        let targetThreadId = activeId;
+        if (selectedTeamId && runInNewThread) {
+          const team = teams.find((t) => t.id === selectedTeamId);
+          const title = team
+            ? `[${team.name}] ${text.split('\n')[0]!.slice(0, 50)}`
+            : text.split('\n')[0]!.slice(0, 60);
+          const t = await api.chat.createThread(projectPath, title);
+          setThreads((prev) => [t, ...prev]);
+          setActiveId(t.id);
+          targetThreadId = t.id;
+          setRunInNewThread(false);
+        }
+        await api.chat.send({
+          projectId: projectPath,
+          threadId: targetThreadId,
+          text,
+          ...(selectedTeamId ? { teamId: selectedTeamId } : {}),
+        });
+        // Refresh thread list once after submit so the new user+assistant
+        // pair shows even before the first stream event arrives.
+        const next = await api.chat.listThreads(projectPath);
+        setThreads(next);
+      } finally {
+        setSending(false);
+      }
+    },
+    [activeId, projectPath, selectedTeamId, runInNewThread, teams],
+  );
+
   const onSend = useCallback(async () => {
     if (!activeId || !input.trim() || sending) return;
     const text = input.trim();
+    // v0.16: if the assistant is mid-reply, don't refuse the submit —
+    // park it in the queue and clear the textarea so the user can keep
+    // typing. The auto-send effect below picks it up when streaming ends.
+    if (isStreaming && qKey) {
+      useChatQueueStore.getState().enqueue(qKey, { text });
+      setInput('');
+      setNotice('Queued — will send when current reply finishes.');
+      return;
+    }
     setInput('');
-    setSending(true);
     try {
-      // If team mode + "new thread" toggle, create a fresh thread first
-      // so the run starts with empty context. Reset the toggle after
-      // use — it's per-send, not sticky.
-      let targetThreadId = activeId;
-      if (selectedTeamId && runInNewThread) {
-        const team = teams.find((t) => t.id === selectedTeamId);
-        const title = team
-          ? `[${team.name}] ${text.split('\n')[0]!.slice(0, 50)}`
-          : text.split('\n')[0]!.slice(0, 60);
-        const t = await api.chat.createThread(projectPath, title);
-        setThreads((prev) => [t, ...prev]);
-        setActiveId(t.id);
-        targetThreadId = t.id;
-        setRunInNewThread(false);
-      }
-      await api.chat.send({
-        projectId: projectPath,
-        threadId: targetThreadId,
-        text,
-        ...(selectedTeamId ? { teamId: selectedTeamId } : {}),
-      });
-      // Refresh thread list once after submit so the new user+assistant
-      // pair shows even before the first stream event arrives.
-      const next = await api.chat.listThreads(projectPath);
-      setThreads(next);
+      await submitText(text);
     } catch (err) {
       console.error('[chat] send failed', err);
-    } finally {
-      setSending(false);
+      // Restore the text so the user can retry without losing what they
+      // typed. We only do this for the user-driven path; auto-drain has
+      // its own re-enqueue + pause flow below.
+      setInput(text);
+      setNotice(
+        `Send failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
-  }, [activeId, input, sending, projectPath, selectedTeamId, runInNewThread, teams]);
+  }, [activeId, input, sending, isStreaming, qKey, submitText]);
+
+  // v0.16: auto-send loop. Watches `isStreaming` going true → false and
+  // drains the head of the queue (per active thread) into a fresh send.
+  //
+  // Subtleties:
+  //   • prevStreamingRef tracks the last seen value so we ONLY act on the
+  //     true→false edge, not on every render where isStreaming === false.
+  //   • drainingRef guards against React 18 StrictMode double-invoke and
+  //     against a hypothetical race where two `done` events flush before
+  //     the next render — we only initiate one drain at a time.
+  //   • Pause condition: if the last assistant turn errored, we flip the
+  //     queue into the paused state and surface a banner. No auto-send
+  //     until the user clicks Resume.
+  //   • Don't-fire-mid-typing rule: if the textarea has unsubmitted text,
+  //     skip this turn of the drain — user is mid-thought and we don't
+  //     want a queued message to barge in ahead of what they're writing.
+  //     The drain will retry next time isStreaming flips (or via the
+  //     manual "resume" button).
+  const prevStreamingRef = useRef(isStreaming);
+  const drainingRef = useRef(false);
+  useEffect(() => {
+    const prev = prevStreamingRef.current;
+    prevStreamingRef.current = isStreaming;
+    // Only react to the true → false transition.
+    if (!(prev && !isStreaming)) return;
+    if (drainingRef.current) return;
+    if (!qKey) return;
+
+    // If the turn that just finished errored OR was cancelled, lock the
+    // queue. User has to acknowledge before more messages auto-fire.
+    if (lastTurnFailed) {
+      const items = useChatQueueStore.getState().list(qKey);
+      if (items.length > 0) {
+        useChatQueueStore.getState().setPaused(qKey, true);
+      }
+      return;
+    }
+
+    // Don't barge in while the user is mid-typing.
+    if (input.trim().length > 0) return;
+
+    const head = useChatQueueStore.getState().list(qKey)[0];
+    if (!head) return;
+
+    drainingRef.current = true;
+    void (async () => {
+      let popped: QueuedMessage | undefined;
+      try {
+        // Pop AFTER we've decided to send — keeps the pill visible on
+        // screen until the moment it actually leaves. Pop-then-send order
+        // matters: if we sent first and the send threw, the pill would
+        // still be in the queue, so the next streaming transition would
+        // retry — usually wrong (the send had a side effect server-side).
+        popped = useChatQueueStore.getState().shift(qKey);
+        if (!popped) return;
+        await submitText(popped.text);
+      } catch (err) {
+        // v0.16.0 review-fix: re-enqueue at head + pause the queue so the
+        // user can decide what to do. Without this the message is gone
+        // silently — submitText used to swallow the error.
+        console.error('[chat] auto-send failed', err);
+        if (popped) {
+          useChatQueueStore.getState().unshift(qKey, popped);
+        }
+        useChatQueueStore.getState().setPaused(qKey, true);
+      } finally {
+        drainingRef.current = false;
+      }
+    })();
+  }, [isStreaming, lastTurnFailed, qKey, input, submitText]);
+
+  // Manual "resume" — clears the paused flag and lets the auto-send loop
+  // pick up next time streaming starts → ends. We trigger a drain
+  // immediately too, since we may already be idle.
+  const onResumeQueue = useCallback(() => {
+    if (!qKey) return;
+    useChatQueueStore.getState().setPaused(qKey, false);
+    if (!isStreaming && !drainingRef.current && input.trim().length === 0) {
+      const head = useChatQueueStore.getState().list(qKey)[0];
+      if (head) {
+        drainingRef.current = true;
+        void (async () => {
+          let popped: QueuedMessage | undefined;
+          try {
+            popped = useChatQueueStore.getState().shift(qKey);
+            if (!popped) return;
+            await submitText(popped.text);
+          } catch (err) {
+            console.error('[chat] resume drain failed', err);
+            if (popped) {
+              useChatQueueStore.getState().unshift(qKey, popped);
+            }
+            useChatQueueStore.getState().setPaused(qKey, true);
+          } finally {
+            drainingRef.current = false;
+          }
+        })();
+      }
+    }
+  }, [qKey, isStreaming, input, submitText]);
+
+  // Manual "discard queue" — drop everything and clear the paused flag.
+  const onDiscardQueue = useCallback(() => {
+    if (!qKey) return;
+    useChatQueueStore.getState().clear(qKey);
+  }, [qKey]);
 
   const onCancel = useCallback(() => {
     void api.chat.cancel(projectPath);
@@ -625,10 +825,6 @@ export function ChatPanel({ projectPath }: ChatPanelProps) {
     [projectPath, activeId],
   );
 
-  const isStreaming = activeThread?.messages.some(
-    (m) => m.status === 'streaming',
-  );
-
   return (
     <div className="flex h-full min-h-0 w-full flex-col bg-surface">
       <div className="flex shrink-0 items-center gap-2 border-b border-border bg-surface-2 px-3 py-2">
@@ -795,6 +991,24 @@ export function ChatPanel({ projectPath }: ChatPanelProps) {
                 });
               }
             }}
+          />
+        )}
+        {/* v0.16 queue: pending messages typed while the assistant was
+            streaming. Each pill is independently editable + deletable so
+            the user can revise queued thoughts before they auto-fire. */}
+        {qKey && queuedItems.length > 0 && (
+          <QueuePillStrip
+            items={queuedItems}
+            paused={queuePaused}
+            onUpdate={(id, text) =>
+              useChatQueueStore.getState().update(qKey, id, text)
+            }
+            onRemove={(id) => useChatQueueStore.getState().remove(qKey, id)}
+            onReorder={(from, to) =>
+              useChatQueueStore.getState().reorder(qKey, from, to)
+            }
+            onResume={onResumeQueue}
+            onDiscard={onDiscardQueue}
           />
         )}
         <div className="flex items-end gap-2">
@@ -1388,6 +1602,10 @@ function ToolGroupCard({ calls }: { calls: ChatMessage['toolCalls'] }) {
       : errorCount > 0
         ? `${errorCount} error${errorCount === 1 ? '' : 's'} of ${total}`
         : `Done · ${total}`;
+  // Only render an aggregate chip when EVERY call in the group has
+  // diffStats — otherwise the number would silently exclude untracked
+  // edits and confuse the user.
+  const aggregate = aggregateDiffStats(calls);
   const borderColor =
     errorCount > 0
       ? 'border-semantic-error/40'
@@ -1415,6 +1633,21 @@ function ToolGroupCard({ calls }: { calls: ChatMessage['toolCalls'] }) {
         {lastArg && (
           <span className="ml-2 truncate font-mono text-[10.5px] text-text-dim">
             {lastArg}
+          </span>
+        )}
+        {aggregate && (
+          <span className="inline-flex items-center gap-1 text-[10.5px]">
+            <span className="text-text-muted">·</span>
+            {aggregate.additions > 0 && (
+              <span className="font-mono text-emerald-500">
+                +{aggregate.additions}
+              </span>
+            )}
+            {aggregate.deletions > 0 && (
+              <span className="font-mono text-rose-500">
+                -{aggregate.deletions}
+              </span>
+            )}
           </span>
         )}
         {runningCount > 0 && (
@@ -1462,6 +1695,65 @@ function gerund(verb: string): string {
   }
 }
 
+// Cursor-style inline chip showing a file-relative path with green +N
+// additions / red -N deletions. Rendered inside ToolCard / ToolGroupCard
+// summary rows whenever the underlying tool call carries diffStats. Skip
+// rendering when both counts are 0 — the chip would be visually noisy
+// without communicating anything.
+type DiffStatsValue = NonNullable<
+  NonNullable<ChatMessage['toolCalls'][number]['diffStats']>
+>;
+
+function DiffStatChip({
+  stats,
+  showPath = true,
+}: {
+  stats: DiffStatsValue;
+  showPath?: boolean;
+}) {
+  if (stats.additions === 0 && stats.deletions === 0) return null;
+  return (
+    <span className="inline-flex items-center gap-1 text-[10.5px]">
+      {showPath && (
+        <span
+          className="truncate font-mono text-text-muted"
+          // direction:rtl + text-align:left truncates from the start so
+          // the filename remains visible on overflow.
+          style={{ direction: 'rtl', textAlign: 'left' }}
+          title={stats.path}
+        >
+          {stats.path}
+        </span>
+      )}
+      {stats.additions > 0 && (
+        <span className="font-mono text-emerald-500">+{stats.additions}</span>
+      )}
+      {stats.deletions > 0 && (
+        <span className="font-mono text-rose-500">-{stats.deletions}</span>
+      )}
+    </span>
+  );
+}
+
+// Sum diffStats across a group of tool calls. Returns null when ANY
+// call in the group is missing diffStats (we don't want a half-truthful
+// summary chip).
+function aggregateDiffStats(
+  calls: ChatMessage['toolCalls'],
+): { additions: number; deletions: number; fileCount: number } | null {
+  let additions = 0;
+  let deletions = 0;
+  const paths = new Set<string>();
+  for (const c of calls) {
+    if (!c.diffStats) return null;
+    additions += c.diffStats.additions;
+    deletions += c.diffStats.deletions;
+    paths.add(c.diffStats.path);
+  }
+  if (additions === 0 && deletions === 0) return null;
+  return { additions, deletions, fileCount: paths.size };
+}
+
 // One card per tool invocation. Head row: tool-specific icon + verb
 // + concise argument summary + status indicator. Expanding shows the
 // full input JSON + tool output. Matches the "per-tool family card"
@@ -1503,6 +1795,9 @@ function ToolCard({ call }: { call: ChatMessage['toolCalls'][number] }) {
           >
             {meta.summary}
           </span>
+        )}
+        {call.diffStats && (
+          <DiffStatChip stats={call.diffStats} showPath={false} />
         )}
         {running && (
           <Loader2 size={10} className="ml-auto shrink-0 animate-spin text-accent" />
@@ -1568,6 +1863,10 @@ function toolDisplay(
     case 'Write': {
       const fp = (input.file_path as string) ?? '';
       return { Icon: Plus, verb: 'Write', summary: shortPath(fp) };
+    }
+    case 'NotebookEdit': {
+      const fp = (input.notebook_path as string) ?? '';
+      return { Icon: Pencil, verb: 'Notebook', summary: shortPath(fp) };
     }
     case 'Bash': {
       const cmd = (input.command as string) ?? '';
@@ -1943,4 +2242,190 @@ function applyEvent(
   }
 
   return { ...thread, messages };
+}
+
+// v0.16 — queued-message pill strip rendered just above the textarea.
+// Each pill represents a message the user typed while a prior turn was
+// streaming. They auto-fire (head first) when the current turn finishes.
+//
+// Interactions:
+//   • Click pencil → swap to inline input, Enter saves, Esc cancels.
+//   • Click X      → drop the message from the queue.
+//   • Drag pill    → reorder (HTML5 native DnD, basic but enough for v1).
+//
+// The component is intentionally dumb / stateless wrt the queue — it
+// takes callbacks for update/remove/reorder, so ChatPanel owns the
+// projectId+threadId resolution and the store binding.
+function QueuePillStrip({
+  items,
+  paused,
+  onUpdate,
+  onRemove,
+  onReorder,
+  onResume,
+  onDiscard,
+}: {
+  items: QueuedMessage[];
+  paused: boolean;
+  onUpdate: (id: string, text: string) => void;
+  onRemove: (id: string) => void;
+  onReorder: (from: number, to: number) => void;
+  onResume: () => void;
+  onDiscard: () => void;
+}) {
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editingText, setEditingText] = useState('');
+  const [dragIndex, setDragIndex] = useState<number | null>(null);
+
+  const startEdit = (q: QueuedMessage) => {
+    setEditingId(q.id);
+    setEditingText(q.text);
+  };
+  const commitEdit = () => {
+    if (!editingId) return;
+    const t = editingText.trim();
+    if (t.length === 0) {
+      // Empty after edit = the user effectively cleared the message.
+      // Drop it rather than persisting a no-op.
+      onRemove(editingId);
+    } else {
+      onUpdate(editingId, t);
+    }
+    setEditingId(null);
+    setEditingText('');
+  };
+  const cancelEdit = () => {
+    setEditingId(null);
+    setEditingText('');
+  };
+
+  return (
+    <div className="mb-2 space-y-1.5">
+      {paused && (
+        <div
+          role="alert"
+          className="flex items-center gap-2 rounded-[7px] border border-semantic-error/40 bg-semantic-error/10 px-2.5 py-1.5 text-[11px] text-semantic-error"
+        >
+          <AlertTriangle size={12} className="shrink-0" />
+          <span className="flex-1">Queue paused — last reply didn&apos;t complete.</span>
+          <button
+            onClick={onResume}
+            className="rounded border border-semantic-error/50 px-1.5 py-0.5 text-[10.5px] hover:bg-semantic-error/15"
+          >
+            Resume
+          </button>
+          <button
+            onClick={onDiscard}
+            className="rounded px-1.5 py-0.5 text-[10.5px] text-text-muted hover:bg-surface-3 hover:text-semantic-error"
+          >
+            Discard queue
+          </button>
+        </div>
+      )}
+      <div className="flex flex-wrap gap-1.5">
+        {items.map((q, idx) => {
+          const isEditing = editingId === q.id;
+          const isDragging = dragIndex === idx;
+          return (
+            <div
+              key={q.id}
+              draggable={!isEditing}
+              onDragStart={(e) => {
+                setDragIndex(idx);
+                // Use a custom MIME so OS file drops can't pretend to be
+                // a queue reorder, and the textarea's `Files` /
+                // `application/x-devspace-path` drop handlers ignore us.
+                e.dataTransfer.setData('application/x-devspace-queue', String(idx));
+                e.dataTransfer.effectAllowed = 'move';
+              }}
+              onDragEnd={() => setDragIndex(null)}
+              onDragOver={(e) => {
+                if (e.dataTransfer.types.includes('application/x-devspace-queue')) {
+                  e.preventDefault();
+                  e.dataTransfer.dropEffect = 'move';
+                }
+              }}
+              onDrop={(e) => {
+                const raw = e.dataTransfer.getData('application/x-devspace-queue');
+                if (!raw) return;
+                e.preventDefault();
+                const from = Number(raw);
+                if (Number.isInteger(from) && from !== idx) {
+                  onReorder(from, idx);
+                }
+                setDragIndex(null);
+              }}
+              className={cn(
+                'inline-flex max-w-[60ch] items-center gap-1 rounded-full border border-border bg-surface-2 px-2 py-0.5 text-[11.5px] text-text',
+                isDragging && 'opacity-50',
+              )}
+              title={isEditing ? undefined : q.text}
+            >
+              <Clock
+                size={10}
+                className="shrink-0 text-text-dim"
+                aria-label="Queued message"
+              />
+              {isEditing ? (
+                <>
+                  <input
+                    autoFocus
+                    value={editingText}
+                    onChange={(e) => setEditingText(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        commitEdit();
+                      } else if (e.key === 'Escape') {
+                        e.preventDefault();
+                        cancelEdit();
+                      }
+                    }}
+                    className="min-w-[12ch] max-w-[50ch] flex-1 bg-transparent text-[11.5px] text-text outline-none"
+                  />
+                  <button
+                    onClick={commitEdit}
+                    title="Save"
+                    className="text-text-muted hover:text-accent"
+                  >
+                    <Check size={11} />
+                  </button>
+                  <button
+                    onClick={cancelEdit}
+                    title="Cancel"
+                    className="text-text-muted hover:text-text"
+                  >
+                    <X size={11} />
+                  </button>
+                </>
+              ) : (
+                <>
+                  <span className="truncate font-mono">{q.text}</span>
+                  <button
+                    onClick={() => startEdit(q)}
+                    title="Edit queued message"
+                    className="text-text-muted hover:text-accent"
+                  >
+                    <Pencil size={10} />
+                  </button>
+                  <button
+                    onClick={() => onRemove(q.id)}
+                    title="Remove from queue"
+                    className="text-text-muted hover:text-rose-500"
+                  >
+                    <X size={11} />
+                  </button>
+                </>
+              )}
+            </div>
+          );
+        })}
+        {items.length > 0 && !paused && (
+          <span className="self-center text-[10px] text-text-dim">
+            queued · auto-sends when current reply completes
+          </span>
+        )}
+      </div>
+    </div>
+  );
 }

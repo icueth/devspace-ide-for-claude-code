@@ -24,6 +24,7 @@
 // framework's CLI.
 
 import * as fs from 'node:fs/promises';
+import * as fsSync from 'node:fs';
 import * as path from 'node:path';
 import type { WebContents } from 'electron';
 
@@ -39,6 +40,8 @@ import type {
   DevServerEvent,
   DevServerEventKind,
   DevServerInfo,
+  DevServerInstallInput,
+  DevServerInstallResult,
   DevServerKind,
   DevServerStartInput,
   DevServerStatus,
@@ -119,20 +122,52 @@ async function hasFile(projectPath: string, candidates: string[]): Promise<boole
   return false;
 }
 
+export interface FrameworkConfigFlags {
+  viteConfig: boolean;
+  nextConfig: boolean;
+  astroConfig: boolean;
+  remixConfig: boolean;
+  sveltekitConfig: boolean;
+  nuxtConfig: boolean;
+  gatsbyConfig: boolean;
+  angularConfig: boolean;
+  vueCliConfig: boolean;
+  storybookDir: boolean;
+}
+
+// Static-serve packages — when a project has none of the above frameworks
+// but ships one of these as a dep we classify it as 'static' so the UI can
+// at least offer the "run a static server" CTA.
+const STATIC_SERVE_DEPS = ['serve', 'http-server', 'live-server', 'browser-sync'];
+
+function hasAnyKey(deps: Record<string, string>, keys: string[]): boolean {
+  for (const k of keys) if (k in deps) return true;
+  return false;
+}
+
+function hasStorybookDep(deps: Record<string, string>): boolean {
+  // Either the top-level meta package OR any @storybook/* scoped sub.
+  if ('storybook' in deps) return true;
+  for (const k of Object.keys(deps)) {
+    if (k.startsWith('@storybook/')) return true;
+  }
+  return false;
+}
+
 /**
  * Classify a project as one of the supported dev-server kinds. Pure
  * function over the parsed package.json + a "config file present"
  * predicate — split out so unit tests can exercise it without touching
  * the filesystem.
+ *
+ * Order matters: more specific kinds first. Storybook is checked before
+ * vite (Storybook 7+ uses Vite under the hood — we want the dedicated
+ * "storybook" classification to win). CRA + generic 'static' are last
+ * resorts so they never preempt a real framework.
  */
 export function detectFramework(
   pkg: ParsedPackageJson | null,
-  configFlags: {
-    viteConfig: boolean;
-    nextConfig: boolean;
-    astroConfig: boolean;
-    remixConfig: boolean;
-  },
+  configFlags: FrameworkConfigFlags,
 ): DevServerKind {
   if (!pkg) return 'unknown';
   const allDeps: Record<string, string> = {
@@ -140,8 +175,23 @@ export function detectFramework(
     ...(pkg.devDependencies ?? {}),
   };
 
+  // ── Strong dep+config matches (specific frameworks) ──
   if ('next' in allDeps && configFlags.nextConfig) return 'next';
+  if ('nuxt' in allDeps && configFlags.nuxtConfig) return 'nuxt';
+  if ('gatsby' in allDeps && configFlags.gatsbyConfig) return 'gatsby';
+  if ('@angular/core' in allDeps && configFlags.angularConfig) return 'angular';
+  if ('@sveltejs/kit' in allDeps && configFlags.sveltekitConfig) return 'sveltekit';
+  if ('@vue/cli-service' in allDeps && configFlags.vueCliConfig) return 'vue-cli';
   if ('astro' in allDeps && configFlags.astroConfig) return 'astro';
+
+  // Storybook BEFORE vite — Storybook 7+ runs on Vite, but the user wants
+  // "storybook dev" not "vite dev" in that case.
+  if (hasStorybookDep(allDeps) && configFlags.storybookDir) return 'storybook';
+
+  // Docusaurus + VitePress — doc-site generators with their own CLIs.
+  if ('@docusaurus/core' in allDeps) return 'docusaurus';
+  if ('vitepress' in allDeps) return 'vitepress';
+
   if ('vite' in allDeps && configFlags.viteConfig) return 'vite';
   if (
     '@remix-run/dev' in allDeps ||
@@ -150,19 +200,40 @@ export function detectFramework(
   ) {
     return 'remix';
   }
-  // Soft fallbacks — sometimes config files exist without an explicit
-  // top-level dependency (e.g. a monorepo where `vite` is a workspace
-  // dep). The renderer can still show the start button.
+
+  // ── CRA — react-scripts alone is sufficient (no specific config file) ──
+  if ('react-scripts' in allDeps) return 'cra';
+
+  // ── Soft fallbacks (config exists without an obvious top-level dep) ──
   if (configFlags.nextConfig && ('next' in allDeps)) return 'next';
   if (configFlags.viteConfig) return 'vite';
+
+  // ── Last resort: static-server dep ──
+  if (hasAnyKey(allDeps, STATIC_SERVE_DEPS)) return 'static';
+
   return 'unknown';
 }
+
+// Frameworks where `start` is the PRODUCTION command, not a dev server.
+// For these, falling back from `dev` → `start` would launch a script that
+// requires a prior `build` step (e.g. `next start` fails without `.next/`)
+// and leaves the Live Preview stuck. We return empty string instead so the
+// UI can surface the "no dev script" empty state.
+const PRODUCTION_START_KINDS: ReadonlySet<DevServerKind> = new Set<DevServerKind>([
+  'next',
+  'nuxt',
+  'gatsby',
+  'sveltekit',
+  'docusaurus',
+]);
 
 /**
  * Pick which package-manager script to run. Priority is:
  *   1. explicit "dev" script
- *   2. explicit "start" script
- *   3. first script whose body invokes the framework CLI
+ *   2. explicit "start" script (EXCEPT for frameworks where `start` is the
+ *      production entry — see PRODUCTION_START_KINDS above)
+ *   3. first script whose body invokes the framework CLI with a dev-ish
+ *      token
  * Returns an empty string when nothing matches.
  */
 export function pickScriptName(
@@ -171,7 +242,14 @@ export function pickScriptName(
 ): string {
   if (!scripts) return '';
   if (typeof scripts.dev === 'string' && scripts.dev.trim() !== '') return 'dev';
-  if (typeof scripts.start === 'string' && scripts.start.trim() !== '') return 'start';
+  // Production-start frameworks: do NOT fall back to `start`. `next start`
+  // / `nuxt start` / `gatsby serve` / `svelte-kit preview` / `docusaurus
+  // serve` all require a build artifact and would crash with no URL.
+  if (!PRODUCTION_START_KINDS.has(kind)) {
+    if (typeof scripts.start === 'string' && scripts.start.trim() !== '') {
+      return 'start';
+    }
+  }
 
   // Last resort — scan script bodies for the framework's CLI keyword
   // AND a dev-ish token (so we don't pick "build" scripts as dev
@@ -179,10 +257,20 @@ export function pickScriptName(
   // without ever emitting a URL and leave status stuck on 'starting').
   const keyword = frameworkKeyword(kind);
   if (!keyword) return '';
-  const DEV_TOKENS = ['dev', 'serve', 'start', 'watch'];
+  const isProductionStart = PRODUCTION_START_KINDS.has(kind);
+  // `start` is a dev token by default, but production-start frameworks
+  // need it removed — otherwise body-scanning `{ start: 'next start' }`
+  // would still return the production script even after we blocked the
+  // direct `start` fallback above.
+  const DEV_TOKENS = isProductionStart
+    ? ['dev', 'watch']
+    : ['dev', 'serve', 'start', 'watch'];
   for (const [name, body] of Object.entries(scripts)) {
     if (typeof body !== 'string') continue;
     if (!body.includes(keyword)) continue;
+    // Skip the literal `start` name for production-start kinds — we know
+    // it's the production entry point regardless of body content.
+    if (isProductionStart && name === 'start') continue;
     const lower = body.toLowerCase();
     if (DEV_TOKENS.some((t) => lower.includes(t))) return name;
     const lowerName = name.toLowerCase();
@@ -201,18 +289,95 @@ function frameworkKeyword(kind: DevServerKind): string {
       return 'astro';
     case 'remix':
       return 'remix';
+    case 'sveltekit':
+      return 'svelte';
+    case 'nuxt':
+      return 'nuxt';
+    case 'gatsby':
+      return 'gatsby';
+    case 'angular':
+      return 'ng';
+    case 'vue-cli':
+      return 'vue-cli-service';
+    case 'cra':
+      return 'react-scripts';
+    case 'storybook':
+      return 'storybook';
+    case 'vitepress':
+      return 'vitepress';
+    case 'docusaurus':
+      return 'docusaurus';
+    case 'static':
+      // generic static — match common runners
+      return 'serve';
     default:
       return '';
   }
 }
 
+// Dev-script regex used for `candidateScripts` discovery in
+// `detectDevServer`. Same DEV_TOKENS set as `pickScriptName`'s
+// fallback path so the two stay consistent.
+const DEV_TOKEN_RE = /\b(dev|serve|start|watch)\b/i;
+// Keywords that disqualify a script as a dev server even if its name
+// happens to match dev/serve/start (e.g. "start-storybook" is fine, but
+// "build", "test", "lint", "format", "preview" — most preview commands
+// are production-only — should not show up in the dropdown).
+const NON_DEV_TOKEN_RE = /\b(build|test|lint|format|prettier|typecheck|tsc|eslint|jest|vitest|playwright|cypress|deploy|release|publish)\b/i;
+const CANDIDATE_SCRIPTS_CAP = 8;
+
+/** Extracted helper for the unit test. */
+export function pickCandidateScripts(
+  scripts: Record<string, string> | undefined,
+): Array<{ name: string; body: string }> {
+  if (!scripts) return [];
+  const out: Array<{ name: string; body: string }> = [];
+  for (const [name, body] of Object.entries(scripts)) {
+    if (typeof body !== 'string') continue;
+    if (NON_DEV_TOKEN_RE.test(name) || NON_DEV_TOKEN_RE.test(body)) continue;
+    if (!DEV_TOKEN_RE.test(name) && !DEV_TOKEN_RE.test(body)) continue;
+    out.push({ name, body });
+    if (out.length >= CANDIDATE_SCRIPTS_CAP) break;
+  }
+  return out;
+}
+
+/** Best-effort preflight: does node_modules/ exist at the project root? */
+export function hasNodeModulesSync(projectPath: string): boolean {
+  // `lstatSync` so we don't follow symlinks blindly — pnpm uses a content
+  // store, but pnpm's workspace `node_modules/` is still a real directory
+  // (or a directory-symlink) at the project root. Either way `lstat`
+  // succeeds if the entry exists at all. We don't care if it's a dir or
+  // a symlink — the install command would have created exactly one of
+  // those, so existence is the signal.
+  try {
+    fsSync.lstatSync(path.join(projectPath, 'node_modules'));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Top-level detection — combines package.json + config-file checks and
- * picks a script name.
+ * picks a script name. Also computes preflight info (node_modules
+ * presence + detected package manager) and a list of candidate dev
+ * scripts the UI can offer in a dropdown for monorepos.
  */
 export async function detectDevServer(projectPath: string): Promise<DevServerInfo> {
   const pkg = await readPackageJson(projectPath);
-  const [viteConfig, nextConfig, astroConfig, remixConfig] = await Promise.all([
+  const [
+    viteConfig,
+    nextConfig,
+    astroConfig,
+    remixConfig,
+    sveltekitConfig,
+    nuxtConfig,
+    gatsbyConfig,
+    angularConfig,
+    vueCliConfig,
+    storybookDir,
+  ] = await Promise.all([
     hasFile(projectPath, [
       'vite.config.ts',
       'vite.config.js',
@@ -234,20 +399,54 @@ export async function detectDevServer(projectPath: string): Promise<DevServerInf
       'remix.config.js',
       'remix.config.mjs',
     ]),
+    hasFile(projectPath, [
+      'svelte.config.js',
+      'svelte.config.ts',
+      'svelte.config.mjs',
+    ]),
+    hasFile(projectPath, [
+      'nuxt.config.ts',
+      'nuxt.config.js',
+      'nuxt.config.mjs',
+    ]),
+    hasFile(projectPath, [
+      'gatsby-config.ts',
+      'gatsby-config.js',
+      'gatsby-config.mjs',
+    ]),
+    hasFile(projectPath, ['angular.json']),
+    hasFile(projectPath, [
+      'vue.config.ts',
+      'vue.config.js',
+      'vue.config.mjs',
+    ]),
+    // .storybook is a directory — `fs.access` works on dirs too.
+    hasFile(projectPath, ['.storybook']),
   ]);
   const kind = detectFramework(pkg, {
     viteConfig,
     nextConfig,
     astroConfig,
     remixConfig,
+    sveltekitConfig,
+    nuxtConfig,
+    gatsbyConfig,
+    angularConfig,
+    vueCliConfig,
+    storybookDir,
   });
   const scriptName = pickScriptName(pkg?.scripts, kind);
+  const candidateScripts = pickCandidateScripts(pkg?.scripts);
+  const packageManager = await detectPackageManager(projectPath);
+  const hasNodeModules = hasNodeModulesSync(projectPath);
   return {
     kind,
     scriptName,
     url: null,
     status: 'idle',
     logTail: [],
+    preflight: { hasNodeModules, packageManager },
+    candidateScripts: candidateScripts.length > 0 ? candidateScripts : undefined,
   };
 }
 
@@ -261,14 +460,15 @@ const URL_FINDER_RE = /\bhttps?:\/\/[^\s,;"'<>()`]+/gi;
 const NEXT_STARTED_RE = /started server on[^\n]*url:\s*(https?:\/\/\S+)/i;
 
 /**
- * Try to parse a URL and accept it only if it points at localhost on a
- * non-privileged port with no userinfo. Returns the normalized origin
- * (no trailing slash) or null.
+ * Try to parse a URL and accept it only if it points at the loopback
+ * interface (localhost OR 127.0.0.1) on a non-privileged port with no
+ * userinfo. Returns the normalized origin with the hostname rewritten to
+ * "localhost" so downstream renderer code can do a single string compare.
  *
- * Rejects: non-http(s), non-localhost hostnames, port 0, port < 1024,
- * port > 65535, userinfo (user:pass@), paths/queries/fragments (we
- * navigate to the bare origin so attacker-controlled paths can't
- * influence the first request).
+ * Rejects: non-http(s), 0.0.0.0, any non-loopback IPv4/IPv6, port 0,
+ * port > 65535, userinfo (user:pass@), and paths/queries/fragments —
+ * we navigate to the bare origin so attacker-controlled paths can't
+ * influence the first webview request.
  */
 function tryParseLocalUrl(candidate: string): string | null {
   let u: URL;
@@ -279,11 +479,18 @@ function tryParseLocalUrl(candidate: string): string | null {
   }
   if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
   const host = u.hostname.toLowerCase();
-  if (host !== 'localhost') return null;
+  // Accept both literal "localhost" and the IPv4 loopback. We deliberately
+  // do NOT accept ::1 (IPv6 loopback) — Chromium's <webview> mounts the
+  // hostname verbatim, and some users have IPv6 disabled on the loopback
+  // interface, so accepting ::1 would silently break those installs.
+  const isLoopback = host === 'localhost' || host === '127.0.0.1';
+  if (!isLoopback) return null;
   if (u.username || u.password) return null;
   const port = Number(u.port);
   if (!Number.isInteger(port) || port < 1 || port > 65535) return null;
-  return `${u.protocol}//${u.hostname}:${u.port}`;
+  // Rewrite to "localhost" so the rest of the app sees a single canonical
+  // form (so equality checks and cache keys stay stable).
+  return `${u.protocol}//localhost:${u.port}`;
 }
 
 /**
@@ -340,6 +547,11 @@ interface ProjectState {
 }
 
 const states = new Map<string, ProjectState>();
+
+// Track in-flight `pm install` PTYs separately from the dev-server map —
+// we need to kill them on workspace close / app quit, but they aren't
+// part of the DevServerInfo lifecycle the renderer subscribes to.
+const installSessions = new Map<string, { ptyKey: string; detach: Array<() => void> }>();
 
 function getState(projectPath: string): ProjectState {
   const key = path.resolve(projectPath);
@@ -465,6 +677,16 @@ const ALLOWED_KINDS = new Set<DevServerKind>([
   'next',
   'astro',
   'remix',
+  'sveltekit',
+  'nuxt',
+  'gatsby',
+  'angular',
+  'vue-cli',
+  'cra',
+  'storybook',
+  'vitepress',
+  'docusaurus',
+  'static',
   'unknown',
 ]);
 
@@ -505,6 +727,56 @@ export async function startDevServer(input: DevServerStartInput): Promise<DevSer
   }
   if (state.info.status === 'starting') {
     throw new Error('dev server is already starting for this project');
+  }
+
+  // ── Manual URL mode: user supplied a URL of an already-running server. ──
+  // Skip PTY spawn entirely. Validate against the SAME loopback allowlist
+  // as the auto-detected URLs so a misbehaving renderer can't point the
+  // webview at a LAN address or external host.
+  if (typeof input.manualUrl === 'string' && input.manualUrl !== '') {
+    const accepted = tryParseLocalUrl(input.manualUrl);
+    if (!accepted) {
+      state.info = {
+        ...state.info,
+        status: 'error',
+        errorMessage:
+          'manual URL must be a localhost or 127.0.0.1 origin (no path, no LAN IP)',
+      };
+      emit(state, 'status_changed', {
+        status: 'error',
+        message: state.info.errorMessage,
+      });
+      return cloneInfo(state.info);
+    }
+    // Refresh detection so kind / preflight are populated for the UI.
+    const detected = await detectDevServer(state.projectPath);
+    state.info = {
+      ...state.info,
+      kind: detected.kind,
+      scriptName: detected.scriptName,
+      preflight: detected.preflight,
+      candidateScripts: detected.candidateScripts,
+      url: accepted,
+      status: 'running',
+      manualUrl: true,
+      errorMessage: undefined,
+      startedAt: Date.now(),
+      logTail: [],
+      ptyId: undefined,
+    };
+    state.ptyKey = null;
+    state.lineBuffer = '';
+    state.urlEmitted = true; // suppress the 30s fallback timer logic
+    if (state.startTimer) {
+      clearTimeout(state.startTimer);
+      state.startTimer = undefined;
+    }
+    emit(state, 'status_changed', {
+      status: 'running',
+      url: accepted,
+    });
+    emit(state, 'url_resolved', { url: accepted, status: 'running' });
+    return cloneInfo(state.info);
   }
 
   // Refresh detection so script/kind defaults reflect the latest disk
@@ -552,7 +824,9 @@ export async function startDevServer(input: DevServerStartInput): Promise<DevSer
     input.packageManager ?? (await detectPackageManager(state.projectPath));
   const args = packageManagerRunArgs(packageManager, scriptName);
 
-  // Reset transient run state.
+  // Reset transient run state. `manualUrl` is explicitly cleared — a
+  // PTY spawn is the opposite of manual mode, even if the previous run
+  // for this project was manual.
   state.info = {
     kind,
     scriptName,
@@ -560,6 +834,9 @@ export async function startDevServer(input: DevServerStartInput): Promise<DevSer
     status: 'starting',
     logTail: [],
     startedAt: Date.now(),
+    manualUrl: false,
+    preflight: state.info.preflight,
+    candidateScripts: state.info.candidateScripts,
   };
   state.lineBuffer = '';
   state.urlEmitted = false;
@@ -721,9 +998,24 @@ function handlePtyExit(state: ProjectState, exitCode: number): void {
  * Kill the dev-server PTY for a project. Idempotent — safe to call on a
  * stopped or never-started project. Transitions status to 'stopped' so
  * the eventual onExit callback doesn't fire a spurious crash event.
+ *
+ * Manual-URL mode has no PTY to kill; in that case we just clear state
+ * and emit a 'stopped' transition so the UI can collapse the webview.
  */
 export async function stopDevServer(projectPath: string): Promise<DevServerInfo> {
   const state = getState(projectPath);
+  // Manual URL: just clear state — there's no PTY to terminate.
+  if (state.info.manualUrl) {
+    state.info = {
+      ...state.info,
+      status: 'stopped',
+      url: null,
+      manualUrl: false,
+      errorMessage: undefined,
+    };
+    emit(state, 'status_changed', { status: 'stopped', url: null });
+    return cloneInfo(state.info);
+  }
   if (!state.ptyKey) {
     // Nothing to kill — flip to idle if we somehow ended up half-started.
     if (state.info.status !== 'idle' && state.info.status !== 'error') {
@@ -762,6 +1054,222 @@ export async function stopDevServer(projectPath: string): Promise<DevServerInfo>
   }
 
   return cloneInfo(state.info);
+}
+
+/**
+ * Re-run detection only — does NOT touch a running PTY. Used by the
+ * toolbar "Refresh" button when the user has added a config file or
+ * installed dependencies in another terminal and wants the UI to catch
+ * up without restarting the server.
+ *
+ * For a running/starting server we update detection-derived fields only
+ * (kind, scriptName, candidateScripts, preflight). Status, url, ptyId,
+ * logTail are all preserved so the live state survives the refresh.
+ */
+export async function refreshDevServer(projectPath: string): Promise<DevServerInfo> {
+  if (typeof projectPath !== 'string' || !path.isAbsolute(projectPath)) {
+    throw new Error('refreshDevServer requires an absolute projectPath');
+  }
+  if (projectPath.split(/[\\/]/).some((seg) => seg === '..')) {
+    throw new Error('projectPath must not contain ..');
+  }
+  const state = getState(projectPath);
+  const detected = await detectDevServer(state.projectPath);
+  if (state.info.status === 'running' || state.info.status === 'starting') {
+    // Preserve live fields. Only update what detection produces.
+    state.info = {
+      ...state.info,
+      kind: detected.kind,
+      // Don't clobber a running scriptName — the user may have manually
+      // picked a script and we shouldn't second-guess that.
+      scriptName: state.info.scriptName || detected.scriptName,
+      candidateScripts: detected.candidateScripts,
+      preflight: detected.preflight,
+    };
+  } else {
+    // Idle/stopped/error — merge fresh detection in, but preserve user
+    // intent that detection can't reproduce: previous logTail (so the
+    // failure that led them to refresh is still visible), the manualUrl
+    // flag (user explicitly pasted a URL — that doesn't get unset by a
+    // detection run), and the user-picked scriptName when it differs
+    // from what detection would suggest. v0.16.0 review-fix.
+    const preservedScript =
+      state.info.scriptName &&
+      state.info.scriptName !== detected.scriptName &&
+      !!detected.candidateScripts?.some((c) => c.name === state.info.scriptName);
+    state.info = {
+      ...detected,
+      logTail: state.info.logTail,
+      errorMessage: state.info.status === 'error' ? state.info.errorMessage : undefined,
+      status: state.info.status === 'error' ? 'error' : detected.status,
+      // Preserve user-picked script only when it's still valid (exists in
+      // the fresh candidateScripts list). If they renamed it in
+      // package.json since last pick, fall through to detected default.
+      scriptName: preservedScript ? state.info.scriptName : detected.scriptName,
+      // Preserve manualUrl flag — detection has no way to express it.
+      ...(state.info.manualUrl ? { manualUrl: state.info.manualUrl } : {}),
+    };
+  }
+  emit(state, 'status_changed', {
+    status: state.info.status,
+    url: state.info.url,
+    message: state.info.errorMessage,
+  });
+  return cloneInfo(state.info);
+}
+
+/**
+ * Run `<pm> install` in a managed PTY. Used by the "Install dependencies"
+ * CTA in the Live Preview empty state when the preflight check finds no
+ * `node_modules/`. Streams `install_progress` events with each line of
+ * output so the UI can show a progress pill, and resolves once the
+ * underlying PTY exits.
+ *
+ * Validation: `projectPath` must be absolute and free of `..` segments.
+ * `packageManager` (when supplied) must be in the allowlist. Resolves
+ * with `{ ok: false, errorMessage }` on non-zero exit instead of
+ * throwing — the renderer should surface the message, not blow up.
+ */
+export async function installDependencies(
+  input: DevServerInstallInput,
+): Promise<DevServerInstallResult> {
+  if (!input || typeof input !== 'object') {
+    throw new Error('installDependencies requires an input object');
+  }
+  const { projectPath } = input;
+  if (typeof projectPath !== 'string' || !path.isAbsolute(projectPath)) {
+    throw new Error('installDependencies requires an absolute projectPath');
+  }
+  if (projectPath.split(/[\\/]/).some((seg) => seg === '..')) {
+    throw new Error('projectPath must not contain ..');
+  }
+  // Normalize + verify it exists. We don't want to spawn `pm install` in
+  // a directory the user no longer has — pm tools would happily create a
+  // package.json in an empty parent and clutter the filesystem.
+  const resolved = path.resolve(projectPath);
+  try {
+    const st = fsSync.lstatSync(resolved);
+    if (!st.isDirectory() && !st.isSymbolicLink()) {
+      throw new Error(`projectPath is not a directory: ${resolved}`);
+    }
+  } catch (err) {
+    throw new Error(`projectPath does not exist: ${resolved} (${(err as Error).message})`);
+  }
+  if (input.packageManager !== undefined) {
+    if (
+      typeof input.packageManager !== 'string' ||
+      !ALLOWED_PACKAGE_MANAGERS.has(input.packageManager)
+    ) {
+      throw new Error('invalid packageManager');
+    }
+  }
+  // Reject parallel installs for the same project — pm tools serialize
+  // poorly on the same lockfile and the second invocation would clobber
+  // node_modules mid-extract. v0.16.0 review-fix: claim the slot
+  // SYNCHRONOUSLY before any await so two concurrent calls (e.g. a
+  // double-clicked Install button) can't both pass the `.has()` check.
+  if (installSessions.has(resolved)) {
+    throw new Error('install already in progress for this project');
+  }
+  installSessions.set(resolved, { ptyKey: '__pending__', detach: [] });
+
+  let packageManager: 'pnpm' | 'yarn' | 'npm' | 'bun';
+  let state: ProjectState;
+  let session: Awaited<ReturnType<typeof createPty>>;
+  const startedAt = Date.now();
+
+  try {
+    packageManager = input.packageManager ?? (await detectPackageManager(resolved));
+    state = getState(resolved);
+    emit(state, 'install_progress', { status: 'starting' });
+
+    session = await createPty({
+      projectId: resolved,
+      // 'install' kind keeps it separate from the dev-server PTY so the
+      // pool key collision logic doesn't conflate the two.
+      kind: 'install',
+      // tabId disambiguates from the dev-server tabId which is `resolved`
+      // alone. Using a `#install` suffix means the PtyPool key is unique.
+      tabId: `${resolved}#install`,
+      cwd: resolved,
+      command: packageManager,
+      args: ['install'],
+      cols: 120,
+      rows: 32,
+    });
+  } catch (err) {
+    installSessions.delete(resolved);
+    const message = `failed to spawn install: ${(err as Error).message}`;
+    try {
+      emit(getState(resolved), 'install_progress', { status: 'error', message });
+    } catch {
+      /* state might not exist yet; nothing to emit to */
+    }
+    return {
+      ok: false,
+      errorMessage: message,
+      durationMs: Date.now() - startedAt,
+    };
+  }
+
+  const tailLines: string[] = [];
+  const TAIL_MAX = 40;
+  let lineBuffer = '';
+
+  return new Promise<DevServerInstallResult>((resolve) => {
+    const detachData = subscribeData(session.sessionId, (chunk) => {
+      const combined = lineBuffer + chunk;
+      const parts = combined.split(/\r?\n/);
+      lineBuffer = parts.pop() ?? '';
+      for (const raw of parts) {
+        if (!raw) continue;
+        const clean = stripAnsi(raw).replace(/\r$/, '');
+        if (!clean) continue;
+        tailLines.push(clean);
+        if (tailLines.length > TAIL_MAX) tailLines.shift();
+        emit(state, 'install_progress', { status: 'running', line: clean });
+      }
+    });
+    const detachExit = subscribeExit(session.sessionId, (code) => {
+      try {
+        detachData();
+      } catch {
+        /* ignore */
+      }
+      installSessions.delete(resolved);
+      const ok = code === 0;
+      const durationMs = Date.now() - startedAt;
+      if (ok) {
+        emit(state, 'install_progress', { status: 'running', message: 'install complete' });
+        // Recompute preflight so the UI immediately reflects the fresh
+        // node_modules/ without an explicit refresh call.
+        state.info = {
+          ...state.info,
+          preflight: {
+            hasNodeModules: hasNodeModulesSync(resolved),
+            packageManager,
+          },
+        };
+        emit(state, 'status_changed', {
+          status: state.info.status,
+          url: state.info.url,
+          message: state.info.errorMessage,
+        });
+        resolve({ ok: true, durationMs });
+      } else {
+        const errorMessage =
+          tailLines.length > 0
+            ? `${packageManager} install failed (code ${code}):\n${tailLines.join('\n')}`
+            : `${packageManager} install failed (code ${code})`;
+        emit(state, 'install_progress', { status: 'error', message: errorMessage });
+        resolve({ ok: false, errorMessage, durationMs });
+      }
+    });
+    installSessions.set(resolved, {
+      ptyKey: session.sessionId,
+      detach: [detachData, detachExit],
+    });
+  });
 }
 
 /**
@@ -838,10 +1346,53 @@ function ensureDestroyHook(wc: WebContents): void {
 }
 
 /**
+ * Kill every dev-server + install PTY for a single project. Used when a
+ * workspace is closed — we don't want stale `pm install` or `vite dev`
+ * processes outliving the workspace that owns them.
+ */
+export async function shutdownProject(projectPath: string): Promise<void> {
+  if (typeof projectPath !== 'string') return;
+  const resolved = path.resolve(projectPath);
+  const kills: Array<Promise<void>> = [];
+  const state = states.get(resolved);
+  if (state && state.ptyKey) {
+    const key = state.ptyKey;
+    state.info = { ...state.info, status: 'stopped', url: null, ptyId: undefined };
+    state.ptyKey = null;
+    if (state.startTimer) {
+      clearTimeout(state.startTimer);
+      state.startTimer = undefined;
+    }
+    for (const off of state.detach) {
+      try {
+        off();
+      } catch {
+        /* ignore */
+      }
+    }
+    state.detach = [];
+    kills.push(killPty(key).catch(() => undefined));
+  }
+  const inst = installSessions.get(resolved);
+  if (inst) {
+    installSessions.delete(resolved);
+    for (const off of inst.detach) {
+      try {
+        off();
+      } catch {
+        /* ignore */
+      }
+    }
+    kills.push(killPty(inst.ptyKey).catch(() => undefined));
+  }
+  await Promise.all(kills);
+}
+
+/**
  * Kill every dev-server PTY. Called from the main process `before-quit`
  * hook so we don't orphan node/vite processes. Awaits each kill so the
  * caller can block until the entire dev-server tree is gone (or its
- * per-kill timeout lapses).
+ * per-kill timeout lapses). Also tears down in-flight install PTYs.
  */
 export async function shutdownAll(): Promise<void> {
   const kills: Array<Promise<void>> = [];
@@ -863,6 +1414,17 @@ export async function shutdownAll(): Promise<void> {
     }
     state.detach = [];
     kills.push(killPty(key).catch(() => undefined));
+  }
+  for (const [resolved, inst] of installSessions.entries()) {
+    for (const off of inst.detach) {
+      try {
+        off();
+      } catch {
+        /* ignore */
+      }
+    }
+    kills.push(killPty(inst.ptyKey).catch(() => undefined));
+    installSessions.delete(resolved);
   }
   await Promise.all(kills);
 }

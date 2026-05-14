@@ -1,11 +1,17 @@
+import * as Dialog from '@radix-ui/react-dialog';
 import {
   AlertCircle,
   ChevronRight,
+  Download,
   FileCode2,
   FolderOpen,
+  Globe,
   Loader2,
+  Package,
   Play,
+  RotateCw,
   Sparkles,
+  Terminal,
 } from 'lucide-react';
 import {
   useCallback,
@@ -70,6 +76,11 @@ const INITIAL_INFO: DevServerInfo = {
 };
 
 const LOG_TAIL_CAP = 500;
+const INSTALL_LOG_CAP = 50;
+
+interface ScriptSwitchConfirm {
+  nextScript: string;
+}
 
 /**
  * Top-level Live Preview pane. Owns the `DevServerInfo` snapshot, the
@@ -95,6 +106,27 @@ export function LivePreviewView({ projectPath }: LivePreviewViewProps) {
   const [selectedElement, setSelectedElement] =
     useState<DesignElementInfo | null>(null);
   const [busy, setBusy] = useState(false);
+  // ── v0.16 state ────────────────────────────────────────────────────
+  // Refresh re-runs detection; UI disables refresh + start during the call.
+  const [refreshing, setRefreshing] = useState(false);
+  // Install state — true while `<pm> install` PTY is alive. Mirrors the
+  // streaming `install_progress` events.
+  const [installing, setInstalling] = useState(false);
+  // Install log tail; capped at INSTALL_LOG_CAP lines. Rendered inside
+  // the empty-state Install card.
+  const [installLog, setInstallLog] = useState<string[]>([]);
+  // Last failed install result (sticky until the user retries).
+  const [installError, setInstallError] = useState<string | null>(null);
+  // Manual URL the user typed in the unknown-framework empty state.
+  const [manualUrl, setManualUrl] = useState('');
+  const [manualUrlError, setManualUrlError] = useState<string | null>(null);
+  // Selected script for the "multiple candidate scripts" empty-state
+  // picker. Defaults below in an effect once detection lands.
+  const [selectedScript, setSelectedScript] = useState<string>('');
+  // Pending confirmation for switching scripts on a running server.
+  // Null when no dialog is open.
+  const [scriptSwitchConfirm, setScriptSwitchConfirm] =
+    useState<ScriptSwitchConfirm | null>(null);
   // Local error string for failed start/stop calls + webview load
   // failures. Separate from `info.errorMessage` (which the backend owns)
   // so a renderer-only error doesn't get clobbered by the next event.
@@ -174,6 +206,23 @@ export function LivePreviewView({ projectPath }: LivePreviewViewProps) {
   const eventHandlerRef = useRef<(ev: DevServerEvent) => void>(() => {});
   useEffect(() => {
     eventHandlerRef.current = (ev: DevServerEvent) => {
+      if (ev.kind === 'install_progress') {
+        // Route install lines to a separate buffer so they don't pollute
+        // the dev-server log tail (which the user might re-read after the
+        // server is up). Status hints arrive as `status` on the event.
+        if (typeof ev.line === 'string') {
+          setInstallLog((prev) => {
+            const next = prev.concat(ev.line!);
+            return next.length > INSTALL_LOG_CAP
+              ? next.slice(next.length - INSTALL_LOG_CAP)
+              : next;
+          });
+        }
+        // status 'starting' → install began; backend already flipped
+        // `installing` state via the action call. status 'error' is
+        // surfaced through the action result, not here.
+        return;
+      }
       if (ev.kind === 'log') {
         if (typeof ev.line === 'string') {
           setLogTail((prev) => {
@@ -240,26 +289,166 @@ export function LivePreviewView({ projectPath }: LivePreviewViewProps) {
     };
   }, [projectPath]);
 
+  // Keep the empty-state script picker default in sync with detection.
+  // If detection lands a `scriptName` (single happy-path script) or the
+  // candidate list updates, default-select that. The user can override
+  // via the dropdown.
+  useEffect(() => {
+    if (!selectedScript && info.scriptName) {
+      setSelectedScript(info.scriptName);
+      return;
+    }
+    // If selectedScript is no longer present in candidates (and not the
+    // active scriptName), reset to a sensible default.
+    if (
+      selectedScript &&
+      info.candidateScripts &&
+      info.candidateScripts.length > 0 &&
+      !info.candidateScripts.some((c) => c.name === selectedScript) &&
+      info.scriptName !== selectedScript
+    ) {
+      setSelectedScript(info.scriptName || info.candidateScripts[0]!.name);
+    }
+  }, [info.candidateScripts, info.scriptName, selectedScript]);
+
   // ─── Action handlers ───────────────────────────────────────────────
-  const handleStart = useCallback(async () => {
+  const handleStart = useCallback(
+    async (overrides?: { scriptName?: string; manualUrl?: string }) => {
+      if (busy) return;
+      setBusy(true);
+      setLocalError(null);
+      // Wipe previous run's tail so the user sees fresh output.
+      setLogTail([]);
+      try {
+        const next = await api.devServer.start({
+          projectPath,
+          ...(overrides?.scriptName ? { scriptName: overrides.scriptName } : {}),
+          ...(overrides?.manualUrl ? { manualUrl: overrides.manualUrl } : {}),
+        });
+        // Backend immediately echoes the transition; merge defensively in
+        // case `subscribe` hasn't completed before this resolves.
+        setInfo((prev) => ({ ...prev, ...next }));
+        setMode('view');
+        setSelectedElement(null);
+      } catch (err) {
+        setLocalError((err as Error).message);
+      } finally {
+        setBusy(false);
+      }
+    },
+    [busy, projectPath],
+  );
+
+  // Re-run detection without touching a running PTY. Disabled while a
+  // server is starting (race with URL parser).
+  const handleRefresh = useCallback(async () => {
+    if (refreshing) return;
+    setRefreshing(true);
+    setLocalError(null);
+    try {
+      const next = await api.devServer.refresh(projectPath);
+      // Merge so we don't accidentally wipe transient state the backend
+      // might not have re-emitted (logTail, url for a manualUrl session).
+      setInfo((prev) => ({ ...prev, ...next }));
+    } catch (err) {
+      setLocalError((err as Error).message);
+    } finally {
+      setRefreshing(false);
+    }
+  }, [projectPath, refreshing]);
+
+  // Install dependencies in a managed PTY. Streams `install_progress`
+  // events into installLog. Auto-refreshes detection on success so the
+  // empty state transitions to the next priority.
+  const handleInstall = useCallback(async () => {
+    if (installing) return;
+    setInstalling(true);
+    setInstallError(null);
+    setInstallLog([]);
+    try {
+      const result = await api.devServer.installDependencies({
+        projectPath,
+        ...(info.preflight?.packageManager
+          ? { packageManager: info.preflight.packageManager }
+          : {}),
+      });
+      if (!result.ok) {
+        setInstallError(
+          result.errorMessage ?? 'Install failed. Inspect the log above and retry.',
+        );
+        return;
+      }
+      // Success → refresh detection so preflight.hasNodeModules flips.
+      try {
+        const next = await api.devServer.refresh(projectPath);
+        setInfo((prev) => ({ ...prev, ...next }));
+      } catch {
+        // Non-fatal — the user can hit Refresh manually.
+      }
+    } catch (err) {
+      setInstallError((err as Error).message);
+    } finally {
+      setInstalling(false);
+    }
+  }, [info.preflight?.packageManager, installing, projectPath]);
+
+  // Manual URL submit handler. Validation mirrors the backend regex
+  // (localhost/127.0.0.1 + non-privileged port, no path/query). On
+  // success delegates to handleStart with `manualUrl` override.
+  const handleManualUrlSubmit = useCallback(async () => {
+    const trimmed = manualUrl.trim();
+    if (!trimmed) {
+      setManualUrlError('Enter a URL like http://localhost:3000.');
+      return;
+    }
+    if (!isValidManualUrl(trimmed)) {
+      setManualUrlError(
+        'URL must be http(s)://localhost or http(s)://127.0.0.1 on a non-privileged port.',
+      );
+      return;
+    }
+    setManualUrlError(null);
+    await handleStart({ manualUrl: trimmed });
+  }, [handleStart, manualUrl]);
+
+  // Script-switch flow: when the running server is using script A and
+  // the user picks script B from the toolbar picker, we surface a
+  // confirm dialog (stopping is destructive — the user might lose HMR
+  // state). On confirm: stop → start with the new scriptName.
+  const handleScriptPickFromToolbar = useCallback(
+    (nextScript: string) => {
+      if (nextScript === info.scriptName) return;
+      setScriptSwitchConfirm({ nextScript });
+    },
+    [info.scriptName],
+  );
+
+  const confirmScriptSwitch = useCallback(async () => {
+    const target = scriptSwitchConfirm?.nextScript;
+    setScriptSwitchConfirm(null);
+    if (!target) return;
     if (busy) return;
     setBusy(true);
     setLocalError(null);
-    // Wipe previous run's tail so the user sees fresh output.
-    setLogTail([]);
     try {
-      const next = await api.devServer.start({ projectPath });
-      // Backend immediately echoes the transition; merge defensively in
-      // case `subscribe` hasn't completed before this resolves.
+      await api.devServer.stop(projectPath);
+      // Wipe log so user sees the new script's fresh output.
+      setLogTail([]);
+      const next = await api.devServer.start({
+        projectPath,
+        scriptName: target,
+      });
       setInfo((prev) => ({ ...prev, ...next }));
+      setSelectedScript(target);
       setMode('view');
       setSelectedElement(null);
+      setWebviewKey((k) => k + 1);
     } catch (err) {
       setLocalError((err as Error).message);
     } finally {
       setBusy(false);
     }
-  }, [busy, projectPath]);
+  }, [busy, projectPath, scriptSwitchConfirm]);
 
   const handleStop = useCallback(async () => {
     if (busy) return;
@@ -605,15 +794,43 @@ export function LivePreviewView({ projectPath }: LivePreviewViewProps) {
     return (
       <IdleState
         info={info}
-        onStart={() => void handleStart()}
+        onStart={(scriptName) =>
+          void handleStart(scriptName ? { scriptName } : undefined)
+        }
+        onManualUrlStart={(url) => void handleStart({ manualUrl: url })}
+        onInstall={() => void handleInstall()}
+        installing={installing}
+        installLog={installLog}
+        installError={installError}
+        refreshing={refreshing}
+        onRefresh={() => void handleRefresh()}
+        selectedScript={selectedScript}
+        onSelectedScriptChange={setSelectedScript}
+        manualUrl={manualUrl}
+        onManualUrlChange={(v) => {
+          setManualUrl(v);
+          if (manualUrlError) setManualUrlError(null);
+        }}
+        manualUrlError={manualUrlError}
+        onManualUrlSubmit={() => void handleManualUrlSubmit()}
         busy={busy}
       />
     );
   }, [
     attachWebview,
     busy,
+    handleInstall,
+    handleManualUrlSubmit,
+    handleRefresh,
     handleStart,
     info,
+    installError,
+    installLog,
+    installing,
+    manualUrl,
+    manualUrlError,
+    refreshing,
+    selectedScript,
     webviewKey,
   ]);
 
@@ -638,6 +855,9 @@ export function LivePreviewView({ projectPath }: LivePreviewViewProps) {
         onStart={() => void handleStart()}
         onStop={() => void handleStop()}
         onReload={handleReload}
+        onRefresh={() => void handleRefresh()}
+        refreshing={refreshing}
+        onScriptChange={handleScriptPickFromToolbar}
         mode={mode}
         onModeChange={setMode}
         busy={busy}
@@ -684,6 +904,14 @@ export function LivePreviewView({ projectPath }: LivePreviewViewProps) {
           />
         )}
       </div>
+
+      <ScriptSwitchConfirmDialog
+        open={!!scriptSwitchConfirm}
+        currentScript={info.scriptName}
+        nextScript={scriptSwitchConfirm?.nextScript ?? ''}
+        onConfirm={() => void confirmScriptSwitch()}
+        onCancel={() => setScriptSwitchConfirm(null)}
+      />
     </div>
   );
 }
@@ -697,76 +925,590 @@ export default LivePreviewView;
 
 interface IdleStateProps {
   info: DevServerInfo;
-  onStart: () => void;
+  /** Start the dev server; pass scriptName when picking from a candidates list. */
+  onStart: (scriptName?: string) => void;
+  /** Start in manual-URL mode (bypasses PTY entirely). */
+  onManualUrlStart: (url: string) => void;
+  /** Run `<pm> install`. */
+  onInstall: () => void;
+  installing: boolean;
+  installLog: string[];
+  installError: string | null;
+  refreshing: boolean;
+  onRefresh: () => void;
+  selectedScript: string;
+  onSelectedScriptChange: (s: string) => void;
+  manualUrl: string;
+  onManualUrlChange: (v: string) => void;
+  manualUrlError: string | null;
+  onManualUrlSubmit: () => void;
   busy: boolean;
 }
 
-function IdleState({ info, onStart, busy }: IdleStateProps) {
-  const isUnknown = info.kind === 'unknown';
+/**
+ * Layered empty state — drives the user from a fresh clone to a running
+ * dev server through four prioritized fallbacks:
+ *
+ *  1. Preflight fail (no node_modules) → Install CTA + streaming log
+ *  2. Multiple candidate dev scripts   → Script picker + Start
+ *  3. Unknown framework                → Manual URL OR detected list
+ *  4. Happy path                       → Single Start button + Refresh
+ *
+ * Each branch is fully self-contained so the user can recover without
+ * leaving the Live Preview tab.
+ */
+function IdleState({
+  info,
+  onStart,
+  onManualUrlStart,
+  onInstall,
+  installing,
+  installLog,
+  installError,
+  refreshing,
+  onRefresh,
+  selectedScript,
+  onSelectedScriptChange,
+  manualUrl,
+  onManualUrlChange,
+  manualUrlError,
+  onManualUrlSubmit,
+  busy,
+}: IdleStateProps) {
+  // ── Priority 1: deps not installed ───────────────────────────────
+  if (info.preflight && info.preflight.hasNodeModules === false) {
+    return (
+      <PreflightFailState
+        packageManager={info.preflight.packageManager}
+        installing={installing}
+        installLog={installLog}
+        installError={installError}
+        onInstall={onInstall}
+        onRefresh={onRefresh}
+        refreshing={refreshing}
+        busy={busy}
+      />
+    );
+  }
+
+  // ── Priority 2: multiple candidate dev scripts ───────────────────
+  if (info.candidateScripts && info.candidateScripts.length > 1) {
+    return (
+      <MultipleScriptsState
+        info={info}
+        candidates={info.candidateScripts}
+        selectedScript={selectedScript || info.scriptName}
+        onSelectedScriptChange={onSelectedScriptChange}
+        onStart={onStart}
+        onRefresh={onRefresh}
+        refreshing={refreshing}
+        busy={busy}
+      />
+    );
+  }
+
+  // ── Priority 3: unknown framework — manual URL fallback ──────────
+  if (info.kind === 'unknown') {
+    return (
+      <UnknownFrameworkState
+        manualUrl={manualUrl}
+        onManualUrlChange={onManualUrlChange}
+        manualUrlError={manualUrlError}
+        onManualUrlSubmit={onManualUrlSubmit}
+        onManualUrlStart={onManualUrlStart}
+        onRefresh={onRefresh}
+        refreshing={refreshing}
+        busy={busy}
+      />
+    );
+  }
+
+  // ── Priority 4: happy path ───────────────────────────────────────
   return (
-    <div className="flex h-full w-full items-center justify-center bg-surface px-6">
-      <div className="max-w-md text-center">
-        <div
-          className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-[10px]"
-          style={{
-            background:
-              'linear-gradient(135deg, rgba(76,141,255,0.18), rgba(168,85,247,0.18))',
-            boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.05)',
-          }}
-        >
-          <Sparkles size={20} className="text-accent" />
+    <HappyPathState
+      info={info}
+      onStart={onStart}
+      onRefresh={onRefresh}
+      refreshing={refreshing}
+      busy={busy}
+    />
+  );
+}
+
+// ─── Priority 1: Install dependencies CTA ────────────────────────────
+
+interface PreflightFailStateProps {
+  packageManager: 'pnpm' | 'yarn' | 'npm' | 'bun';
+  installing: boolean;
+  installLog: string[];
+  installError: string | null;
+  onInstall: () => void;
+  onRefresh: () => void;
+  refreshing: boolean;
+  busy: boolean;
+}
+
+function PreflightFailState({
+  packageManager,
+  installing,
+  installLog,
+  installError,
+  onInstall,
+  onRefresh,
+  refreshing,
+  busy,
+}: PreflightFailStateProps) {
+  const installDisabled = installing || busy;
+  return (
+    <div className="flex h-full w-full items-start justify-center overflow-y-auto bg-surface px-6 py-10">
+      <div className="w-full max-w-md text-center">
+        <EmptyStateIcon Icon={Package} />
+        <div className="text-[13px] font-medium text-text">
+          Dependencies not installed
         </div>
-        {isUnknown ? (
-          <>
-            <div className="text-[13px] font-medium text-text">
-              No supported dev server detected
-            </div>
-            <div className="mt-1.5 text-[11px] text-text-muted">
-              We didn't find a Vite / Next / Astro / Remix config in this
-              project. The Live Preview tab supports those frameworks today.
-            </div>
-            <div className="mt-3 rounded-[6px] border border-dashed border-border-subtle bg-surface-2 px-3 py-2 text-[10.5px] text-text-dim">
-              Manual URL entry is coming in a follow-up patch — point any
-              local server at the webview without auto-detection.
-            </div>
-          </>
+        <div className="mt-1.5 text-[11px] text-text-muted">
+          Run <code className="font-mono text-text-secondary">{packageManager} install</code>{' '}
+          to install dependencies before starting the dev server.
+        </div>
+
+        {installError && (
+          <div
+            role="alert"
+            className="mt-3 rounded-[6px] border border-semantic-error/40 bg-[rgba(239,68,68,0.08)] px-3 py-2 text-left text-[11px] text-semantic-error"
+          >
+            <div className="font-medium">Install failed</div>
+            <pre className="mt-1 max-h-32 overflow-auto whitespace-pre-wrap font-mono text-[10.5px]">
+              {installError}
+            </pre>
+          </div>
+        )}
+
+        {installing ? (
+          <InstallProgressLog lines={installLog} />
         ) : (
-          <>
-            <div className="text-[13px] font-medium text-text">
-              Ready to start {frameworkLabel(info.kind)}
+          <button
+            type="button"
+            onClick={onInstall}
+            disabled={installDisabled}
+            className={cn(
+              'mt-4 inline-flex h-[34px] items-center gap-2 rounded-[8px] px-4 text-[12px] font-medium transition',
+              installDisabled
+                ? 'pointer-events-none border border-border bg-surface-3 text-text-muted opacity-60'
+                : 'text-white hover:brightness-110',
+            )}
+            style={
+              installDisabled
+                ? undefined
+                : {
+                    background:
+                      'linear-gradient(135deg, var(--color-accent), var(--color-accent-3))',
+                    boxShadow: '0 2px 8px rgba(76,141,255,0.25)',
+                  }
+            }
+          >
+            <Download size={13} />
+            Install with {packageManager}
+          </button>
+        )}
+
+        <div className="mt-3 flex items-center justify-center gap-2 text-[10.5px] text-text-dim">
+          <button
+            type="button"
+            onClick={onRefresh}
+            disabled={refreshing || installing}
+            className="inline-flex items-center gap-1 rounded-[4px] px-2 py-1 transition hover:bg-surface-3 hover:text-text disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {refreshing ? (
+              <Loader2 size={10} className="animate-spin" />
+            ) : (
+              <RotateCw size={10} />
+            )}
+            Refresh detection
+          </button>
+          <span aria-hidden>·</span>
+          <span>
+            Already ran install in another terminal? Hit refresh.
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Compact streaming-log card shown while `<pm> install` is running.
+// Lines come from the `install_progress` event subscription, capped at
+// INSTALL_LOG_CAP. We show the last 8 — enough to feel alive without
+// dominating the panel.
+function InstallProgressLog({ lines }: { lines: string[] }) {
+  const visible = useMemo(() => lines.slice(-8), [lines]);
+  return (
+    <div className="mt-4 rounded-[6px] border border-border-subtle bg-surface-2 text-left">
+      <div className="flex items-center gap-1.5 border-b border-border-subtle bg-surface-3 px-2 py-1 text-[10px] font-medium uppercase tracking-wide text-text-muted">
+        <Loader2 size={10} className="animate-spin text-accent" />
+        <Terminal size={10} />
+        Installing dependencies
+      </div>
+      <div className="max-h-44 overflow-auto px-2 py-1.5 font-mono text-[10.5px] leading-snug text-text-secondary">
+        {visible.length === 0 ? (
+          <div className="italic text-text-dim">Waiting for output…</div>
+        ) : (
+          visible.map((line, i) => (
+            <div key={`${i}-${line.slice(0, 8)}`} className="whitespace-pre-wrap">
+              {line}
             </div>
-            <div className="mt-1.5 text-[11px] text-text-muted">
-              We'll run <code className="font-mono text-text-secondary">
-                {info.scriptName || 'dev'}
-              </code>{' '}
-              and mount a webview at the URL it prints.
-            </div>
-            <button
-              type="button"
-              onClick={onStart}
+          ))
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── Priority 2: Multiple candidate scripts ──────────────────────────
+
+interface MultipleScriptsStateProps {
+  info: DevServerInfo;
+  candidates: Array<{ name: string; body: string }>;
+  selectedScript: string;
+  onSelectedScriptChange: (s: string) => void;
+  onStart: (scriptName?: string) => void;
+  onRefresh: () => void;
+  refreshing: boolean;
+  busy: boolean;
+}
+
+function MultipleScriptsState({
+  info,
+  candidates,
+  selectedScript,
+  onSelectedScriptChange,
+  onStart,
+  onRefresh,
+  refreshing,
+  busy,
+}: MultipleScriptsStateProps) {
+  const effective =
+    selectedScript ||
+    info.scriptName ||
+    candidates[0]?.name ||
+    '';
+  const startDisabled = busy || !effective;
+  return (
+    <div className="flex h-full w-full items-start justify-center overflow-y-auto bg-surface px-6 py-10">
+      <div className="w-full max-w-md">
+        <div className="text-center">
+          <EmptyStateIcon Icon={Sparkles} />
+          <div className="text-[13px] font-medium text-text">
+            Select dev script
+          </div>
+          <div className="mt-1.5 text-[11px] text-text-muted">
+            {candidates.length} dev-ish scripts found in{' '}
+            <code className="font-mono text-text-secondary">package.json</code>
+            . Pick which one to run.
+          </div>
+        </div>
+
+        <div
+          className="mt-4 flex flex-col gap-1.5"
+          role="radiogroup"
+          aria-label="Select dev script"
+        >
+          {candidates.map((c) => {
+            const active = c.name === effective;
+            return (
+              <button
+                key={c.name}
+                type="button"
+                role="radio"
+                aria-checked={active}
+                onClick={() => onSelectedScriptChange(c.name)}
+                className={cn(
+                  'flex flex-col items-start rounded-[8px] border px-3 py-2 text-left transition',
+                  active
+                    ? 'border-accent/60 bg-[rgba(76,141,255,0.10)]'
+                    : 'border-border-subtle bg-surface-2 hover:border-border hover:bg-surface-3',
+                )}
+              >
+                <span
+                  className={cn(
+                    'font-mono text-[12px] font-medium',
+                    active ? 'text-accent' : 'text-text',
+                  )}
+                >
+                  {c.name}
+                </span>
+                <span className="mt-0.5 truncate font-mono text-[10.5px] text-text-muted">
+                  {c.body}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="mt-4 flex items-center justify-center gap-2">
+          <button
+            type="button"
+            onClick={() => onStart(effective)}
+            disabled={startDisabled}
+            className={cn(
+              'inline-flex h-[34px] items-center gap-2 rounded-[8px] px-4 text-[12px] font-medium transition',
+              startDisabled
+                ? 'pointer-events-none border border-border bg-surface-3 text-text-muted opacity-60'
+                : 'text-white hover:brightness-110',
+            )}
+            style={
+              startDisabled
+                ? undefined
+                : {
+                    background:
+                      'linear-gradient(135deg, var(--color-accent), var(--color-accent-3))',
+                    boxShadow: '0 2px 8px rgba(76,141,255,0.25)',
+                  }
+            }
+          >
+            <Play size={13} />
+            Start
+          </button>
+          <button
+            type="button"
+            onClick={onRefresh}
+            disabled={refreshing || busy}
+            title="Refresh detection"
+            className="inline-flex h-[34px] items-center gap-1.5 rounded-[8px] border border-border-subtle bg-surface-3 px-3 text-[11px] text-text-secondary transition hover:bg-surface-4 hover:text-text disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {refreshing ? (
+              <Loader2 size={12} className="animate-spin" />
+            ) : (
+              <RotateCw size={12} />
+            )}
+            Refresh
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Priority 3: Unknown framework — manual URL fallback ─────────────
+
+interface UnknownFrameworkStateProps {
+  manualUrl: string;
+  onManualUrlChange: (v: string) => void;
+  manualUrlError: string | null;
+  onManualUrlSubmit: () => void;
+  onManualUrlStart: (url: string) => void;
+  onRefresh: () => void;
+  refreshing: boolean;
+  busy: boolean;
+}
+
+function UnknownFrameworkState({
+  manualUrl,
+  onManualUrlChange,
+  manualUrlError,
+  onManualUrlSubmit,
+  onRefresh,
+  refreshing,
+  busy,
+}: UnknownFrameworkStateProps) {
+  return (
+    <div className="flex h-full w-full items-start justify-center overflow-y-auto bg-surface px-6 py-10">
+      <div className="w-full max-w-md">
+        <div className="text-center">
+          <EmptyStateIcon Icon={Sparkles} />
+          <div className="text-[13px] font-medium text-text">
+            No supported dev server detected
+          </div>
+          <div className="mt-1.5 text-[11px] text-text-muted">
+            Auto-detection didn't find a supported framework. Live Preview
+            supports{' '}
+            <span className="text-text-secondary">{SUPPORTED_FRAMEWORKS_TEXT}</span>
+            .
+          </div>
+        </div>
+
+        <div className="mt-4 rounded-[8px] border border-border-subtle bg-surface-2 px-3 py-3">
+          <div className="mb-1 flex items-center gap-1.5 text-[11px] font-medium text-text">
+            <Globe size={11} className="text-accent" />
+            Use an already-running dev server
+          </div>
+          <div className="text-[10.5px] text-text-muted">
+            Paste the URL of a dev server you've already started elsewhere.
+            Must be <code className="font-mono">localhost</code> or{' '}
+            <code className="font-mono">127.0.0.1</code>.
+          </div>
+          <form
+            className="mt-2 flex items-center gap-1.5"
+            onSubmit={(e) => {
+              e.preventDefault();
+              onManualUrlSubmit();
+            }}
+          >
+            <input
+              type="url"
+              inputMode="url"
+              autoComplete="off"
+              spellCheck={false}
+              placeholder="http://localhost:3000"
+              value={manualUrl}
+              onChange={(e) => onManualUrlChange(e.target.value)}
               disabled={busy}
+              aria-invalid={!!manualUrlError}
+              aria-describedby={manualUrlError ? 'manual-url-error' : undefined}
               className={cn(
-                'mt-4 inline-flex h-[34px] items-center gap-2 rounded-[8px] px-4 text-[12px] font-medium transition',
-                busy
+                'flex-1 rounded-[6px] border bg-surface-3 px-2 py-1.5 font-mono text-[11px] text-text outline-none transition',
+                manualUrlError
+                  ? 'border-semantic-error/60 focus:border-semantic-error'
+                  : 'border-border-subtle focus:border-accent',
+                busy && 'opacity-60',
+              )}
+            />
+            <button
+              type="submit"
+              disabled={busy || !manualUrl.trim()}
+              className={cn(
+                'inline-flex h-[30px] items-center gap-1 rounded-[6px] px-3 text-[11px] font-medium transition',
+                busy || !manualUrl.trim()
                   ? 'pointer-events-none border border-border bg-surface-3 text-text-muted opacity-60'
                   : 'text-white hover:brightness-110',
               )}
               style={
-                busy
+                busy || !manualUrl.trim()
                   ? undefined
                   : {
                       background:
                         'linear-gradient(135deg, var(--color-accent), var(--color-accent-3))',
-                      boxShadow: '0 2px 8px rgba(76,141,255,0.25)',
                     }
               }
             >
-              <Play size={13} />
-              Start {frameworkLabel(info.kind)} dev server
+              <Play size={11} />
+              Use URL
             </button>
-          </>
-        )}
+          </form>
+          {manualUrlError && (
+            <div
+              id="manual-url-error"
+              role="alert"
+              className="mt-1.5 text-[10.5px] text-semantic-error"
+            >
+              {manualUrlError}
+            </div>
+          )}
+        </div>
+
+        <div className="mt-3 flex items-center justify-center gap-2 text-[10.5px] text-text-dim">
+          <button
+            type="button"
+            onClick={onRefresh}
+            disabled={refreshing || busy}
+            className="inline-flex items-center gap-1 rounded-[4px] px-2 py-1 transition hover:bg-surface-3 hover:text-text disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {refreshing ? (
+              <Loader2 size={10} className="animate-spin" />
+            ) : (
+              <RotateCw size={10} />
+            )}
+            Refresh detection
+          </button>
+          <span aria-hidden>·</span>
+          <span>Added a config file? Hit refresh.</span>
+        </div>
       </div>
+    </div>
+  );
+}
+
+// ─── Priority 4: Happy path ──────────────────────────────────────────
+
+interface HappyPathStateProps {
+  info: DevServerInfo;
+  onStart: (scriptName?: string) => void;
+  onRefresh: () => void;
+  refreshing: boolean;
+  busy: boolean;
+}
+
+function HappyPathState({
+  info,
+  onStart,
+  onRefresh,
+  refreshing,
+  busy,
+}: HappyPathStateProps) {
+  return (
+    <div className="flex h-full w-full items-center justify-center bg-surface px-6">
+      <div className="max-w-md text-center">
+        <EmptyStateIcon Icon={Sparkles} />
+        <div className="text-[13px] font-medium text-text">
+          Ready to start {frameworkLabel(info.kind)}
+        </div>
+        <div className="mt-1.5 text-[11px] text-text-muted">
+          We'll run{' '}
+          <code className="font-mono text-text-secondary">
+            {info.scriptName || 'dev'}
+          </code>{' '}
+          and mount a webview at the URL it prints.
+        </div>
+        <div className="mt-4 flex items-center justify-center gap-2">
+          <button
+            type="button"
+            onClick={() => onStart()}
+            disabled={busy}
+            className={cn(
+              'inline-flex h-[34px] items-center gap-2 rounded-[8px] px-4 text-[12px] font-medium transition',
+              busy
+                ? 'pointer-events-none border border-border bg-surface-3 text-text-muted opacity-60'
+                : 'text-white hover:brightness-110',
+            )}
+            style={
+              busy
+                ? undefined
+                : {
+                    background:
+                      'linear-gradient(135deg, var(--color-accent), var(--color-accent-3))',
+                    boxShadow: '0 2px 8px rgba(76,141,255,0.25)',
+                  }
+            }
+          >
+            <Play size={13} />
+            Start {frameworkLabel(info.kind)} dev server
+          </button>
+          <button
+            type="button"
+            onClick={onRefresh}
+            disabled={refreshing || busy}
+            title="Refresh detection"
+            className="inline-flex h-[34px] items-center gap-1.5 rounded-[8px] border border-border-subtle bg-surface-3 px-3 text-[11px] text-text-secondary transition hover:bg-surface-4 hover:text-text disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {refreshing ? (
+              <Loader2 size={12} className="animate-spin" />
+            ) : (
+              <RotateCw size={12} />
+            )}
+            Refresh
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Shared rounded gradient icon badge used at the top of each empty
+// state. Centralized so the visual language stays consistent.
+function EmptyStateIcon({
+  Icon,
+}: {
+  Icon: React.ComponentType<{ size?: number; className?: string }>;
+}) {
+  return (
+    <div
+      className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-[10px]"
+      style={{
+        background:
+          'linear-gradient(135deg, rgba(76,141,255,0.18), rgba(168,85,247,0.18))',
+        boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.05)',
+      }}
+    >
+      <Icon size={20} className="text-accent" />
     </div>
   );
 }
@@ -1003,7 +1745,130 @@ function frameworkLabel(kind: DevServerInfo['kind']): string {
       return 'Astro';
     case 'remix':
       return 'Remix';
+    case 'sveltekit':
+      return 'SvelteKit';
+    case 'nuxt':
+      return 'Nuxt';
+    case 'gatsby':
+      return 'Gatsby';
+    case 'angular':
+      return 'Angular';
+    case 'vue-cli':
+      return 'Vue CLI';
+    case 'cra':
+      return 'CRA';
+    case 'storybook':
+      return 'Storybook';
+    case 'vitepress':
+      return 'VitePress';
+    case 'docusaurus':
+      return 'Docusaurus';
+    case 'static':
+      return 'Static server';
     default:
       return 'dev';
   }
+}
+
+// Human-readable list of every framework v0.16 auto-detects. Used in
+// the unknown-framework empty state so the user knows what's supported.
+const SUPPORTED_FRAMEWORKS_TEXT =
+  'Vite, Next.js, Astro, Remix, SvelteKit, Nuxt, Gatsby, Angular, Vue CLI, CRA, Storybook, VitePress, Docusaurus, and generic static servers';
+
+/**
+ * Renderer-side mirror of `DevServerService.tryParseLocalUrl`. We validate
+ * before calling `api.devServer.start({ manualUrl })` so the user sees a
+ * fast, readable error instead of an IPC throw. Accepts http(s)://localhost
+ * or 127.0.0.1 on a non-privileged port; rejects paths, queries, userinfo,
+ * and LAN IPs.
+ */
+function isValidManualUrl(candidate: string): boolean {
+  let u: URL;
+  try {
+    u = new URL(candidate);
+  } catch {
+    return false;
+  }
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') return false;
+  const host = u.hostname.toLowerCase();
+  if (host !== 'localhost' && host !== '127.0.0.1') return false;
+  if (u.username || u.password) return false;
+  if (!u.port) return false;
+  const port = Number(u.port);
+  // v0.16.0 review-fix L3: reject privileged ports — the user-facing
+  // error elsewhere claims "non-privileged port" so the validator must
+  // actually enforce it. Dev servers never bind below 1024 anyway.
+  if (!Number.isInteger(port) || port < 1024 || port > 65535) return false;
+  // v0.16.0 review-fix H1: reject paths / queries / fragments so the
+  // client validator stays in sync with the backend (which strips them
+  // to compute the bare origin). User pasting `localhost:3000/admin`
+  // would otherwise be silently rewritten — surface "invalid" instead.
+  if (u.pathname && u.pathname !== '/') return false;
+  if (u.search) return false;
+  if (u.hash) return false;
+  return true;
+}
+
+// ─── Script-switch confirm dialog ────────────────────────────────────
+
+interface ScriptSwitchConfirmDialogProps {
+  open: boolean;
+  currentScript: string;
+  nextScript: string;
+  onConfirm: () => void;
+  onCancel: () => void;
+}
+
+/**
+ * Confirms a destructive script switch. Stopping the running server
+ * loses HMR state, so we make the user opt in. Pattern mirrors
+ * `ConfirmDialog` in DesignView's discard-edits flow.
+ */
+function ScriptSwitchConfirmDialog({
+  open,
+  currentScript,
+  nextScript,
+  onConfirm,
+  onCancel,
+}: ScriptSwitchConfirmDialogProps) {
+  return (
+    <Dialog.Root
+      open={open}
+      onOpenChange={(o) => {
+        if (!o) onCancel();
+      }}
+    >
+      <Dialog.Portal>
+        <Dialog.Overlay className="fixed inset-0 z-40 bg-black/40" />
+        <Dialog.Content className="fixed left-1/2 top-24 z-50 w-[min(420px,85vw)] -translate-x-1/2 overflow-hidden rounded-lg border border-border-emphasis bg-surface-raised shadow-2xl">
+          <Dialog.Title className="border-b border-border-subtle bg-surface-sidebar px-4 py-2 text-[12px] font-medium text-text">
+            Switch dev script?
+          </Dialog.Title>
+          <Dialog.Description className="px-4 py-3 text-[12px] text-text-secondary">
+            This will stop the running server (
+            <code className="font-mono">{currentScript || '—'}</code>) and
+            restart with <code className="font-mono">{nextScript}</code>.
+            You'll lose any HMR state.
+          </Dialog.Description>
+          <div className="flex justify-end gap-2 border-t border-border-subtle bg-surface-sidebar px-3 py-2 text-[11px]">
+            <button
+              type="button"
+              onClick={onCancel}
+              className="rounded px-2 py-1 text-text-secondary hover:bg-surface-overlay hover:text-text"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={onConfirm}
+              autoFocus
+              className="rounded bg-accent px-3 py-1 text-white transition hover:opacity-90"
+            >
+              Stop and restart
+            </button>
+          </div>
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
+  );
 }

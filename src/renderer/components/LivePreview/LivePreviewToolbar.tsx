@@ -1,6 +1,7 @@
 import {
   AlertCircle,
   Check,
+  ChevronDown,
   CircleDot,
   Copy,
   Eye,
@@ -26,6 +27,16 @@ export interface LivePreviewToolbarProps {
   onStart: () => void;
   onStop: () => void;
   onReload: () => void;
+  /** Re-run framework detection (no PTY churn). */
+  onRefresh: () => void;
+  /** True while a detection refresh is in flight. */
+  refreshing?: boolean;
+  /**
+   * Compact script picker on the toolbar (only meaningful when the server
+   * is running and `info.candidateScripts.length > 1`). Selecting a new
+   * value asks the host to confirm + restart with the new script.
+   */
+  onScriptChange?: (scriptName: string) => void;
   mode: DesignWebviewMode;
   onModeChange: (mode: DesignWebviewMode) => void;
   /** Disable start/stop while a transition is in flight. */
@@ -37,6 +48,16 @@ const FRAMEWORK_LABEL: Record<DevServerKind, string> = {
   next: 'Next.js',
   astro: 'Astro',
   remix: 'Remix',
+  sveltekit: 'SvelteKit',
+  nuxt: 'Nuxt',
+  gatsby: 'Gatsby',
+  angular: 'Angular',
+  'vue-cli': 'Vue CLI',
+  cra: 'CRA',
+  storybook: 'Storybook',
+  vitepress: 'VitePress',
+  docusaurus: 'Docusaurus',
+  static: 'Static',
   unknown: 'Unknown',
 };
 
@@ -51,6 +72,9 @@ export function LivePreviewToolbar({
   onStart,
   onStop,
   onReload,
+  onRefresh,
+  refreshing,
+  onScriptChange,
   mode,
   onModeChange,
   busy,
@@ -63,6 +87,12 @@ export function LivePreviewToolbar({
   // Disabling them in other states avoids users wondering why clicks
   // don't do anything.
   const modeDisabled = !running;
+  // Refresh is unsafe mid-spawn: the detection mutation would race with
+  // the PTY URL parser. Block it.
+  const refreshDisabled = starting || !!busy;
+  const candidateScripts = info.candidateScripts ?? [];
+  const showRunningScriptPicker =
+    running && candidateScripts.length > 1 && !!onScriptChange;
 
   return (
     <div
@@ -75,6 +105,21 @@ export function LivePreviewToolbar({
       <StatusPill status={info.status} errorMessage={info.errorMessage} />
       <FrameworkBadge kind={info.kind} scriptName={info.scriptName} />
       <UrlChip url={info.url} />
+
+      <RefreshButton
+        onClick={onRefresh}
+        disabled={refreshDisabled}
+        refreshing={!!refreshing}
+      />
+
+      {showRunningScriptPicker && (
+        <ToolbarScriptPicker
+          candidates={candidateScripts}
+          activeScript={info.scriptName}
+          onChange={(name) => onScriptChange?.(name)}
+          disabled={!!busy}
+        />
+      )}
 
       <ModeToggle
         mode={mode}
@@ -322,6 +367,92 @@ const MODE_OPTIONS: Array<{
     title: 'Inline style edits (read-only preview in Phase C — write-back lands in 0.8)',
   },
 ];
+
+// ─── Refresh button (re-runs detection only) ─────────────────────────
+
+interface RefreshButtonProps {
+  onClick: () => void;
+  disabled: boolean;
+  refreshing: boolean;
+}
+
+function RefreshButton({ onClick, disabled, refreshing }: RefreshButtonProps) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled || refreshing}
+      title="Refresh detection"
+      aria-label="Refresh detection"
+      className={cn(
+        'relative inline-flex h-[26px] w-[26px] items-center justify-center rounded-[6px] border border-border-subtle bg-surface-3 text-text-muted transition hover:bg-surface-4 hover:text-text',
+        (disabled || refreshing) && 'pointer-events-none opacity-60',
+      )}
+    >
+      {refreshing ? (
+        <Loader2 size={12} className="animate-spin" />
+      ) : (
+        <RotateCw size={12} />
+      )}
+    </button>
+  );
+}
+
+// ─── Compact script picker shown on the toolbar while running ────────
+
+interface ToolbarScriptPickerProps {
+  candidates: Array<{ name: string; body: string }>;
+  activeScript: string;
+  onChange: (scriptName: string) => void;
+  disabled?: boolean;
+}
+
+function ToolbarScriptPicker({
+  candidates,
+  activeScript,
+  onChange,
+  disabled,
+}: ToolbarScriptPickerProps) {
+  return (
+    <label
+      className={cn(
+        'relative inline-flex h-[26px] items-center rounded-[6px] border border-border-subtle bg-surface-3 pl-2 pr-1 text-[10.5px] font-medium text-text-muted',
+        disabled && 'pointer-events-none opacity-60',
+      )}
+      title="Switch dev script (will restart the server)"
+    >
+      <span className="mr-1 text-text-dim">script</span>
+      <span className="font-mono text-text-secondary">{activeScript || '—'}</span>
+      <ChevronDown size={10} className="ml-1 text-text-dim" />
+      <select
+        value={activeScript}
+        disabled={disabled}
+        onChange={(e) => {
+          const next = e.target.value;
+          if (next && next !== activeScript) onChange(next);
+        }}
+        className="absolute inset-0 cursor-pointer opacity-0"
+        aria-label="Switch dev script"
+      >
+        {/* Make sure the active script is always selectable even if it
+            doesn't appear in candidateScripts (defensive fallback). */}
+        {!candidates.some((c) => c.name === activeScript) && activeScript && (
+          <option value={activeScript}>{activeScript}</option>
+        )}
+        {candidates.map((c) => (
+          <option key={c.name} value={c.name}>
+            {c.name} — {truncate(c.body, 48)}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
+function truncate(s: string, n: number): string {
+  if (s.length <= n) return s;
+  return `${s.slice(0, n - 1)}…`;
+}
 
 function ModeToggle({ mode, onChange, disabled }: ModeToggleProps) {
   return (

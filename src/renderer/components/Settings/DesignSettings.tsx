@@ -444,6 +444,26 @@ function prettyFramework(kind: ProjectDesignProfile['framework']): string {
       return 'Astro';
     case 'remix':
       return 'Remix';
+    case 'sveltekit':
+      return 'SvelteKit';
+    case 'nuxt':
+      return 'Nuxt';
+    case 'gatsby':
+      return 'Gatsby';
+    case 'angular':
+      return 'Angular';
+    case 'vue-cli':
+      return 'Vue CLI';
+    case 'cra':
+      return 'CRA';
+    case 'storybook':
+      return 'Storybook';
+    case 'vitepress':
+      return 'VitePress';
+    case 'docusaurus':
+      return 'Docusaurus';
+    case 'static':
+      return 'Static';
     case 'unknown':
       return 'Unknown';
   }

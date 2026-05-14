@@ -167,6 +167,13 @@ export const IPC = {
   DEVSERVER_SUBSCRIBE: 'devserver:subscribe',
   DEVSERVER_UNSUBSCRIBE: 'devserver:unsubscribe',
   DEVSERVER_EVENT: 'devserver:event',
+  // v0.16: refresh re-runs the framework / script / preflight detection
+  // without touching a running PTY. Used by the toolbar Refresh button.
+  DEVSERVER_REFRESH: 'devserver:refresh',
+  // v0.16: install dependencies in a managed PTY. Required preflight when
+  // node_modules is missing (no other detection failure is recoverable
+  // in-app without leaving devspace).
+  DEVSERVER_INSTALL: 'devserver:install',
 
   // Phase 0.8+: source-aware write-back. Main resolves each edit through
   // the appropriate StyleAdapter (Tailwind / vanilla CSS / styled / CSS

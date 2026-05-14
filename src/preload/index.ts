@@ -348,6 +348,14 @@ const api = {
       ipcRenderer.invoke(IPC.DEVSERVER_SUBSCRIBE, projectPath),
     unsubscribe: (projectPath: string) =>
       ipcRenderer.invoke(IPC.DEVSERVER_UNSUBSCRIBE, projectPath),
+    // v0.16: re-run detection without touching a running PTY.
+    refresh: (projectPath: string) =>
+      ipcRenderer.invoke(IPC.DEVSERVER_REFRESH, projectPath),
+    // v0.16: run `<pm> install` for the project. Result resolves when the
+    // PTY exits; live progress streams as 'install_progress' DevServerEvents
+    // through the existing onEvent subscription.
+    installDependencies: (input: import('@shared/design').DevServerInstallInput) =>
+      ipcRenderer.invoke(IPC.DEVSERVER_INSTALL, input),
     onEvent: (
       projectPath: string,
       cb: (event: import('@shared/design').DevServerEvent) => void,

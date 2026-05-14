@@ -455,6 +455,64 @@ describe('segments — chronological assembly', () => {
     expect(assistant.content).toBe('one two three');
   });
 
+  it('attaches diffStats to file-mutating tool calls', () => {
+    const state = emptyState();
+    const thread = freshThread();
+    const assistant = freshAssistant();
+    const handle = makeSoloLineHandler(state, thread, assistant);
+
+    handle(
+      asLine({
+        type: 'assistant',
+        message: {
+          content: [
+            {
+              type: 'tool_use',
+              id: 'edit-1',
+              name: 'Edit',
+              input: {
+                file_path: '/tmp/devspace-test/src/foo.ts',
+                old_string: 'a\nb',
+                new_string: 'a\nb\nc\nd',
+              },
+            },
+          ],
+        },
+      }),
+    );
+
+    expect(assistant.toolCalls[0]!.diffStats).toEqual({
+      additions: 4,
+      deletions: 2,
+      path: 'src/foo.ts',
+    });
+  });
+
+  it('leaves diffStats undefined for non-file-mutating tools', () => {
+    const state = emptyState();
+    const thread = freshThread();
+    const assistant = freshAssistant();
+    const handle = makeSoloLineHandler(state, thread, assistant);
+
+    handle(
+      asLine({
+        type: 'assistant',
+        message: {
+          content: [
+            {
+              type: 'tool_use',
+              id: 'read-1',
+              name: 'Read',
+              input: { file_path: '/etc/hosts' },
+            },
+          ],
+        },
+      }),
+    );
+
+    expect(assistant.toolCalls[0]!.diffStats).toBeUndefined();
+  });
+
   it('toolCalls ids match the union of all tool_group.toolUseIds in order', () => {
     const state = emptyState();
     const thread = freshThread();

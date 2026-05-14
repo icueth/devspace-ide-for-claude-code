@@ -4,13 +4,15 @@ import * as path from 'node:path';
 import {
   detectDevServer,
   getDevServerStatus,
+  installDependencies,
+  refreshDevServer,
   startDevServer,
   stopDevServer,
   subscribeDevServerEvents,
   unsubscribeDevServerEvents,
 } from '@main/services/DevServerService';
 import { IPC } from '@shared/ipc-channels';
-import type { DevServerStartInput } from '@shared/design';
+import type { DevServerInstallInput, DevServerStartInput } from '@shared/design';
 
 // All IPC handlers validate `projectPath` against this shape before
 // touching the service. The renderer is on the other side of an IPC
@@ -71,5 +73,26 @@ export function registerDevServerIpc(): void {
 
   ipcMain.handle(IPC.DEVSERVER_UNSUBSCRIBE, (event, projectPath: string) => {
     unsubscribeDevServerEvents(assertProjectPath(projectPath), event.sender);
+  });
+
+  ipcMain.handle(IPC.DEVSERVER_REFRESH, (event, projectPath: string) => {
+    // Subscribe the sender so the synthesized status_changed reaches the
+    // tab that asked to refresh.
+    const safe = assertProjectPath(projectPath);
+    subscribeDevServerEvents(safe, event.sender);
+    return refreshDevServer(safe);
+  });
+
+  ipcMain.handle(IPC.DEVSERVER_INSTALL, (event, input: DevServerInstallInput) => {
+    if (!input || typeof input !== 'object') {
+      throw new Error('DEVSERVER_INSTALL requires an input object');
+    }
+    const safe: DevServerInstallInput = {
+      ...input,
+      projectPath: assertProjectPath(input.projectPath),
+    };
+    // Stream install_progress events back to the renderer that initiated.
+    subscribeDevServerEvents(safe.projectPath, event.sender);
+    return installDependencies(safe);
   });
 }

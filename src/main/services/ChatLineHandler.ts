@@ -11,6 +11,7 @@
 import { randomUUID } from 'node:crypto';
 
 import { broadcast, type ProjectState } from '@main/services/ChatTranscript';
+import { computeToolDiffStats } from '@main/utils/diffStats';
 import type {
   ChatMessage,
   ChatMessageSegment,
@@ -117,10 +118,16 @@ export function makeSoloLineHandler(
           });
         } else if (block.type === 'tool_use') {
           const id = block.id ?? randomUUID();
+          const toolName = block.name ?? 'tool';
+          const toolInput = block.input ?? {};
+          const diffStats =
+            computeToolDiffStats(toolName, toolInput, state.projectPath) ??
+            undefined;
           assistant.toolCalls.push({
             id,
-            name: block.name ?? 'tool',
-            input: block.input ?? {},
+            name: toolName,
+            input: toolInput,
+            diffStats,
           });
           appendToolUseToSegments(assistant, id);
           broadcast(state, thread.id, {
@@ -200,10 +207,16 @@ export function makeStepLineHandler(
           });
         } else if (block.type === 'tool_use') {
           const id = block.id ?? randomUUID();
+          const toolName = block.name ?? 'tool';
+          const toolInput = block.input ?? {};
+          const diffStats =
+            computeToolDiffStats(toolName, toolInput, state.projectPath) ??
+            undefined;
           stepTarget.toolCalls.push({
             id,
-            name: block.name ?? 'tool',
-            input: block.input ?? {},
+            name: toolName,
+            input: toolInput,
+            diffStats,
           });
           appendToolUseToSegments(stepTarget, id);
           broadcast(state, thread.id, {
