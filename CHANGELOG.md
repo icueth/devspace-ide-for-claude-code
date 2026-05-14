@@ -5,6 +5,21 @@ All notable changes to DevSpace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.18.1] — 2026-05-14
+
+Sidebar file tree is more discoverable.
+
+### Fixed
+
+- **Right-click on empty space below the file list now opens the root context menu.**
+  Previously the click target ended at the last visible file, so users had to
+  right-click on a folder or use Cmd+N inside the editor to create files at root.
+
+### Added
+
+- **`+File`, `+Folder`, and Refresh icon buttons** at the top of the sidebar file
+  tree. Same actions that were behind the right-click menu, now one click away.
+
 ## [0.18.0] — 2026-05-14
 
 Git changes now visible at a glance everywhere they matter — folders in the

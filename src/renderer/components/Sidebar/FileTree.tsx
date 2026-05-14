@@ -1,5 +1,14 @@
 import * as ContextMenu from '@radix-ui/react-context-menu';
-import { ChevronDown, ChevronRight, Eye, EyeOff, Folder } from 'lucide-react';
+import {
+  ChevronDown,
+  ChevronRight,
+  Eye,
+  EyeOff,
+  FilePlus,
+  Folder,
+  FolderPlus,
+  RefreshCw,
+} from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { api } from '@renderer/lib/api';
@@ -490,9 +499,35 @@ export function FileTree({ rootPath, onOpenFile }: FileTreeProps) {
   return (
     <ContextMenu.Root>
       <ContextMenu.Trigger asChild>
-        {/* min-h-[120px] keeps the pane right-clickable even when the project
-            is empty — otherwise there's no hit area for "New File". */}
-        <div className="flex min-h-[120px] flex-col gap-0.5">
+        {/* h-full makes the empty space below the last file part of the right-click hit area.
+            min-h-[120px] guarantees a target on tiny/empty projects. */}
+        <div className="flex h-full min-h-[120px] flex-col gap-0.5">
+          <div className="flex items-center gap-0.5 px-1.5 pb-1 pt-0.5">
+            <button
+              type="button"
+              onClick={() => handleNewFile(rootPath)}
+              title="New file at root"
+              className="flex h-5 w-5 items-center justify-center rounded text-text-muted transition hover:bg-surface-overlay hover:text-text"
+            >
+              <FilePlus size={12} />
+            </button>
+            <button
+              type="button"
+              onClick={() => handleNewFolder(rootPath)}
+              title="New folder at root"
+              className="flex h-5 w-5 items-center justify-center rounded text-text-muted transition hover:bg-surface-overlay hover:text-text"
+            >
+              <FolderPlus size={12} />
+            </button>
+            <button
+              type="button"
+              onClick={() => refreshDir(rootPath)}
+              title="Refresh"
+              className="flex h-5 w-5 items-center justify-center rounded text-text-muted transition hover:bg-surface-overlay hover:text-text"
+            >
+              <RefreshCw size={11} />
+            </button>
+          </div>
           {root?.loading && (
             <div className="px-2 py-1 text-[10px] text-text-muted">Loading…</div>
           )}
@@ -505,6 +540,8 @@ export function FileTree({ rootPath, onOpenFile }: FileTreeProps) {
               Empty folder. Right-click to create a file.
             </div>
           )}
+          {/* Spacer fills remaining vertical space so right-click below files hits the root trigger. */}
+          <div className="flex-1" />
         </div>
       </ContextMenu.Trigger>
       <ContextMenu.Portal>
