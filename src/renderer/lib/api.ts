@@ -61,6 +61,15 @@ import type {
   MemPalaceUninstallInput,
 } from '@shared/mempalace';
 import type {
+  MemPalaceDrawer,
+  MemPalaceListDrawersInput,
+  MemPalaceListTriplesInput,
+  MemPalaceOverview,
+  MemPalaceRoom,
+  MemPalaceTriple,
+  MemPalaceWing,
+} from '@shared/mempalaceData';
+import type {
   SetupClaudeRunResult,
   SetupInstallResult,
   SetupProgressEvent,
@@ -508,6 +517,14 @@ export interface DevspaceApi {
     openVault: () => Promise<void>;
     onProgress: (cb: (ev: MemPalaceProgressEvent) => void) => () => void;
   };
+  mempalaceData: {
+    getOverview: () => Promise<MemPalaceOverview>;
+    listWings: () => Promise<MemPalaceWing[]>;
+    listRooms: (wing: string) => Promise<MemPalaceRoom[]>;
+    listDrawers: (input?: MemPalaceListDrawersInput) => Promise<MemPalaceDrawer[]>;
+    listTriples: (input?: MemPalaceListTriplesInput) => Promise<MemPalaceTriple[]>;
+    invalidate: () => Promise<void>;
+  };
   setup: {
     getStatus: () => Promise<SetupStatus>;
     installTool: (toolId: SetupToolId) => Promise<SetupInstallResult>;
@@ -820,6 +837,24 @@ function makeStubApi(): DevspaceApi {
       ) as () => Promise<MemPalaceInstallResult>,
       openVault: notWired('mempalace.openVault') as () => Promise<void>,
       onProgress: () => () => undefined,
+    },
+    mempalaceData: {
+      getOverview: () =>
+        Promise.resolve({
+          vault: { palaceDir: '', available: false, reason: 'Not running inside devspace' },
+          drawerCount: 0,
+          closetCount: 0,
+          wingCount: 0,
+          roomCount: 0,
+          entityCount: 0,
+          tripleCount: 0,
+          newestFiledAt: null,
+        } as MemPalaceOverview),
+      listWings: () => Promise.resolve([] as MemPalaceWing[]),
+      listRooms: () => Promise.resolve([] as MemPalaceRoom[]),
+      listDrawers: () => Promise.resolve([] as MemPalaceDrawer[]),
+      listTriples: () => Promise.resolve([] as MemPalaceTriple[]),
+      invalidate: () => Promise.resolve(),
     },
     setup: {
       getStatus: () =>

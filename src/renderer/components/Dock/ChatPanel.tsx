@@ -109,13 +109,6 @@ const SLASH_COMMANDS: SlashCommand[] = [
     argHint: '<append text>',
   },
   {
-    id: 'remember',
-    trigger: 'remember',
-    description: 'Save the rest of this line to project memory',
-    hasArgs: true,
-    argHint: '<what to save>',
-  },
-  {
     id: 'help',
     trigger: 'help',
     description: 'Show this command palette',
@@ -763,39 +756,6 @@ export function ChatPanel({ projectPath }: ChatPanelProps) {
     [extractBrief, projectPath],
   );
 
-  // Save a message (or its highlighted selection) into project memory.
-  // User messages land as `feedback` (the user told us something they
-  // want remembered); assistant messages land as `project` (factual
-  // note about the project that came out of a turn).
-  const saveMessageToMemory = useCallback(
-    async (message: ChatMessage, selection: string): Promise<void> => {
-      const text = (selection || message.content || joinProseSegments(message)).trim();
-      if (!text) {
-        setNotice('Nothing to save — empty selection.');
-        return;
-      }
-      const description = text.split('\n')[0]!.slice(0, 80);
-      const type = message.role === 'user' ? 'feedback' : 'project';
-      try {
-        const entry = await api.memory.createEntry({
-          scope: 'project',
-          projectPath,
-          type,
-          description,
-          body: text.slice(0, 8192),
-          tags: [],
-        });
-        setNotice(`Saved to memory: ${entry.slug}`);
-      } catch (err) {
-        console.error('[chat] save to memory failed', err);
-        setNotice(
-          `Save to memory failed: ${err instanceof Error ? err.message : String(err)}`,
-        );
-      }
-    },
-    [projectPath],
-  );
-
   // Build the menu items snapshot for the floating menu. Memo not
   // strictly needed — this fn runs at most once per right-click — but
   // keeping it inline makes the disabled-state logic obvious.
@@ -804,19 +764,11 @@ export function ChatPanel({ projectPath }: ChatPanelProps) {
       const slugs = new Set(skillsRef.current.map((s) => s.slug));
       const brief = extractBrief(message, selection);
       const hasBrief = brief.length > 0;
-      // User-message menu is a slim subset — Design generation only
-      // makes sense for assistant prose; user messages are typically
-      // requests / corrections / feedback, which we surface as
-      // memory-save first.
+      // User messages get a minimal menu — memory capture lives in MemPalace
+      // now, populated automatically by the SessionStop hook, so we don't
+      // surface a "save to memory" item here anymore.
       if (message.role === 'user') {
         return [
-          {
-            id: 'save-memory',
-            label: selection ? 'Save selection to memory' : 'Save to memory',
-            disabled: !hasBrief,
-            onSelect: () => void saveMessageToMemory(message, selection),
-          },
-          { id: 'sep-1', label: '', separator: true },
           {
             id: 'copy',
             label: 'Copy text',
@@ -852,12 +804,6 @@ export function ChatPanel({ projectPath }: ChatPanelProps) {
         },
         { id: 'sep-1', label: '', separator: true },
         {
-          id: 'save-memory',
-          label: selection ? 'Save selection to memory' : 'Save to memory',
-          disabled: !hasBrief,
-          onSelect: () => void saveMessageToMemory(message, selection),
-        },
-        {
           id: 'copy',
           label: 'Copy text',
           disabled: !message.content && !joinProseSegments(message),
@@ -868,7 +814,7 @@ export function ChatPanel({ projectPath }: ChatPanelProps) {
         },
       ];
     },
-    [extractBrief, sendToDesign, saveMessageToMemory],
+    [extractBrief, sendToDesign],
   );
 
   // Execute a parsed slash command. Returns true if the input should be
@@ -910,38 +856,11 @@ export function ChatPanel({ projectPath }: ChatPanelProps) {
           setInput('/');
           return false;
         }
-        case 'remember': {
-          // /remember <description> — save the description as a project
-          // memory entry without billing a Claude turn. Empty args =
-          // inline help notice.
-          const description = args.trim();
-          if (!description) {
-            setNotice('Usage: /remember <what to save>');
-            return true;
-          }
-          try {
-            const entry = await api.memory.createEntry({
-              scope: 'project',
-              projectPath,
-              type: 'user',
-              description,
-              body: description,
-              tags: [],
-            });
-            setNotice(`Saved to memory: ${entry.slug}`);
-          } catch (err) {
-            console.error('[chat] /remember failed', err);
-            setNotice(
-              `Save to memory failed: ${err instanceof Error ? err.message : String(err)}`,
-            );
-          }
-          return true;
-        }
         default:
           return false;
       }
     },
-    [projectPath, activeId],
+    [activeId],
   );
 
   // Keep the ref pointed at the latest executeSlash so onSend's slash

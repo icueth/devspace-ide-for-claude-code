@@ -1,1376 +1,72 @@
 import {
-  BookOpen,
-  Bot,
+  AlertTriangle,
   Brain,
-  Calendar,
+  ChevronDown,
   ChevronRight,
-  Clock,
-  ExternalLink,
-  FileText,
   FolderOpen,
-  FolderX,
   Hash,
-  Home,
-  Inbox,
-  KeyRound,
-  Lightbulb,
-  Paintbrush,
-  Pin,
-  Plug,
-  Plus,
+  Loader2,
+  Network,
+  RefreshCw,
   Search,
-  Server,
   Settings as SettingsIcon,
-  Sparkles,
-  Users,
   X,
 } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-import { EntryEditor } from '@renderer/components/Dashboard/EntryEditor';
-import { InboxList } from '@renderer/components/Dashboard/InboxList';
-import { TimelineView } from '@renderer/components/Dashboard/TimelineView';
 import { api } from '@renderer/lib/api';
 import { cn } from '@renderer/lib/utils';
-import {
-  useDashboardStore,
-  type DashboardView as DashboardViewName,
-} from '@renderer/state/dashboard';
-import { useWorkspaceStore } from '@renderer/state/workspace';
 import type {
-  MemoryEntry,
-  MemoryInboxItem,
-  MemoryProject,
-  MemorySettings,
-  MemoryStats,
-  MemoryType,
-} from '@shared/types';
+  MemPalaceDrawer,
+  MemPalaceOverview,
+  MemPalaceRoom,
+  MemPalaceTriple,
+  MemPalaceWing,
+} from '@shared/mempalaceData';
 
 declare const __APP_VERSION__: string;
 
-// Friendly relative-time labels for the "Updated 3h ago" hints on list rows.
-function formatRelative(ts: number): string {
-  const diff = Math.floor((Date.now() - ts) / 1000);
-  if (diff < 60) return 'just now';
-  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
-  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
-  const days = Math.floor(diff / 86400);
-  if (days < 30) return `${days}d ago`;
-  const months = Math.floor(days / 30);
-  if (months < 12) return `${months}mo ago`;
-  return `${Math.floor(days / 365)}y ago`;
-}
-
-// Color tokens for entry-type chips. Mirrors the inbox signal palette so
-// users build a consistent mental model: same color = same family.
-const TYPE_STYLES: Record<MemoryType, string> = {
-  user: 'border-[rgba(168,85,247,0.3)] bg-[rgba(168,85,247,0.1)] text-accent-2',
-  feedback: 'border-semantic-error/30 bg-semantic-error/10 text-semantic-error',
-  project: 'border-accent/30 bg-accent/10 text-accent',
-  reference: 'border-semantic-success/30 bg-semantic-success/10 text-semantic-success',
-};
-
-const SIDEBAR_NAV: Array<{
-  view: DashboardViewName;
-  label: string;
-  icon: typeof Home;
-}> = [
-  { view: 'home', label: 'Home', icon: Home },
-  { view: 'all', label: 'All entries', icon: BookOpen },
-  { view: 'inbox', label: 'Inbox', icon: Inbox },
-  { view: 'timeline', label: 'Timeline', icon: Calendar },
-  { view: 'settings', label: 'Settings', icon: SettingsIcon },
-];
-
 /**
- * Cross-project memory dashboard — v0.19. Renders as a full-page editor
- * tab (kind='dashboard'), NOT a modal. Three regions:
- *   • Top bar: title + global search + settings shortcut.
- *   • Left rail: view picker + scope filters (project list, tag list).
- *   • Main area: switches by `currentView` between Home / All / Inbox /
- *     Timeline / Settings.
+ * MemPalace Dashboard — replaces the legacy `~/.devspace/memory_v2` UI as
+ * of v0.22.0. Browses the MemPalace vault directly (read-only SQLite) so
+ * what the user sees here is exactly what Claude is reading from MCP.
  *
- * Owns the EntryEditor side drawer for create/edit/delete flows. Each
- * sub-view (Inbox, Timeline) handles its own fetching + live event
- * subscription so the dashboard stays light.
+ * Layout:
+ *   - Header: stats badges (drawers, wings, rooms, KG facts) + actions
+ *   - Left rail: collapsible wing tree
+ *   - Center: drawer list with substring search
+ *   - Right: detail panel (selected drawer's content + related KG triples)
  */
 export function DashboardView() {
-  const currentView = useDashboardStore((s) => s.currentView);
-  const setView = useDashboardStore((s) => s.setView);
-  const selectedProjectHash = useDashboardStore((s) => s.selectedProjectHash);
-  const selectedTag = useDashboardStore((s) => s.selectedTag);
-  const selectProject = useDashboardStore((s) => s.selectProject);
-  const selectTag = useDashboardStore((s) => s.selectTag);
-  const setProjectFilter = useDashboardStore((s) => s.setProjectFilter);
-  const setTagFilter = useDashboardStore((s) => s.setTagFilter);
-  const searchQuery = useDashboardStore((s) => s.searchQuery);
-  const setSearchQuery = useDashboardStore((s) => s.setSearchQuery);
-  const editingEntryId = useDashboardStore((s) => s.editingEntryId);
-  const startEditing = useDashboardStore((s) => s.startEditing);
-
-  const [stats, setStats] = useState<MemoryStats | null>(null);
-  const [projects, setProjects] = useState<MemoryProject[]>([]);
-  const [inboxCount, setInboxCount] = useState<number>(0);
-  const activeProject = useWorkspaceStore((s) => {
-    const id = s.activeProjectId;
-    return id ? s.projects.find((p) => p.id === id) ?? null : null;
-  });
-
-  // EntryEditor state: the editor renders both for create (when
-  // editingEntryId === 'new') and for edit (when an id matches a known
-  // entry). For inbox-accept flows we need a partial entry to pre-fill,
-  // not a saved one, so we keep that suggestion in local state.
-  const [editorTarget, setEditorTarget] = useState<{
-    entry: MemoryEntry | null;
-    prefill?: MemoryInboxItem;
-  } | null>(null);
-
-  // Initial load — stats + project list. Inbox count comes from a
-  // dedicated listInbox(undefined) call since the stats endpoint doesn't
-  // surface that number (it's volatile).
-  useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      try {
-        const [s, p, inbox] = await Promise.all([
-          api.memory.getStats(),
-          api.memory.listProjects(),
-          api.memory.listInbox(undefined),
-        ]);
-        if (cancelled) return;
-        setStats(s);
-        setProjects(p);
-        setInboxCount(inbox.length);
-      } catch (err) {
-        console.error('[dashboard] initial load failed', err);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  // Refresh stats / inbox count on memory events. We re-fetch rather than
-  // patch because the backend computes derived fields (top tags, diary
-  // streak) that can't be locally synthesized.
-  useEffect(() => {
-    const unsub = api.memory.onEvent((ev) => {
-      if (
-        ev.kind === 'entry_created' ||
-        ev.kind === 'entry_deleted' ||
-        ev.kind === 'diary_updated' ||
-        ev.kind === 'thread_summarized' ||
-        ev.kind === 'index_rebuilt'
-      ) {
-        void api.memory.getStats().then(setStats).catch(console.error);
-      }
-      if (ev.kind === 'inbox_added' || ev.kind === 'inbox_resolved') {
-        void api.memory
-          .listInbox(undefined)
-          .then((list) => setInboxCount(list.length))
-          .catch(console.error);
-      }
-    });
-    return unsub;
-  }, []);
-
-  // Sync the editor with the store's editingEntryId. The store holds the
-  // id only; resolving it to a MemoryEntry requires either knowing the
-  // entry already (from a list) or calling getEntry.
-  useEffect(() => {
-    if (editingEntryId === null) {
-      setEditorTarget(null);
-      return;
-    }
-    if (editingEntryId === 'new') {
-      setEditorTarget({ entry: null });
-      return;
-    }
-    void (async () => {
-      const entry = await api.memory.getEntry(editingEntryId).catch(() => null);
-      if (entry) setEditorTarget({ entry });
-    })();
-  }, [editingEntryId]);
-
-  const handleNewEntry = useCallback(() => {
-    startEditing('new');
-  }, [startEditing]);
-
-  const handleAcceptInbox = useCallback((item: MemoryInboxItem) => {
-    // Pre-fill the editor with the suggestion. We render a transient
-    // MemoryEntry-shaped object so the editor's create-mode validation
-    // still kicks in (slug, etc.).
-    setEditorTarget({
-      entry: null,
-      prefill: item,
-    });
-  }, []);
-
-  const handleEditorClose = useCallback(() => {
-    setEditorTarget(null);
-    startEditing(null);
-  }, [startEditing]);
-
-  const sortedProjects = useMemo(
-    () => [...projects].sort((a, b) => b.lastAccessedAt - a.lastAccessedAt),
-    [projects],
-  );
-
-  return (
-    <div className="flex h-full min-h-0 flex-1 flex-col bg-surface">
-      <DashboardTopBar
-        onNewEntry={handleNewEntry}
-        onSettings={() => setView('settings')}
-      />
-      <div className="flex min-h-0 flex-1 overflow-hidden">
-        <DashboardSidebar
-          currentView={currentView}
-          onView={setView}
-          projects={sortedProjects}
-          tags={stats?.topTags ?? []}
-          selectedProjectHash={selectedProjectHash}
-          selectedTag={selectedTag}
-          onSelectProject={selectProject}
-          onSelectTag={selectTag}
-          inboxCount={inboxCount}
-        />
-        <main className="flex min-h-0 flex-1 flex-col overflow-y-auto">
-          {/* Filter chips — show what's currently filtering the main view */}
-          {(selectedProjectHash || selectedTag || searchQuery) && (
-            <div className="flex shrink-0 items-center gap-1.5 border-b border-border-subtle bg-surface-2 px-4 py-2 text-[11px]">
-              <span className="text-text-muted">Filtering:</span>
-              {selectedProjectHash && (
-                <FilterChip
-                  label={
-                    projects.find((p) => p.hash === selectedProjectHash)?.name ??
-                    'project'
-                  }
-                  onClear={() => setProjectFilter(null)}
-                />
-              )}
-              {selectedTag && (
-                <FilterChip
-                  label={`#${selectedTag}`}
-                  onClear={() => setTagFilter(null)}
-                />
-              )}
-              {searchQuery && (
-                <FilterChip
-                  label={`"${searchQuery}"`}
-                  onClear={() => setSearchQuery('')}
-                />
-              )}
-            </div>
-          )}
-          <div className="flex-1 px-6 py-5">
-            {currentView === 'home' && (
-              <HomeView
-                stats={stats}
-                inboxCount={inboxCount}
-                onView={setView}
-                onAcceptInbox={handleAcceptInbox}
-                projectHash={selectedProjectHash}
-              />
-            )}
-            {currentView === 'all' && (
-              <AllEntriesView
-                projectHash={selectedProjectHash}
-                tag={selectedTag}
-                searchQuery={searchQuery}
-                onEdit={(id) => startEditing(id)}
-              />
-            )}
-            {currentView === 'inbox' && (
-              <div className="flex flex-col gap-3">
-                <h2 className="text-[14px] font-semibold text-text">Inbox</h2>
-                <p className="text-[11.5px] text-text-muted">
-                  Auto-captured suggestions waiting for your review. Accept to
-                  promote into a real memory entry, or dismiss to discard.
-                </p>
-                <InboxList
-                  projectHash={selectedProjectHash}
-                  mode="full"
-                  onAccept={handleAcceptInbox}
-                />
-              </div>
-            )}
-            {currentView === 'timeline' && (
-              <div className="flex flex-col gap-3">
-                <h2 className="text-[14px] font-semibold text-text">Timeline</h2>
-                <TimelineView
-                  projectPath={
-                    selectedProjectHash
-                      ? projects.find((p) => p.hash === selectedProjectHash)?.path
-                      : activeProject?.path
-                  }
-                />
-              </div>
-            )}
-            {currentView === 'settings' && <SettingsView />}
-          </div>
-        </main>
-      </div>
-      {editorTarget && (
-        <EntryEditor
-          // Remount when switching between entries (or new ↔ existing)
-          // so the local form state initializers re-run. Without a key
-          // the editor keeps showing the previous entry's fields when
-          // the user clicks a different row.
-          key={editorTarget.entry?.id ?? 'new'}
-          entry={editorTarget.entry}
-          prefill={editorTarget.prefill}
-          initialScope={
-            editorTarget.prefill || selectedProjectHash || activeProject
-              ? 'project'
-              : 'global'
-          }
-          initialProjectPath={
-            selectedProjectHash
-              ? projects.find((p) => p.hash === selectedProjectHash)?.path
-              : activeProject?.path
-          }
-          initialType={editorTarget.prefill?.suggestedType ?? 'project'}
-          onClose={handleEditorClose}
-          onSaved={() => {
-            void api.memory.getStats().then(setStats).catch(console.error);
-          }}
-          onDeleted={() => {
-            void api.memory.getStats().then(setStats).catch(console.error);
-          }}
-        />
-      )}
-    </div>
-  );
-}
-
-// ─── Top bar ──────────────────────────────────────────────────────────────
-
-interface DashboardTopBarProps {
-  onNewEntry: () => void;
-  onSettings: () => void;
-}
-
-function DashboardTopBar({ onNewEntry, onSettings }: DashboardTopBarProps) {
-  const searchQuery = useDashboardStore((s) => s.searchQuery);
-  const setSearchQuery = useDashboardStore((s) => s.setSearchQuery);
-  const setView = useDashboardStore((s) => s.setView);
-  const [local, setLocal] = useState(searchQuery);
-
-  // Debounced search — 250ms after the last keystroke we flush into the
-  // store, which drives `AllEntriesView`'s search effect. This avoids
-  // hammering the backend on every key.
-  useEffect(() => {
-    const t = setTimeout(() => {
-      if (local !== searchQuery) setSearchQuery(local);
-    }, 250);
-    return () => clearTimeout(t);
-  }, [local, searchQuery, setSearchQuery]);
-
-  // When local search activates, hop to the All view so the user sees
-  // results. We do this on the edge (empty → non-empty), not every render.
-  const handleChange = (val: string) => {
-    setLocal(val);
-    if (val && !searchQuery) setView('all');
-  };
-
-  return (
-    <header className="flex h-12 shrink-0 items-center gap-3 border-b border-border bg-surface-2 px-5">
-      <div className="flex items-center gap-2">
-        <Sparkles size={14} className="text-accent" />
-        <h1 className="text-[13.5px] font-semibold text-text">Memory dashboard</h1>
-      </div>
-      <div className="ml-2 hidden text-[10.5px] uppercase tracking-wider text-text-dim md:block">
-        v{__APP_VERSION__}
-      </div>
-      <div className="relative ml-auto w-[380px] max-w-[40vw]">
-        <Search
-          size={11}
-          className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-text-muted"
-        />
-        <input
-          type="search"
-          value={local}
-          onChange={(e) => handleChange(e.target.value)}
-          placeholder="Search memories…"
-          className="w-full rounded-[7px] border border-border-subtle bg-surface px-7 py-1.5 text-[12px] text-text outline-none transition focus:border-accent"
-        />
-        {local && (
-          <button
-            type="button"
-            onClick={() => handleChange('')}
-            className="absolute right-1.5 top-1/2 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded text-text-muted hover:bg-surface-3 hover:text-text"
-            title="Clear search"
-            aria-label="Clear search"
-          >
-            <X size={10} />
-          </button>
-        )}
-      </div>
-      <button
-        type="button"
-        onClick={onNewEntry}
-        className="inline-flex h-[26px] items-center gap-1.5 rounded-[7px] border border-accent/40 bg-accent/10 px-2.5 text-[11px] font-medium text-accent transition hover:bg-accent/20"
-        title="Create a new memory entry"
-      >
-        <Plus size={11} />
-        New entry
-      </button>
-      <button
-        type="button"
-        onClick={onSettings}
-        className="flex h-[26px] w-[26px] items-center justify-center rounded-[7px] border border-border-subtle bg-surface-3 text-text-muted transition hover:border-border-hi hover:text-text"
-        title="Memory settings"
-        aria-label="Settings"
-      >
-        <SettingsIcon size={12} />
-      </button>
-    </header>
-  );
-}
-
-// ─── Sidebar ──────────────────────────────────────────────────────────────
-
-interface DashboardSidebarProps {
-  currentView: DashboardViewName;
-  onView: (view: DashboardViewName) => void;
-  projects: MemoryProject[];
-  tags: MemoryStats['topTags'];
-  selectedProjectHash: string | null;
-  selectedTag: string | null;
-  onSelectProject: (hash: string | null) => void;
-  onSelectTag: (tag: string | null) => void;
-  inboxCount: number;
-}
-
-function DashboardSidebar({
-  currentView,
-  onView,
-  projects,
-  tags,
-  selectedProjectHash,
-  selectedTag,
-  onSelectProject,
-  onSelectTag,
-  inboxCount,
-}: DashboardSidebarProps) {
-  return (
-    <aside className="flex w-[240px] shrink-0 flex-col gap-3 overflow-y-auto border-r border-border bg-surface-sidebar px-2 py-3">
-      <nav className="flex flex-col gap-0.5">
-        {SIDEBAR_NAV.map((item) => {
-          const Icon = item.icon;
-          const active = currentView === item.view;
-          return (
-            <button
-              key={item.view}
-              type="button"
-              onClick={() => onView(item.view)}
-              className={cn(
-                'flex items-center justify-between rounded-[6px] px-2.5 py-1.5 text-[12px] transition',
-                active
-                  ? 'bg-accent/15 text-accent'
-                  : 'text-text-secondary hover:bg-surface-3 hover:text-text',
-              )}
-            >
-              <span className="flex items-center gap-2">
-                <Icon size={12} />
-                {item.label}
-              </span>
-              {item.view === 'inbox' && inboxCount > 0 && (
-                <span
-                  className={cn(
-                    'inline-flex h-4 min-w-[18px] items-center justify-center rounded-full px-1 font-mono text-[9.5px]',
-                    active ? 'bg-accent text-white' : 'bg-surface-4 text-text-muted',
-                  )}
-                >
-                  {inboxCount}
-                </span>
-              )}
-            </button>
-          );
-        })}
-      </nav>
-
-      <div className="mt-1 border-t border-border-subtle pt-2">
-        <SidebarSectionHeader
-          label="All projects"
-          count={projects.length}
-          allActive={selectedProjectHash === null}
-          onClearFilter={() => onSelectProject(null)}
-        />
-        <div className="flex flex-col gap-0.5">
-          {projects.length === 0 ? (
-            <div className="px-2.5 py-1.5 text-[11px] text-text-dim">
-              No projects yet.
-            </div>
-          ) : (
-            projects.slice(0, 50).map((p) => {
-              const active = selectedProjectHash === p.hash;
-              const ghost = !p.pathExists;
-              // Trim the file basename off the absolute path so the
-              // secondary line shows the parent dir — much more useful
-              // than re-displaying the project name beside its own label.
-              const parentDir = p.path.replace(/\/[^/]+$/, '') || '/';
-              return (
-                <button
-                  key={p.hash}
-                  type="button"
-                  onClick={() => onSelectProject(active ? null : p.hash)}
-                  className={cn(
-                    'group flex items-start justify-between gap-2 rounded-[5px] px-2.5 py-1 text-left text-[11.5px] transition',
-                    active
-                      ? 'bg-accent/15 text-accent'
-                      : 'text-text-secondary hover:bg-surface-3 hover:text-text',
-                    ghost && !active && 'opacity-55',
-                  )}
-                  title={
-                    ghost
-                      ? `${p.path}\n(folder missing on disk)`
-                      : p.path
-                  }
-                >
-                  <span className="flex min-w-0 flex-col gap-px">
-                    <span className="flex items-center gap-1.5">
-                      <FolderOpen size={10} className="shrink-0" />
-                      <span className="truncate">{p.name}</span>
-                      {ghost && (
-                        <span className="ml-1 shrink-0 rounded-sm bg-surface-3 px-1 py-px font-mono text-[9px] uppercase tracking-wider text-text-dim">
-                          missing
-                        </span>
-                      )}
-                    </span>
-                    <span className="truncate pl-3.5 font-mono text-[9.5px] text-text-dim">
-                      {parentDir}
-                    </span>
-                  </span>
-                  <span className="mt-0.5 shrink-0 font-mono text-[9.5px] text-text-dim">
-                    {p.memoryCount}
-                  </span>
-                </button>
-              );
-            })
-          )}
-        </div>
-      </div>
-
-      <div className="mt-1 border-t border-border-subtle pt-2">
-        <SidebarSectionHeader
-          label="Tags"
-          count={tags.length}
-          allActive={selectedTag === null}
-          onClearFilter={() => onSelectTag(null)}
-        />
-        <div className="flex flex-col gap-0.5">
-          {tags.length === 0 ? (
-            <div className="px-2.5 py-1.5 text-[11px] text-text-dim">
-              No tags yet.
-            </div>
-          ) : (
-            tags.map((t) => {
-              const active = selectedTag === t.tag;
-              return (
-                <button
-                  key={t.tag}
-                  type="button"
-                  onClick={() => onSelectTag(active ? null : t.tag)}
-                  className={cn(
-                    'flex items-center justify-between rounded-[5px] px-2.5 py-1 text-[11.5px] transition',
-                    active
-                      ? 'bg-accent/15 text-accent'
-                      : 'text-text-secondary hover:bg-surface-3 hover:text-text',
-                  )}
-                >
-                  <span className="flex items-center gap-1.5 truncate">
-                    <Hash size={10} />
-                    <span className="truncate">{t.tag}</span>
-                  </span>
-                  <span className="ml-2 shrink-0 font-mono text-[9.5px] text-text-dim">
-                    {t.count}
-                  </span>
-                </button>
-              );
-            })
-          )}
-        </div>
-      </div>
-    </aside>
-  );
-}
-
-function SidebarSectionHeader({
-  label,
-  count,
-  allActive,
-  onClearFilter,
-}: {
-  label: string;
-  count: number;
-  allActive: boolean;
-  onClearFilter: () => void;
-}) {
-  return (
-    <div className="mb-1 flex items-center justify-between px-2 text-[10px] font-semibold uppercase tracking-wider text-text-muted">
-      <span>
-        {label} ({count})
-      </span>
-      {!allActive && (
-        <button
-          type="button"
-          onClick={onClearFilter}
-          className="rounded px-1 text-text-muted hover:bg-surface-3 hover:text-text"
-          title="Clear filter"
-        >
-          <X size={9} />
-        </button>
-      )}
-    </div>
-  );
-}
-
-function FilterChip({ label, onClear }: { label: string; onClear: () => void }) {
-  return (
-    <span className="inline-flex items-center gap-1 rounded-full border border-accent/30 bg-accent/10 px-2 py-0.5 text-[10.5px] text-accent">
-      {label}
-      <button
-        type="button"
-        onClick={onClear}
-        className="flex h-3 w-3 items-center justify-center rounded-full hover:bg-accent/20"
-        title="Clear"
-      >
-        <X size={9} />
-      </button>
-    </span>
-  );
-}
-
-// ─── Home view ───────────────────────────────────────────────────────────
-
-interface HomeViewProps {
-  stats: MemoryStats | null;
-  inboxCount: number;
-  onView: (view: DashboardViewName) => void;
-  onAcceptInbox: (item: MemoryInboxItem) => void;
-  projectHash: string | null;
-}
-
-function HomeView({
-  stats,
-  inboxCount,
-  onView,
-  onAcceptInbox,
-  projectHash,
-}: HomeViewProps) {
-  const [recent, setRecent] = useState<MemoryEntry[]>([]);
-  const [pinned, setPinned] = useState<MemoryEntry[]>([]);
+  const [overview, setOverview] = useState<MemPalaceOverview | null>(null);
+  const [wings, setWings] = useState<MemPalaceWing[]>([]);
+  const [rooms, setRooms] = useState<Map<string, MemPalaceRoom[]>>(new Map());
+  const [drawers, setDrawers] = useState<MemPalaceDrawer[]>([]);
+  const [triples, setTriples] = useState<MemPalaceTriple[]>([]);
+  const [selectedWing, setSelectedWing] = useState<string | null>(null);
+  const [selectedRoom, setSelectedRoom] = useState<string | null>(null);
+  const [expandedWings, setExpandedWings] = useState<Set<string>>(new Set());
+  const [query, setQuery] = useState('');
+  const [selectedDrawerId, setSelectedDrawerId] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
-    void (async () => {
-      try {
-        const [recentList, pinnedList] = await Promise.all([
-          api.memory.listEntries({ scope: 'project' }).catch(() => []),
-          api.memory.listEntries({ scope: 'project', pinnedOnly: true }).catch(() => []),
-        ]);
-        if (cancelled) return;
-        const sortedRecent = [...recentList]
-          .sort((a, b) => b.updatedAt - a.updatedAt)
-          .slice(0, 12);
-        setRecent(sortedRecent);
-        setPinned(pinnedList);
-      } catch (err) {
-        console.error('[dashboard] home load failed', err);
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  return (
-    <div className="flex flex-col gap-5">
-      {/* Stats card */}
-      <section
-        className="grid grid-cols-2 gap-3 rounded-[10px] border border-border-subtle bg-surface-2 p-4 sm:grid-cols-4"
-        aria-label="Memory stats"
-      >
-        <StatCard
-          label="Projects"
-          value={stats?.totalProjects ?? 0}
-          icon={FolderOpen}
-        />
-        <StatCard
-          label="Memories"
-          value={stats?.totalMemories ?? 0}
-          icon={BookOpen}
-        />
-        <StatCard
-          label="Diary days"
-          value={stats?.totalDiaryDays ?? 0}
-          icon={Calendar}
-        />
-        <StatCard
-          label="Streak"
-          value={stats?.diaryStreak ?? 0}
-          suffix="days"
-          icon={Sparkles}
-          accent
-        />
-      </section>
-
-      {/* Recent entries */}
-      <section>
-        <SectionHeader
-          title="Recent entries"
-          onSeeAll={() => onView('all')}
-          count={recent.length}
-        />
-        {loading ? (
-          <div className="px-1 py-4 text-[11px] text-text-muted">Loading…</div>
-        ) : recent.length === 0 ? (
-          <EmptyHomeSection
-            icon={BookOpen}
-            message="No memories yet. Capture one from a chat thread or click 'New entry' above."
-          />
-        ) : (
-          <ul className="grid grid-cols-1 gap-2 md:grid-cols-2">
-            {recent.map((entry) => (
-              <EntryRow key={entry.id} entry={entry} />
-            ))}
-          </ul>
-        )}
-      </section>
-
-      {/* Pinned */}
-      <section>
-        <SectionHeader
-          title="Pinned"
-          onSeeAll={() => onView('all')}
-          count={pinned.length}
-        />
-        {pinned.length === 0 ? (
-          <EmptyHomeSection
-            icon={Pin}
-            message="No pinned memories. Pin the most important entries so they stay at the top."
-          />
-        ) : (
-          <div className="flex max-h-[280px] flex-col gap-2 overflow-y-auto">
-            {pinned.slice(0, 50).map((entry) => (
-              <EntryRow key={entry.id} entry={entry} compact />
-            ))}
-          </div>
-        )}
-      </section>
-
-      {/* Inbox preview */}
-      <section>
-        <SectionHeader
-          title="Inbox"
-          onSeeAll={() => onView('inbox')}
-          count={inboxCount}
-        />
-        <InboxList
-          projectHash={projectHash}
-          mode="preview"
-          onAccept={onAcceptInbox}
-          onJumpToFull={() => onView('inbox')}
-        />
-      </section>
-
-      {/* Settings shortcuts — deep-link into Claude · Settings tabs */}
-      <SettingsShortcuts
-        variant="compact"
-        onMemorySettings={() => onView('settings')}
-      />
-    </div>
-  );
-}
-
-function StatCard({
-  label,
-  value,
-  suffix,
-  icon: Icon,
-  accent,
-}: {
-  label: string;
-  value: number;
-  suffix?: string;
-  icon: typeof Home;
-  accent?: boolean;
-}) {
-  return (
-    <div className="flex items-center gap-3 rounded-[8px] border border-border-subtle bg-surface px-3 py-2.5">
-      <Icon
-        size={16}
-        className={accent ? 'text-accent' : 'text-text-muted'}
-      />
-      <div className="flex min-w-0 flex-col">
-        <span className="text-[10.5px] uppercase tracking-wider text-text-muted">
-          {label}
-        </span>
-        <span className="flex items-baseline gap-1 text-[18px] font-bold tabular-nums text-text">
-          {value}
-          {suffix && (
-            <span className="text-[10.5px] font-normal text-text-muted">
-              {suffix}
-            </span>
-          )}
-        </span>
-      </div>
-    </div>
-  );
-}
-
-function SectionHeader({
-  title,
-  count,
-  onSeeAll,
-}: {
-  title: string;
-  count: number;
-  onSeeAll?: () => void;
-}) {
-  return (
-    <div className="mb-2 flex items-baseline justify-between">
-      <h2 className="text-[12.5px] font-semibold uppercase tracking-wider text-text-secondary">
-        {title}
-        <span className="ml-1.5 font-mono text-[10px] text-text-dim">{count}</span>
-      </h2>
-      {onSeeAll && count > 0 && (
-        <button
-          type="button"
-          onClick={onSeeAll}
-          className="inline-flex items-center gap-1 text-[10.5px] text-text-muted hover:text-text"
-        >
-          See all
-          <ChevronRight size={9} />
-        </button>
-      )}
-    </div>
-  );
-}
-
-function EmptyHomeSection({
-  icon: Icon,
-  message,
-}: {
-  icon: typeof Home;
-  message: string;
-}) {
-  return (
-    <div className="flex items-center gap-3 rounded-[8px] border border-dashed border-border-subtle bg-surface-2 px-4 py-5">
-      <Icon size={16} className="shrink-0 text-text-dim" />
-      <p className="text-[11.5px] leading-relaxed text-text-muted">{message}</p>
-    </div>
-  );
-}
-
-// ─── All entries view ────────────────────────────────────────────────────
-
-interface AllEntriesViewProps {
-  projectHash: string | null;
-  tag: string | null;
-  searchQuery: string;
-  onEdit: (id: string) => void;
-}
-
-function AllEntriesView({
-  projectHash,
-  tag,
-  searchQuery,
-  onEdit,
-}: AllEntriesViewProps) {
-  const [entries, setEntries] = useState<MemoryEntry[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
-    void (async () => {
-      try {
-        if (searchQuery.trim().length > 0) {
-          // Search path — backend ranks across slug/description/body/tags.
-          const hits = await api.memory.search({
-            query: searchQuery,
-            scope: projectHash ? 'project' : undefined,
-            tags: tag ? [tag] : undefined,
-            limit: 200,
-          });
-          if (cancelled) return;
-          setEntries(hits.map((h) => h.entry));
-        } else {
-          // List path — pulls both global and project entries when no
-          // project filter is set. The backend honors `projectPath` when
-          // present, otherwise returns the union across the user's stores.
-          const [globalEntries, projectEntries] = await Promise.all([
-            projectHash
-              ? Promise.resolve([])
-              : api.memory.listEntries({ scope: 'global' }).catch(() => []),
-            api.memory
-              .listEntries({
-                scope: 'project',
-              })
-              .catch(() => []),
-          ]);
-          if (cancelled) return;
-          let combined = [...globalEntries, ...projectEntries];
-          if (projectHash) {
-            combined = combined.filter((e) => e.projectHash === projectHash);
-          }
-          if (tag) {
-            combined = combined.filter((e) => e.tags.includes(tag));
-          }
-          combined.sort((a, b) => b.updatedAt - a.updatedAt);
-          setEntries(combined.slice(0, 200));
-        }
-      } catch (err) {
-        console.error('[dashboard] all entries load failed', err);
-        if (!cancelled) setEntries([]);
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [projectHash, tag, searchQuery]);
-
-  if (loading) {
-    return <div className="px-1 py-4 text-[11px] text-text-muted">Loading…</div>;
-  }
-
-  if (entries.length === 0) {
-    return (
-      <EmptyHomeSection
-        icon={BookOpen}
-        message={
-          searchQuery
-            ? `No matches for "${searchQuery}".`
-            : 'No entries match the current filters.'
-        }
-      />
-    );
-  }
-
-  return (
-    <div className="flex flex-col gap-3">
-      <h2 className="text-[14px] font-semibold text-text">
-        All entries
-        <span className="ml-2 font-mono text-[11px] text-text-muted">
-          {entries.length}
-        </span>
-      </h2>
-      <ul className="flex flex-col gap-2">
-        {entries.map((entry) => (
-          <EntryRow
-            key={entry.id}
-            entry={entry}
-            onClick={() => onEdit(entry.id)}
-          />
-        ))}
-      </ul>
-    </div>
-  );
-}
-
-// ─── Entry row ───────────────────────────────────────────────────────────
-
-interface EntryRowProps {
-  entry: MemoryEntry;
-  compact?: boolean;
-  onClick?: () => void;
-}
-
-function EntryRow({ entry, compact, onClick }: EntryRowProps) {
-  const selectTag = useDashboardStore((s) => s.selectTag);
-  return (
-    <li
-      className={cn(
-        'group flex flex-col gap-1.5 rounded-[8px] border border-border-subtle bg-surface-2 p-3 transition hover:border-border-hi',
-        onClick && 'cursor-pointer',
-      )}
-      onClick={onClick}
-      role={onClick ? 'button' : undefined}
-    >
-      <div className="flex items-center gap-1.5">
-        <span
-          className={cn(
-            'rounded-full border px-1.5 py-0.5 text-[10px] uppercase tracking-wider',
-            TYPE_STYLES[entry.type],
-          )}
-        >
-          {entry.type}
-        </span>
-        <span className="truncate font-mono text-[11.5px] text-text">
-          {entry.slug}
-        </span>
-        {entry.pinned && (
-          <Pin size={10} className="text-accent" aria-label="Pinned" />
-        )}
-        <span className="ml-auto flex shrink-0 items-center gap-1 font-mono text-[10px] text-text-dim">
-          <Clock size={9} />
-          {formatRelative(entry.updatedAt)}
-        </span>
-      </div>
-      {entry.description && (
-        <p className="line-clamp-1 text-[12px] text-text-secondary">
-          {entry.description}
-        </p>
-      )}
-      {!compact && entry.preview && (
-        <p className="line-clamp-2 text-[11px] leading-relaxed text-text-muted">
-          {entry.preview}
-        </p>
-      )}
-      <div className="flex flex-wrap items-center gap-1">
-        {entry.scope === 'project' && entry.projectHash && (
-          <span className="rounded border border-border-subtle bg-surface-3 px-1 py-px font-mono text-[9.5px] text-text-muted">
-            project
-          </span>
-        )}
-        {entry.scope === 'global' && (
-          <span className="rounded border border-[rgba(168,85,247,0.3)] bg-[rgba(168,85,247,0.1)] px-1 py-px font-mono text-[9.5px] text-accent-2">
-            global
-          </span>
-        )}
-        {entry.tags.slice(0, 4).map((t) => (
-          <button
-            key={t}
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              selectTag(t);
-            }}
-            className="rounded border border-border-subtle bg-surface-3 px-1 py-px font-mono text-[9.5px] text-text-secondary transition hover:border-accent/40 hover:text-accent"
-          >
-            #{t}
-          </button>
-        ))}
-      </div>
-    </li>
-  );
-}
-
-// ─── Settings view ───────────────────────────────────────────────────────
-
-function SettingsView() {
-  const [settings, setSettings] = useState<MemorySettings | null>(null);
-  const [saving, setSaving] = useState(false);
+  const [drawersLoading, setDrawersLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      try {
-        const s = await api.memory.getSettings();
-        if (!cancelled) setSettings(s);
-      } catch (err) {
-        console.error('[dashboard] getSettings failed', err);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  const patch = async (delta: Partial<MemorySettings>) => {
-    if (!settings) return;
-    setSaving(true);
-    setError(null);
-    try {
-      const next = await api.memory.setSettings(delta);
-      setSettings(next);
-    } catch (err) {
-      setError((err as Error).message ?? 'Failed to save settings.');
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  if (!settings) {
-    return <div className="px-1 py-4 text-[11px] text-text-muted">Loading settings…</div>;
-  }
-
-  return (
-    <div className="flex max-w-[760px] flex-col gap-5">
-      <div>
-        <h2 className="text-[14px] font-semibold text-text">Settings</h2>
-        <p className="mt-1 text-[11.5px] text-text-muted">
-          Memory is stored locally under <code className="rounded bg-surface-3 px-1">~/.devspace/</code>.
-          Toggles take effect immediately.
-        </p>
-      </div>
-
-      <SettingsShortcuts variant="full" />
-
-      <div className="flex items-center gap-2 border-t border-border-subtle pt-4">
-        <Sparkles size={12} className="text-accent" />
-        <h3 className="text-[12.5px] font-semibold uppercase tracking-wider text-text-secondary">
-          Memory
-        </h3>
-      </div>
-
-      <SettingRow
-        label="Enabled"
-        description="Master switch. When off, memory capture and recall both pause."
-      >
-        <Toggle
-          checked={settings.enabled}
-          onChange={(v) => patch({ enabled: v })}
-          disabled={saving}
-        />
-      </SettingRow>
-
-      <SettingRow
-        label="Auto-capture"
-        description="Smart mode flags corrections, decisions, and named entities. Manual only captures via slash-command. Off disables capture entirely."
-      >
-        <div className="flex gap-1">
-          {(['smart', 'manual', 'off'] as const).map((mode) => (
-            <button
-              key={mode}
-              type="button"
-              onClick={() => patch({ autoCapture: mode })}
-              disabled={saving}
-              className={cn(
-                'rounded-[5px] border px-2.5 py-1 text-[11px] transition',
-                settings.autoCapture === mode
-                  ? 'border-accent bg-accent/10 text-accent'
-                  : 'border-border-subtle bg-surface-3 text-text-secondary hover:text-text',
-              )}
-            >
-              {mode}
-            </button>
-          ))}
-        </div>
-      </SettingRow>
-
-      <SettingRow
-        label="Inject on new thread"
-        description="Prepend the project's MEMORY.md to Claude's system prompt when a new chat thread starts. Bounded by max inject lines."
-      >
-        <Toggle
-          checked={settings.injectOnNewThread}
-          onChange={(v) => patch({ injectOnNewThread: v })}
-          disabled={saving}
-        />
-      </SettingRow>
-
-      <SettingRow
-        label="Max inject lines"
-        description={`How many lines of MEMORY.md to inject at most. Currently ${settings.maxInjectLines}.`}
-      >
-        <input
-          type="range"
-          min={20}
-          max={500}
-          step={10}
-          value={settings.maxInjectLines}
-          onChange={(e) =>
-            void patch({ maxInjectLines: Number(e.target.value) })
-          }
-          disabled={saving}
-          className="w-[180px] accent-accent"
-        />
-      </SettingRow>
-
-      <SettingRow
-        label="MemPalace sync"
-        description="Opt-in one-way push to MemPalace MCP. Memories tagged [mempalace] get mirrored on save."
-      >
-        <Toggle
-          checked={settings.mempalaceSyncEnabled}
-          onChange={(v) => patch({ mempalaceSyncEnabled: v })}
-          disabled={saving}
-        />
-      </SettingRow>
-
-      <PruneGhostsRow onError={setError} />
-
-      <div className="border-t border-border-subtle pt-4">
-        <button
-          type="button"
-          onClick={() => {
-            void api.memory
-              .openDir('global')
-              .catch((err) => setError((err as Error).message));
-          }}
-          className="inline-flex items-center gap-1.5 rounded-[6px] border border-border-subtle bg-surface-3 px-2.5 py-1.5 text-[11px] text-text-secondary transition hover:bg-surface-4 hover:text-text"
-        >
-          <ExternalLink size={11} />
-          Open ~/.devspace/ in Finder
-        </button>
-      </div>
-
-      {error && (
-        <div className="rounded-[6px] border border-semantic-error/30 bg-semantic-error/10 px-2.5 py-1.5 text-[11px] text-semantic-error">
-          {error}
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ─── Settings shortcuts ──────────────────────────────────────────────────
-//
-// Ergonomic deep-link grid that opens the global Claude · Settings page on a
-// specific tab. Reuses the `devspace:open-settings` custom event that
-// App.tsx already subscribes to (App.tsx:106-127), so no plumbing is added.
-// Settings replaces the editor area while open; closing it returns to the
-// dashboard tab automatically.
-
-type ClaudeSettingsTab =
-  | 'account'
-  | 'agents'
-  | 'teams'
-  | 'skills'
-  | 'design'
-  | 'mcp'
-  | 'files'
-  | 'tmux'
-  | 'llm';
-
-function openClaudeSettings(tab: ClaudeSettingsTab) {
-  window.dispatchEvent(
-    new CustomEvent('devspace:open-settings', { detail: { tab } }),
-  );
-}
-
-const SHORTCUT_TILES: Array<{
-  tab: ClaudeSettingsTab;
-  label: string;
-  hint: string;
-  icon: typeof Home;
-}> = [
-  { tab: 'account', label: 'Account', hint: 'Subscription / API key', icon: KeyRound },
-  { tab: 'agents', label: 'Agents', hint: 'Built-in & custom agents', icon: Bot },
-  { tab: 'teams', label: 'Teams', hint: 'Multi-agent teams', icon: Users },
-  { tab: 'skills', label: 'Skills', hint: 'Claude Code skills', icon: Lightbulb },
-  { tab: 'design', label: 'Design', hint: 'Project tokens & libs', icon: Paintbrush },
-  { tab: 'mcp', label: 'MCP', hint: 'MCP servers', icon: Plug },
-  { tab: 'files', label: 'Files', hint: 'Raw ~/.claude/* edit', icon: FileText },
-  { tab: 'tmux', label: 'tmux', hint: 'Sessions & runners', icon: Server },
-  { tab: 'llm', label: 'LLM', hint: 'Provider routing', icon: Brain },
-];
-
-function SettingsShortcuts({
-  variant = 'compact',
-  onMemorySettings,
-}: {
-  variant?: 'compact' | 'full';
-  onMemorySettings?: () => void;
-}) {
-  return (
-    <section className="flex flex-col gap-2">
-      <div className="flex items-baseline justify-between">
-        <h2 className="text-[12.5px] font-semibold uppercase tracking-wider text-text-secondary">
-          Settings shortcuts
-          <span className="ml-1.5 font-mono text-[10px] text-text-dim">
-            {SHORTCUT_TILES.length + (onMemorySettings ? 1 : 0)}
-          </span>
-        </h2>
-        {variant === 'compact' && (
-          <span className="text-[10.5px] text-text-muted">
-            Open Claude · Settings on a specific tab
-          </span>
-        )}
-      </div>
-      <div
-        className={cn(
-          'grid gap-2',
-          variant === 'compact'
-            ? 'grid-cols-2 sm:grid-cols-3 lg:grid-cols-5'
-            : 'grid-cols-2 sm:grid-cols-3 lg:grid-cols-4',
-        )}
-      >
-        {onMemorySettings && (
-          <ShortcutTile
-            label="Memory"
-            hint="Auto-capture, inject, sync"
-            icon={Sparkles}
-            accent
-            onClick={onMemorySettings}
-          />
-        )}
-        {SHORTCUT_TILES.map((t) => (
-          <ShortcutTile
-            key={t.tab}
-            label={t.label}
-            hint={t.hint}
-            icon={t.icon}
-            onClick={() => openClaudeSettings(t.tab)}
-          />
-        ))}
-      </div>
-      {variant === 'full' && (
-        <p className="mt-1 text-[11px] text-text-muted">
-          Each tile opens the global Claude · Settings page on the selected
-          tab. Closing it returns you here.
-        </p>
-      )}
-    </section>
-  );
-}
-
-function ShortcutTile({
-  label,
-  hint,
-  icon: Icon,
-  accent,
-  onClick,
-}: {
-  label: string;
-  hint: string;
-  icon: typeof Home;
-  accent?: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      title={`${label} — ${hint}`}
-      className={cn(
-        'group flex items-start gap-2.5 rounded-[8px] border bg-surface-2 px-3 py-2.5 text-left transition',
-        accent
-          ? 'border-accent/40 hover:border-accent hover:bg-accent/5'
-          : 'border-border-subtle hover:border-border-hi hover:bg-surface-3',
-      )}
-    >
-      <Icon
-        size={14}
-        className={cn(
-          'mt-[1px] shrink-0 transition',
-          accent
-            ? 'text-accent'
-            : 'text-text-muted group-hover:text-text',
-        )}
-      />
-      <div className="flex min-w-0 flex-col">
-        <span className="text-[12px] font-medium text-text">{label}</span>
-        <span className="truncate text-[10.5px] text-text-muted">{hint}</span>
-      </div>
-    </button>
-  );
-}
-
-// Counts ghosts in real time + offers a one-click prune for empty
-// ones. Ghosts with content are preserved (user may still want to read
-// memories captured before moving the folder).
-function PruneGhostsRow({ onError }: { onError: (msg: string | null) => void }) {
-  const [projects, setProjects] = useState<MemoryProject[]>([]);
-  const [busy, setBusy] = useState(false);
-  const [lastPruned, setLastPruned] = useState<number | null>(null);
+  const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const refresh = useCallback(async () => {
+    setLoading(true);
+    setError(null);
     try {
-      const list = await api.memory.listProjects();
-      setProjects(list);
+      const [ov, wingList] = await Promise.all([
+        api.mempalaceData.getOverview(),
+        api.mempalaceData.listWings(),
+      ]);
+      setOverview(ov);
+      setWings(wingList);
     } catch (err) {
-      console.error('[dashboard] listProjects failed', err);
+      setError((err as Error).message);
+    } finally {
+      setLoading(false);
     }
   }, []);
 
@@ -1378,124 +74,611 @@ function PruneGhostsRow({ onError }: { onError: (msg: string | null) => void }) 
     void refresh();
   }, [refresh]);
 
-  const ghosts = projects.filter((p) => !p.pathExists);
-  const emptyGhosts = ghosts.filter(
-    (p) => p.memoryCount === 0 && p.threadCount === 0 && p.diaryCount === 0,
-  );
-  const ghostsWithContent = ghosts.length - emptyGhosts.length;
-
-  const handlePrune = async () => {
-    setBusy(true);
-    onError(null);
+  // Reload the drawer pane whenever the filter set changes — wing/room
+  // selection or a debounced query update.
+  const loadDrawers = useCallback(async () => {
+    setDrawersLoading(true);
     try {
-      const result = await api.memory.pruneGhostProjects();
-      setLastPruned(result.prunedHashes.length);
-      await refresh();
+      const list = await api.mempalaceData.listDrawers({
+        wing: selectedWing ?? undefined,
+        room: selectedRoom ?? undefined,
+        query: query.trim() === '' ? undefined : query,
+        limit: 80,
+      });
+      setDrawers(list);
+      if (list.length > 0 && (selectedDrawerId === null || !list.some((d) => d.id === selectedDrawerId))) {
+        setSelectedDrawerId(list[0]!.id);
+      } else if (list.length === 0) {
+        setSelectedDrawerId(null);
+      }
     } catch (err) {
-      onError((err as Error).message ?? 'Failed to prune.');
+      setError((err as Error).message);
     } finally {
-      setBusy(false);
+      setDrawersLoading(false);
     }
-  };
+  }, [selectedWing, selectedRoom, query, selectedDrawerId]);
 
-  return (
-    <div className="flex items-start justify-between gap-4 rounded-[8px] border border-border-subtle bg-surface-2 px-3 py-3">
-      <div className="min-w-0 flex-1">
-        <div className="text-[12px] font-medium text-text">Prune ghost projects</div>
-        <p className="mt-0.5 text-[11px] leading-relaxed text-text-muted">
-          Removes projects whose on-disk folder no longer exists AND have
-          no captured memories. Ghosts with content are kept so you can
-          still read them.
-        </p>
-        <div className="mt-1.5 flex flex-wrap items-center gap-3 text-[10.5px] text-text-dim">
-          <span>
-            <strong className="text-text-secondary">{emptyGhosts.length}</strong> empty ghost
-            {emptyGhosts.length === 1 ? '' : 's'} ready to prune
-          </span>
-          {ghostsWithContent > 0 && (
-            <span>
-              <strong className="text-text-secondary">{ghostsWithContent}</strong> ghost
-              {ghostsWithContent === 1 ? '' : 's'} kept (has content)
-            </span>
-          )}
-          {lastPruned !== null && (
-            <span className="text-semantic-success">
-              Pruned {lastPruned} {lastPruned === 1 ? 'project' : 'projects'}.
-            </span>
-          )}
+  useEffect(() => {
+    if (searchTimer.current !== null) clearTimeout(searchTimer.current);
+    searchTimer.current = setTimeout(() => {
+      void loadDrawers();
+    }, query.length === 0 ? 0 : 220);
+    return () => {
+      if (searchTimer.current !== null) clearTimeout(searchTimer.current);
+    };
+    // selectedDrawerId is intentionally excluded — re-running this effect
+    // every time the selection changes would clobber the user's selection.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedWing, selectedRoom, query]);
+
+  // Lazy-load the rooms list for a wing when it's expanded for the first time.
+  const toggleWing = useCallback(
+    async (wing: string) => {
+      const next = new Set(expandedWings);
+      if (next.has(wing)) {
+        next.delete(wing);
+      } else {
+        next.add(wing);
+        if (!rooms.has(wing)) {
+          try {
+            const list = await api.mempalaceData.listRooms(wing);
+            setRooms((prev) => {
+              const m = new Map(prev);
+              m.set(wing, list);
+              return m;
+            });
+          } catch (err) {
+            console.error('[mempalace] listRooms failed', err);
+          }
+        }
+      }
+      setExpandedWings(next);
+    },
+    [expandedWings, rooms],
+  );
+
+  const selectAll = useCallback(() => {
+    setSelectedWing(null);
+    setSelectedRoom(null);
+  }, []);
+
+  const selectWing = useCallback((wing: string) => {
+    setSelectedWing(wing);
+    setSelectedRoom(null);
+  }, []);
+
+  const selectRoom = useCallback((wing: string, room: string) => {
+    setSelectedWing(wing);
+    setSelectedRoom(room);
+  }, []);
+
+  // Pull related KG triples for the currently selected drawer's wing so the
+  // detail pane can show "facts about this wing". Cheap query, no debounce.
+  useEffect(() => {
+    if (selectedDrawerId === null) {
+      setTriples([]);
+      return;
+    }
+    const drawer = drawers.find((d) => d.id === selectedDrawerId);
+    if (drawer === undefined) {
+      setTriples([]);
+      return;
+    }
+    let cancelled = false;
+    void api.mempalaceData
+      .listTriples({ limit: 20 })
+      .then((list) => {
+        if (cancelled) return;
+        if (drawer.wing === null) {
+          setTriples(list);
+          return;
+        }
+        const wingSlug = drawer.wing.toLowerCase();
+        const related = list.filter(
+          (t) =>
+            t.subjectLabel.toLowerCase().includes(wingSlug) ||
+            t.objectLabel.toLowerCase().includes(wingSlug) ||
+            t.predicate.toLowerCase().includes(wingSlug),
+        );
+        setTriples(related.length > 0 ? related : list.slice(0, 8));
+      })
+      .catch(() => {
+        if (!cancelled) setTriples([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedDrawerId, drawers]);
+
+  const selectedDrawer = useMemo(
+    () => drawers.find((d) => d.id === selectedDrawerId) ?? null,
+    [drawers, selectedDrawerId],
+  );
+
+  // Render — branch the empty state at the top so all the
+  // happy-path layout can assume an open vault below.
+  if (loading && overview === null) {
+    return (
+      <div className="flex h-full items-center justify-center bg-background">
+        <div className="flex items-center gap-2 text-[12px] text-text-muted">
+          <Loader2 className="h-4 w-4 animate-spin" />
+          Loading MemPalace…
         </div>
       </div>
-      <button
-        type="button"
-        onClick={() => void handlePrune()}
-        disabled={busy || emptyGhosts.length === 0}
-        className={cn(
-          'inline-flex shrink-0 items-center gap-1.5 rounded-[6px] border px-2.5 py-1.5 text-[11px] transition',
-          emptyGhosts.length === 0
-            ? 'cursor-not-allowed border-border-subtle bg-surface-3 text-text-dim'
-            : 'border-semantic-error/30 bg-semantic-error/10 text-semantic-error hover:bg-semantic-error/20',
-        )}
-      >
-        <FolderX size={11} />
-        {busy ? 'Pruning…' : `Prune ${emptyGhosts.length || ''}`.trim()}
-      </button>
-    </div>
-  );
-}
+    );
+  }
 
-function SettingRow({
-  label,
-  description,
-  children,
-}: {
-  label: string;
-  description: string;
-  children: React.ReactNode;
-}) {
+  if (overview !== null && !overview.vault.available) {
+    return <EmptyVaultState reason={overview.vault.reason ?? 'MemPalace is not available.'} />;
+  }
+
   return (
-    <div className="flex items-start justify-between gap-4 rounded-[8px] border border-border-subtle bg-surface-2 px-3 py-3">
-      <div className="min-w-0 flex-1">
-        <div className="text-[12px] font-medium text-text">{label}</div>
-        <p className="mt-0.5 text-[11px] leading-relaxed text-text-muted">
-          {description}
-        </p>
+    <div className="flex h-full flex-col bg-background text-text">
+      <DashboardHeader overview={overview} onRefresh={refresh} loading={loading} />
+
+      {error !== null ? (
+        <div className="mx-3 mt-2 flex items-start gap-2 rounded-[8px] border border-semantic-error/40 bg-semantic-error/10 px-3 py-2 text-[11.5px] text-semantic-error">
+          <AlertTriangle className="mt-0.5 h-3.5 w-3.5 flex-none" />
+          <div className="flex-1">{error}</div>
+          <button
+            type="button"
+            onClick={() => setError(null)}
+            className="rounded p-0.5 hover:bg-semantic-error/10"
+          >
+            <X className="h-3 w-3" />
+          </button>
+        </div>
+      ) : null}
+
+      <div className="flex min-h-0 flex-1">
+        <WingRail
+          wings={wings}
+          rooms={rooms}
+          expandedWings={expandedWings}
+          selectedWing={selectedWing}
+          selectedRoom={selectedRoom}
+          totalDrawers={overview?.drawerCount ?? 0}
+          onSelectAll={selectAll}
+          onSelectWing={selectWing}
+          onSelectRoom={selectRoom}
+          onToggleWing={toggleWing}
+        />
+
+        <DrawerList
+          drawers={drawers}
+          loading={drawersLoading}
+          query={query}
+          onQueryChange={setQuery}
+          selectedDrawerId={selectedDrawerId}
+          onSelect={setSelectedDrawerId}
+          wingFilter={selectedWing}
+          roomFilter={selectedRoom}
+        />
+
+        <DrawerDetail drawer={selectedDrawer} triples={triples} />
       </div>
-      <div className="shrink-0">{children}</div>
     </div>
   );
 }
 
-function Toggle({
-  checked,
-  onChange,
-  disabled,
+// --- Empty state -----------------------------------------------------------
+
+function EmptyVaultState({ reason }: { reason: string }) {
+  return (
+    <div className="flex h-full flex-col items-center justify-center gap-3 bg-background px-8 text-center">
+      <div className="rounded-full bg-accent/10 p-3">
+        <Brain className="h-7 w-7 text-accent" />
+      </div>
+      <h2 className="text-[15px] font-semibold text-text">MemPalace is empty</h2>
+      <p className="max-w-md text-[12px] leading-relaxed text-text-muted">{reason}</p>
+      <div className="mt-2 flex items-center gap-2 text-[11.5px] text-text-muted">
+        <SettingsIcon className="h-3.5 w-3.5" />
+        Open Settings → Memory to install or repair MemPalace.
+      </div>
+    </div>
+  );
+}
+
+// --- Header ----------------------------------------------------------------
+
+function DashboardHeader({
+  overview,
+  onRefresh,
+  loading,
 }: {
-  checked: boolean;
-  onChange: (next: boolean) => void;
-  disabled?: boolean;
+  overview: MemPalaceOverview | null;
+  onRefresh: () => void;
+  loading: boolean;
+}) {
+  const handleOpenVault = useCallback(() => {
+    void api.mempalace.openVault().catch(() => undefined);
+  }, []);
+
+  return (
+    <div className="flex items-center gap-3 border-b border-border-subtle bg-surface px-4 py-3">
+      <div className="flex items-center gap-2">
+        <div className="rounded-md bg-accent/10 p-1.5">
+          <Brain className="h-4 w-4 text-accent" />
+        </div>
+        <div>
+          <div className="text-[13px] font-semibold leading-tight text-text">MemPalace</div>
+          <div className="text-[10.5px] leading-tight text-text-muted">
+            v{__APP_VERSION__} · {overview?.vault.palaceDir ?? '—'}
+          </div>
+        </div>
+      </div>
+
+      <div className="ml-2 flex flex-wrap items-center gap-1.5">
+        <StatBadge label="drawers" value={overview?.drawerCount ?? 0} />
+        <StatBadge label="wings" value={overview?.wingCount ?? 0} />
+        <StatBadge label="rooms" value={overview?.roomCount ?? 0} />
+        <StatBadge label="kg facts" value={overview?.tripleCount ?? 0} />
+        <StatBadge label="entities" value={overview?.entityCount ?? 0} />
+      </div>
+
+      <div className="ml-auto flex items-center gap-1.5">
+        <button
+          type="button"
+          onClick={handleOpenVault}
+          className="inline-flex items-center gap-1.5 rounded-[6px] border border-border-subtle bg-background px-2.5 py-1 text-[11px] text-text hover:bg-surface-hover"
+          title="Open vault folder in Finder"
+        >
+          <FolderOpen className="h-3.5 w-3.5" />
+          Open vault
+        </button>
+        <button
+          type="button"
+          onClick={onRefresh}
+          disabled={loading}
+          className="inline-flex items-center gap-1.5 rounded-[6px] border border-border-subtle bg-background px-2.5 py-1 text-[11px] text-text hover:bg-surface-hover disabled:opacity-50"
+        >
+          <RefreshCw className={cn('h-3.5 w-3.5', loading ? 'animate-spin' : null)} />
+          Refresh
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function StatBadge({ label, value }: { label: string; value: number }) {
+  return (
+    <span className="inline-flex items-baseline gap-1 rounded-full border border-border-subtle bg-background px-2 py-0.5 text-[10.5px] text-text-muted">
+      <span className="font-mono font-semibold text-text">{value.toLocaleString()}</span>
+      <span>{label}</span>
+    </span>
+  );
+}
+
+// --- Left rail -------------------------------------------------------------
+
+function WingRail({
+  wings,
+  rooms,
+  expandedWings,
+  selectedWing,
+  selectedRoom,
+  totalDrawers,
+  onSelectAll,
+  onSelectWing,
+  onSelectRoom,
+  onToggleWing,
+}: {
+  wings: MemPalaceWing[];
+  rooms: Map<string, MemPalaceRoom[]>;
+  expandedWings: Set<string>;
+  selectedWing: string | null;
+  selectedRoom: string | null;
+  totalDrawers: number;
+  onSelectAll: () => void;
+  onSelectWing: (wing: string) => void;
+  onSelectRoom: (wing: string, room: string) => void;
+  onToggleWing: (wing: string) => Promise<void>;
+}) {
+  const allActive = selectedWing === null && selectedRoom === null;
+  return (
+    <aside className="flex w-[220px] flex-none flex-col border-r border-border-subtle bg-surface">
+      <div className="border-b border-border-subtle px-3 py-2">
+        <div className="text-[10.5px] font-semibold uppercase tracking-wide text-text-muted">
+          Wings
+        </div>
+      </div>
+      <div className="min-h-0 flex-1 overflow-y-auto px-2 py-2">
+        <button
+          type="button"
+          onClick={onSelectAll}
+          className={cn(
+            'flex w-full items-center justify-between rounded-[6px] px-2 py-1.5 text-[11.5px]',
+            allActive
+              ? 'bg-accent/10 text-accent'
+              : 'text-text hover:bg-surface-hover',
+          )}
+        >
+          <span className="flex items-center gap-1.5">
+            <Hash className="h-3.5 w-3.5" />
+            All drawers
+          </span>
+          <span className="text-[10px] text-text-muted">{totalDrawers.toLocaleString()}</span>
+        </button>
+
+        <div className="mt-1 space-y-0.5">
+          {wings.map((wing) => {
+            const expanded = expandedWings.has(wing.name);
+            const wingActive = selectedWing === wing.name && selectedRoom === null;
+            const wingRooms = rooms.get(wing.name) ?? [];
+            return (
+              <div key={wing.name}>
+                <div className="flex items-stretch">
+                  <button
+                    type="button"
+                    onClick={() => void onToggleWing(wing.name)}
+                    className="flex items-center rounded-l-[6px] px-1 text-text-muted hover:bg-surface-hover"
+                    aria-label={expanded ? 'Collapse' : 'Expand'}
+                  >
+                    {expanded ? (
+                      <ChevronDown className="h-3 w-3" />
+                    ) : (
+                      <ChevronRight className="h-3 w-3" />
+                    )}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onSelectWing(wing.name)}
+                    className={cn(
+                      'flex flex-1 items-center justify-between rounded-r-[6px] px-1.5 py-1 text-[11.5px]',
+                      wingActive
+                        ? 'bg-accent/10 text-accent'
+                        : 'text-text hover:bg-surface-hover',
+                    )}
+                  >
+                    <span className="truncate font-medium">{wing.name}</span>
+                    <span className="ml-2 text-[10px] text-text-muted">
+                      {wing.drawerCount.toLocaleString()}
+                    </span>
+                  </button>
+                </div>
+                {expanded && wingRooms.length > 0 ? (
+                  <div className="ml-4 mt-0.5 space-y-0.5 border-l border-border-subtle pl-1">
+                    {wingRooms.map((room) => {
+                      const roomActive =
+                        selectedWing === wing.name && selectedRoom === room.name;
+                      return (
+                        <button
+                          type="button"
+                          key={`${wing.name}/${room.name}`}
+                          onClick={() => onSelectRoom(wing.name, room.name)}
+                          className={cn(
+                            'flex w-full items-center justify-between rounded-[6px] px-1.5 py-0.5 text-[11px]',
+                            roomActive
+                              ? 'bg-accent/10 text-accent'
+                              : 'text-text-muted hover:bg-surface-hover hover:text-text',
+                          )}
+                        >
+                          <span className="truncate">{room.name}</span>
+                          <span className="ml-2 text-[10px]">{room.drawerCount}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                ) : null}
+              </div>
+            );
+          })}
+          {wings.length === 0 ? (
+            <div className="px-2 py-3 text-[11px] text-text-muted">
+              No wings yet — drawer count is zero.
+            </div>
+          ) : null}
+        </div>
+      </div>
+    </aside>
+  );
+}
+
+// --- Drawer list -----------------------------------------------------------
+
+function DrawerList({
+  drawers,
+  loading,
+  query,
+  onQueryChange,
+  selectedDrawerId,
+  onSelect,
+  wingFilter,
+  roomFilter,
+}: {
+  drawers: MemPalaceDrawer[];
+  loading: boolean;
+  query: string;
+  onQueryChange: (v: string) => void;
+  selectedDrawerId: number | null;
+  onSelect: (id: number) => void;
+  wingFilter: string | null;
+  roomFilter: string | null;
 }) {
   return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={checked}
-      onClick={() => onChange(!checked)}
-      disabled={disabled}
-      className={cn(
-        'relative inline-flex h-5 w-9 shrink-0 items-center rounded-full border transition',
-        checked
-          ? 'border-accent bg-accent/30'
-          : 'border-border-subtle bg-surface-3',
-        disabled && 'cursor-not-allowed opacity-60',
-      )}
-    >
-      <span
-        className={cn(
-          'inline-block h-3.5 w-3.5 rounded-full transition-transform',
-          checked ? 'translate-x-[18px] bg-accent' : 'translate-x-[2px] bg-text-muted',
-        )}
-      />
-    </button>
+    <section className="flex w-[380px] flex-none flex-col border-r border-border-subtle bg-background">
+      <div className="border-b border-border-subtle px-3 py-2">
+        <div className="flex items-center gap-2 rounded-[6px] border border-border-subtle bg-surface px-2.5 py-1.5">
+          <Search className="h-3.5 w-3.5 text-text-muted" />
+          <input
+            type="text"
+            placeholder={
+              wingFilter !== null
+                ? `Search in ${wingFilter}${roomFilter !== null ? '/' + roomFilter : ''}…`
+                : 'Search MemPalace…'
+            }
+            value={query}
+            onChange={(e) => onQueryChange(e.target.value)}
+            className="flex-1 bg-transparent text-[12px] text-text placeholder:text-text-muted focus:outline-none"
+          />
+          {query.length > 0 ? (
+            <button
+              type="button"
+              onClick={() => onQueryChange('')}
+              className="rounded p-0.5 text-text-muted hover:bg-surface-hover hover:text-text"
+            >
+              <X className="h-3 w-3" />
+            </button>
+          ) : null}
+        </div>
+        <div className="mt-1.5 flex items-center justify-between text-[10.5px] text-text-muted">
+          <span>
+            {drawers.length} {drawers.length === 1 ? 'drawer' : 'drawers'}
+            {drawers.length === 80 ? ' (showing latest 80)' : ''}
+          </span>
+          {loading ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
+        </div>
+      </div>
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        {drawers.map((d) => {
+          const active = d.id === selectedDrawerId;
+          const snippet = d.document.slice(0, 220);
+          return (
+            <button
+              type="button"
+              key={d.id}
+              onClick={() => onSelect(d.id)}
+              className={cn(
+                'flex w-full flex-col items-start gap-1 border-b border-border-subtle px-3 py-2 text-left text-[11.5px] transition-colors',
+                active
+                  ? 'bg-accent/8 text-text'
+                  : 'text-text hover:bg-surface-hover',
+              )}
+            >
+              <div className="flex w-full items-center gap-2 text-[10.5px] text-text-muted">
+                {d.wing !== null ? (
+                  <span className="rounded-full bg-accent/10 px-1.5 py-0.5 text-[9.5px] font-medium text-accent">
+                    {d.wing}
+                  </span>
+                ) : null}
+                {d.room !== null ? <span>/ {d.room}</span> : null}
+                <span className="ml-auto font-mono text-[9.5px]">
+                  {formatFiledAt(d.filedAt)}
+                </span>
+              </div>
+              <div className="line-clamp-3 leading-snug">{snippet}</div>
+            </button>
+          );
+        })}
+        {!loading && drawers.length === 0 ? (
+          <div className="flex h-full items-center justify-center px-4 py-8 text-center text-[11.5px] text-text-muted">
+            No drawers match these filters.
+          </div>
+        ) : null}
+      </div>
+    </section>
   );
+}
+
+// --- Drawer detail ---------------------------------------------------------
+
+function DrawerDetail({
+  drawer,
+  triples,
+}: {
+  drawer: MemPalaceDrawer | null;
+  triples: MemPalaceTriple[];
+}) {
+  if (drawer === null) {
+    return (
+      <section className="flex flex-1 items-center justify-center bg-background">
+        <div className="text-[12px] text-text-muted">Select a drawer to view its contents.</div>
+      </section>
+    );
+  }
+  return (
+    <section className="flex min-w-0 flex-1 flex-col bg-background">
+      <div className="border-b border-border-subtle px-4 py-3">
+        <div className="flex flex-wrap items-center gap-1.5 text-[10.5px] text-text-muted">
+          {drawer.wing !== null ? (
+            <span className="rounded-full bg-accent/10 px-1.5 py-0.5 font-medium text-accent">
+              {drawer.wing}
+            </span>
+          ) : null}
+          {drawer.room !== null ? <span className="text-text-muted">{drawer.room}</span> : null}
+          {drawer.hall !== null && drawer.hall !== drawer.room ? (
+            <span className="text-text-muted">· {drawer.hall}</span>
+          ) : null}
+          {drawer.topic !== null ? (
+            <span className="text-text-muted">· {drawer.topic}</span>
+          ) : null}
+          <span className="ml-auto font-mono">
+            {drawer.filedAt !== null ? formatFiledAt(drawer.filedAt, true) : '—'}
+          </span>
+        </div>
+        <div className="mt-1 flex flex-wrap items-center gap-2 text-[10px] text-text-muted">
+          {drawer.agent !== null ? <span>agent: {drawer.agent}</span> : null}
+          {drawer.addedBy !== null ? <span>by: {drawer.addedBy}</span> : null}
+          {drawer.sourceFile !== null && drawer.sourceFile.length > 0 ? (
+            <span className="truncate font-mono">{drawer.sourceFile}</span>
+          ) : null}
+        </div>
+      </div>
+      <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
+        <pre className="whitespace-pre-wrap break-words font-sans text-[12.5px] leading-relaxed text-text">
+          {drawer.document}
+        </pre>
+        {triples.length > 0 ? (
+          <div className="mt-6 border-t border-border-subtle pt-3">
+            <div className="mb-2 flex items-center gap-1.5 text-[10.5px] font-semibold uppercase tracking-wide text-text-muted">
+              <Network className="h-3 w-3" />
+              Related facts ({triples.length})
+            </div>
+            <div className="space-y-1.5">
+              {triples.map((t) => (
+                <div
+                  key={t.id}
+                  className="rounded-[6px] border border-border-subtle bg-surface px-2 py-1.5 text-[11px]"
+                >
+                  <div className="flex flex-wrap items-baseline gap-1">
+                    <span className="font-medium text-text">{t.subjectLabel}</span>
+                    <span className="font-mono text-[10px] text-text-muted">{t.predicate}</span>
+                    <span className="text-text">{t.objectLabel}</span>
+                  </div>
+                  <div className="mt-0.5 flex items-center gap-2 text-[9.5px] text-text-muted">
+                    <span>conf {(t.confidence * 100).toFixed(0)}%</span>
+                    {t.validFrom !== null ? (
+                      <span className="font-mono">{t.validFrom.slice(0, 10)}</span>
+                    ) : null}
+                    {t.sourceCloset !== null ? (
+                      <span className="truncate font-mono">{t.sourceCloset}</span>
+                    ) : null}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
+      </div>
+    </section>
+  );
+}
+
+// --- Helpers ---------------------------------------------------------------
+
+function formatFiledAt(value: string | null, full: boolean = false): string {
+  if (value === null || value.length === 0) return '—';
+  // mempalace filed_at is an ISO-like string (sometimes without TZ). Parse
+  // permissively and fall back to the raw value when it isn't recognised.
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return value.slice(0, 16);
+  if (full) {
+    return d.toLocaleString(undefined, {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  }
+  const diff = Date.now() - d.getTime();
+  const minutes = Math.floor(diff / 60_000);
+  if (minutes < 1) return 'now';
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h`;
+  const days = Math.floor(hours / 24);
+  if (days < 30) return `${days}d`;
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }
 

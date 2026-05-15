@@ -84,6 +84,47 @@ export function getInstalledHooksDir(): string {
   return path.join(getClaudeDir(), 'hooks');
 }
 
+export function getMempalaceConfigFile(): string {
+  return path.join(os.homedir(), '.mempalace', 'config.json');
+}
+
+/**
+ * Resolves the active palace directory for read access. Order of precedence:
+ *
+ *   1. `~/.mempalace/config.json` -> `palace_dir`
+ *   2. `~/.mempalace/palace` (mempalace's installed-without-config fallback)
+ *   3. {@link getDefaultVaultDir} (the path our installer creates)
+ *
+ * Returns null when none of the above exists on disk — the data service
+ * surfaces this as an "empty state" instead of throwing.
+ */
+export function resolvePalaceDir(): string | null {
+  const cfg = getMempalaceConfigFile();
+  try {
+    const raw = fs.readFileSync(cfg, 'utf8');
+    const parsed = JSON.parse(raw) as { palace_dir?: unknown };
+    const fromCfg = typeof parsed.palace_dir === 'string' ? parsed.palace_dir : null;
+    if (fromCfg !== null && fs.existsSync(fromCfg)) {
+      return fromCfg;
+    }
+  } catch {
+    // Fall through to default candidates.
+  }
+
+  const candidates = [
+    path.join(os.homedir(), '.mempalace', 'palace'),
+    getDefaultVaultDir(),
+  ];
+  for (const candidate of candidates) {
+    try {
+      if (fs.statSync(candidate).isDirectory()) return candidate;
+    } catch {
+      // continue
+    }
+  }
+  return null;
+}
+
 export function getDefaultVaultDir(): string {
   // Mirrors the user's existing setup: ~/Code/AI/memory_vault. Falls back
   // to ~/.devspace/memory_vault on platforms where ~/Code is unlikely to

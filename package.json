@@ -1,7 +1,7 @@
 {
   "name": "devspace",
   "type": "module",
-  "version": "0.21.2",
+  "version": "0.22.0",
   "description": "One-window MacBook dev workspace with Claude Code CLI at the core",
   "license": "MIT",
   "author": {
@@ -24,7 +24,14 @@
     "dist:mac": "electron-vite build && electron-builder --mac",
     "predist:mac:arm64": "node scripts/fetch-uv.mjs",
     "dist:mac:arm64": "electron-vite build && electron-builder --mac --arm64",
-    "postinstall": "electron-rebuild -f -o node-pty || echo 'node-pty rebuild skipped (terminal will be disabled)'"
+    "postinstall": "electron-rebuild -f -o node-pty,better-sqlite3 || echo 'native rebuild skipped (terminal/memory features will be disabled)'"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "better-sqlite3",
+      "electron",
+      "node-pty"
+    ]
   },
   "dependencies": {
     "@codemirror/autocomplete": "^6.20.0",
@@ -67,6 +74,7 @@
     "@xterm/addon-unicode11": "^0.9.0",
     "@xterm/addon-web-links": "^0.12.0",
     "@xterm/xterm": "^6.0.0",
+    "better-sqlite3": "^12.10.0",
     "chokidar": "^4.0.3",
     "clsx": "^2.1.1",
     "d3": "^7.9.0",
@@ -90,6 +98,7 @@
     "@babel/types": "^7.29.0",
     "@electron/rebuild": "^4.0.3",
     "@tailwindcss/typography": "^0.5.19",
+    "@types/better-sqlite3": "^7.6.13",
     "@types/d3": "^7.4.3",
     "@types/diff": "^7.0.2",
     "@types/node": "^22.10.0",
@@ -135,7 +144,10 @@
     ],
     "asar": true,
     "asarUnpack": [
-      "**/node_modules/node-pty/**"
+      "**/node_modules/node-pty/**",
+      "**/node_modules/better-sqlite3/**",
+      "**/node_modules/bindings/**",
+      "**/node_modules/file-uri-to-path/**"
     ],
     "extraResources": [
       {
@@ -200,11 +212,5 @@
       "sign": false
     }
   },
-  "packageManager": "pnpm@10.25.0",
-  "pnpm": {
-    "onlyBuiltDependencies": [
-      "electron",
-      "node-pty"
-    ]
-  }
+  "packageManager": "pnpm@10.25.0"
 }
