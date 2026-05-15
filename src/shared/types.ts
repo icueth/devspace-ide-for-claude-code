@@ -645,7 +645,11 @@ export type PtySessionKind =
   // v0.16: `pm install` runs in a dedicated PTY so its lifetime can be
   // tracked separately from the dev-server (an install is one-shot and
   // exits, but its lifetime may overlap with the workspace close).
-  | 'install';
+  | 'install'
+  // Settings → Setup tab spawns claude with an install-the-missing-tools
+  // prompt. Distinct kind so it doesn't collide with the dock's claude-cli
+  // session and so AgentsRail/Dock don't try to render it.
+  | 'setup-claude';
 
 export interface PtyCreateOptions {
   projectId: string;

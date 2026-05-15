@@ -1,7 +1,7 @@
 {
   "name": "devspace",
   "type": "module",
-  "version": "0.20.1",
+  "version": "0.21.0",
   "description": "One-window MacBook dev workspace with Claude Code CLI at the core",
   "license": "MIT",
   "author": {
@@ -11,12 +11,18 @@
   "main": "dist-electron/main/index.cjs",
   "scripts": {
     "dev": "electron-vite dev",
+    "fetch-uv": "node scripts/fetch-uv.mjs",
+    "fetch-uv:mac": "node scripts/fetch-uv.mjs --mac",
+    "fetch-uv:all": "node scripts/fetch-uv.mjs --all",
+    "prebuild": "node scripts/fetch-uv.mjs",
     "build": "electron-vite build",
     "preview": "electron-vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.node.json",
     "test": "vitest run",
     "test:watch": "vitest",
+    "predist:mac": "node scripts/fetch-uv.mjs --mac",
     "dist:mac": "electron-vite build && electron-builder --mac",
+    "predist:mac:arm64": "node scripts/fetch-uv.mjs",
     "dist:mac:arm64": "electron-vite build && electron-builder --mac --arm64",
     "postinstall": "electron-rebuild -f -o node-pty || echo 'node-pty rebuild skipped (terminal will be disabled)'"
   },
@@ -142,6 +148,27 @@
       {
         "from": "resources/builtin-packs",
         "to": "builtin-packs",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "resources/mempalace-hooks",
+        "to": "mempalace-hooks",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "resources/mempalace-uv",
+        "to": "mempalace-uv",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "resources/setup-hooks",
+        "to": "setup-hooks",
         "filter": [
           "**/*"
         ]

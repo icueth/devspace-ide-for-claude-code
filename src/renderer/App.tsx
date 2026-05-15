@@ -27,6 +27,7 @@ import { ClaudeCliDock } from '@renderer/components/Dock/ClaudeCliDock';
 import { EditorArea } from '@renderer/components/Editor/EditorArea';
 import { Resizer } from '@renderer/components/Layout/Resizer';
 import { SettingsPage } from '@renderer/components/Settings/SettingsPage';
+import { SetupBanner } from '@renderer/components/Settings/SetupBanner';
 import { FileTree } from '@renderer/components/Sidebar/FileTree';
 import { ProjectList } from '@renderer/components/Sidebar/ProjectList';
 import { SidebarFooter } from '@renderer/components/Sidebar/SidebarFooter';
@@ -92,12 +93,14 @@ function AppInner() {
   const [goToLine, setGoToLine] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsInitialTab, setSettingsInitialTab] = useState<
+    | 'setup'
     | 'account'
     | 'files'
     | 'tmux'
     | 'llm'
     | 'agents'
     | 'mcp'
+    | 'memory'
     | 'skills'
     | 'teams'
     | 'design'
@@ -108,12 +111,14 @@ function AppInner() {
       const detail = (
         e as CustomEvent<{
           tab?:
+            | 'setup'
             | 'account'
             | 'files'
             | 'tmux'
             | 'llm'
             | 'agents'
             | 'mcp'
+            | 'memory'
             | 'skills'
             | 'teams'
             | 'design';
@@ -445,6 +450,13 @@ function AppInner() {
           </button>
         </div>
       </header>
+
+      <SetupBanner
+        onOpenSetup={() => {
+          setSettingsInitialTab('setup');
+          setSettingsOpen(true);
+        }}
+      />
 
       <main className="flex flex-1 overflow-hidden">
         {teamMode !== 'focus' && leftCollapsed && (

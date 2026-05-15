@@ -14,3 +14,7 @@ release
 mempalace.yaml
 entities.json
 mockup/
+
+# Bundled uv binaries (fetched at build time via scripts/fetch-uv.mjs)
+resources/mempalace-uv/*/uv
+resources/mempalace-uv/*/uv.exe

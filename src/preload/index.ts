@@ -515,6 +515,46 @@ const api = {
       return () => ipcRenderer.off(IPC.MEMORY_EVENTS, listener);
     },
   },
+  mempalace: {
+    getStatus: () => ipcRenderer.invoke(IPC.MEMPALACE_GET_STATUS),
+    install: (input?: import('@shared/mempalace').MemPalaceInstallInput) =>
+      ipcRenderer.invoke(IPC.MEMPALACE_INSTALL, input ?? {}),
+    uninstall: (input?: import('@shared/mempalace').MemPalaceUninstallInput) =>
+      ipcRenderer.invoke(IPC.MEMPALACE_UNINSTALL, input ?? {}),
+    openVault: () => ipcRenderer.invoke(IPC.MEMPALACE_OPEN_VAULT),
+    onProgress: (
+      cb: (ev: import('@shared/mempalace').MemPalaceProgressEvent) => void,
+    ) => {
+      const listener = (
+        _e: unknown,
+        ev: import('@shared/mempalace').MemPalaceProgressEvent,
+      ) => cb(ev);
+      ipcRenderer.on(IPC.MEMPALACE_PROGRESS, listener);
+      return () => ipcRenderer.off(IPC.MEMPALACE_PROGRESS, listener);
+    },
+  },
+  setup: {
+    getStatus: () => ipcRenderer.invoke(IPC.SETUP_GET_STATUS),
+    installTool: (toolId: import('@shared/setup').SetupToolId) =>
+      ipcRenderer.invoke(IPC.SETUP_INSTALL_TOOL, toolId),
+    installAll: () => ipcRenderer.invoke(IPC.SETUP_INSTALL_ALL),
+    uninstallRtkHook: () => ipcRenderer.invoke(IPC.SETUP_UNINSTALL_RTK_HOOK),
+    openClaudeDir: () => ipcRenderer.invoke(IPC.SETUP_OPEN_CLAUDE_DIR),
+    runClaude: (
+      opts: { cols?: number; rows?: number } = {},
+    ): Promise<import('@shared/setup').SetupClaudeRunResult> =>
+      ipcRenderer.invoke(IPC.SETUP_RUN_CLAUDE, opts),
+    onProgress: (
+      cb: (ev: import('@shared/setup').SetupProgressEvent) => void,
+    ) => {
+      const listener = (
+        _e: unknown,
+        ev: import('@shared/setup').SetupProgressEvent,
+      ) => cb(ev);
+      ipcRenderer.on(IPC.SETUP_PROGRESS, listener);
+      return () => ipcRenderer.off(IPC.SETUP_PROGRESS, listener);
+    },
+  },
 };
 
 try {

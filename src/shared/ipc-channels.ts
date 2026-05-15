@@ -248,6 +248,29 @@ export const IPC = {
   MEMORY_SET_SETTINGS: 'memory:set-settings',
   MEMORY_OPEN_DIR: 'memory:open-dir',
   MEMORY_EVENTS: 'memory:events',
+
+  // MemPalace installer (Settings → Memory tab). One-click install of the
+  // MemPalace MCP plugin + Claude Code hooks for end users of the app.
+  MEMPALACE_GET_STATUS: 'mempalace:get-status',
+  MEMPALACE_INSTALL: 'mempalace:install',
+  MEMPALACE_UNINSTALL: 'mempalace:uninstall',
+  MEMPALACE_OPEN_VAULT: 'mempalace:open-vault',
+  MEMPALACE_PROGRESS: 'mempalace:progress',
+
+  // Environment Setup wizard (Settings → Setup tab). Detects + installs
+  // Homebrew / Claude / tmux / rtk / jq / rtk hook / MemPalace so a fresh
+  // install of devspace can reach a fully-working state without leaving
+  // the app.
+  SETUP_GET_STATUS: 'setup:get-status',
+  SETUP_INSTALL_TOOL: 'setup:install-tool',
+  SETUP_INSTALL_ALL: 'setup:install-all',
+  SETUP_UNINSTALL_RTK_HOOK: 'setup:uninstall-rtk-hook',
+  SETUP_OPEN_CLAUDE_DIR: 'setup:open-claude-dir',
+  SETUP_PROGRESS: 'setup:progress',
+  // AI-driven installer: spawn `claude` with a prompt asking it to finish
+  // installing whatever the deterministic installer couldn't. Renderer
+  // mounts an xterm against the returned PTY sessionId.
+  SETUP_RUN_CLAUDE: 'setup:run-claude',
 } as const;
 
 export type IpcChannel = (typeof IPC)[keyof typeof IPC];

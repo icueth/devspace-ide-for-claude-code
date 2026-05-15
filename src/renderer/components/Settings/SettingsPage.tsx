@@ -34,6 +34,7 @@ import {
   Server,
   Settings as SettingsIcon,
   Users,
+  Wrench,
 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 
@@ -43,6 +44,8 @@ import { AgentsSettings } from '@renderer/components/Settings/AgentsSettings';
 import { DesignSettings } from '@renderer/components/Settings/DesignSettings';
 import { LlmSettings } from '@renderer/components/Settings/LlmSettings';
 import { McpSettings } from '@renderer/components/Settings/McpSettings';
+import { MemPalaceSettings } from '@renderer/components/Settings/MemPalaceSettings';
+import { SetupSettings } from '@renderer/components/Settings/SetupSettings';
 import { SkillsSettings } from '@renderer/components/Settings/SkillsSettings';
 import { TeamsSettings } from '@renderer/components/Settings/TeamsSettings';
 import { TmuxSection } from '@renderer/components/Settings/TmuxSection';
@@ -53,12 +56,14 @@ import { useWorkspaceStore } from '@renderer/state/workspace';
 import type { SettingsCategory, SettingsFile } from '@shared/types';
 
 type Tab =
+  | 'setup'
   | 'account'
   | 'files'
   | 'tmux'
   | 'llm'
   | 'agents'
   | 'mcp'
+  | 'memory'
   | 'skills'
   | 'teams'
   | 'design';
@@ -85,6 +90,18 @@ export function SettingsPage({ onClose, initialTab = 'account' }: SettingsPagePr
   useEffect(() => {
     setTab(initialTab);
   }, [initialTab]);
+
+  // Cross-component navigation: SetupSettings posts this event to push the
+  // user into the Memory tab where MemPalace has its dedicated installer.
+  useEffect(() => {
+    const handler = (e: Event): void => {
+      const detail = (e as CustomEvent<{ tab?: Tab }>).detail;
+      if (detail?.tab) setTab(detail.tab);
+    };
+    window.addEventListener('devspace:switch-settings-tab', handler);
+    return () =>
+      window.removeEventListener('devspace:switch-settings-tab', handler);
+  }, []);
 
   return (
     <section className="flex min-w-0 flex-1 flex-col bg-surface">
@@ -117,12 +134,14 @@ export function SettingsPage({ onClose, initialTab = 'account' }: SettingsPagePr
 
       <div className="min-h-0 flex-1 overflow-hidden">
         <RouteErrorBoundary key={tab} label={`Settings · ${tab}`}>
+          {tab === 'setup' && <SetupSettings />}
           {tab === 'account' && <AccountSettings />}
           {tab === 'files' && <FilesSettings />}
           {tab === 'tmux' && <TmuxSection />}
           {tab === 'llm' && <LlmSettings />}
           {tab === 'agents' && <AgentsSettings />}
           {tab === 'mcp' && <McpSettings />}
+          {tab === 'memory' && <MemPalaceSettings />}
           {tab === 'skills' && <SkillsSettings />}
           {tab === 'teams' && <TeamsSettings />}
           {tab === 'design' && <DesignSettings />}
@@ -134,12 +153,14 @@ export function SettingsPage({ onClose, initialTab = 'account' }: SettingsPagePr
 
 function TabSwitch({ tab, onChange }: { tab: Tab; onChange: (t: Tab) => void }) {
   const tabs: Array<{ id: Tab; label: string; icon: React.ReactNode }> = [
+    { id: 'setup', label: 'Setup', icon: <Wrench size={11} /> },
     { id: 'account', label: 'Account', icon: <KeyRound size={11} /> },
     { id: 'agents', label: 'Agents', icon: <Bot size={11} /> },
     { id: 'teams', label: 'Teams', icon: <Users size={11} /> },
     { id: 'skills', label: 'Skills', icon: <Lightbulb size={11} /> },
     { id: 'design', label: 'Design', icon: <Paintbrush size={11} /> },
     { id: 'mcp', label: 'MCP', icon: <Plug size={11} /> },
+    { id: 'memory', label: 'Memory', icon: <Brain size={11} /> },
     { id: 'files', label: 'Files', icon: <FileText size={11} /> },
     { id: 'tmux', label: 'tmux', icon: <Server size={11} /> },
     { id: 'llm', label: 'LLM', icon: <Brain size={11} /> },

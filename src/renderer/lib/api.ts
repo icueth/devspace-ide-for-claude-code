@@ -54,6 +54,20 @@ import type {
   ThreadSummary,
 } from '@shared/types';
 import type {
+  MemPalaceInstallInput,
+  MemPalaceInstallResult,
+  MemPalaceProgressEvent,
+  MemPalaceStatus,
+  MemPalaceUninstallInput,
+} from '@shared/mempalace';
+import type {
+  SetupClaudeRunResult,
+  SetupInstallResult,
+  SetupProgressEvent,
+  SetupStatus,
+  SetupToolId,
+} from '@shared/setup';
+import type {
   ApprovePlanInput,
   CreateDesignInput,
   DesignAdapterDetectResult,
@@ -485,6 +499,26 @@ export interface DevspaceApi {
     openDir: (scope: MemoryScope, projectPath?: string) => Promise<void>;
     onEvent: (cb: (event: MemoryEvent) => void) => () => void;
   };
+  mempalace: {
+    getStatus: () => Promise<MemPalaceStatus>;
+    install: (input?: MemPalaceInstallInput) => Promise<MemPalaceInstallResult>;
+    uninstall: (
+      input?: MemPalaceUninstallInput,
+    ) => Promise<MemPalaceInstallResult>;
+    openVault: () => Promise<void>;
+    onProgress: (cb: (ev: MemPalaceProgressEvent) => void) => () => void;
+  };
+  setup: {
+    getStatus: () => Promise<SetupStatus>;
+    installTool: (toolId: SetupToolId) => Promise<SetupInstallResult>;
+    installAll: () => Promise<SetupInstallResult>;
+    uninstallRtkHook: () => Promise<SetupInstallResult>;
+    openClaudeDir: () => Promise<void>;
+    runClaude: (
+      opts?: { cols?: number; rows?: number },
+    ) => Promise<SetupClaudeRunResult>;
+    onProgress: (cb: (ev: SetupProgressEvent) => void) => () => void;
+  };
 }
 
 declare global {
@@ -763,6 +797,47 @@ function makeStubApi(): DevspaceApi {
       setSettings: notWired('memory.setSettings'),
       openDir: notWired('memory.openDir'),
       onEvent: () => () => undefined,
+    },
+    mempalace: {
+      getStatus: () =>
+        Promise.resolve({
+          installed: false,
+          hostSupported: false,
+          vaultPath: '',
+          hooksDir: '',
+          settingsFile: '',
+          checks: {
+            uv: 'unsupported',
+            mempalacePackage: 'missing',
+            vault: 'missing',
+            hooks: 'missing',
+            plugin: 'missing',
+          },
+        } as MemPalaceStatus),
+      install: notWired('mempalace.install') as () => Promise<MemPalaceInstallResult>,
+      uninstall: notWired(
+        'mempalace.uninstall',
+      ) as () => Promise<MemPalaceInstallResult>,
+      openVault: notWired('mempalace.openVault') as () => Promise<void>,
+      onProgress: () => () => undefined,
+    },
+    setup: {
+      getStatus: () =>
+        Promise.resolve({
+          complete: false,
+          platform: 'darwin',
+          checks: [],
+        } as SetupStatus),
+      installTool: notWired('setup.installTool') as () => Promise<SetupInstallResult>,
+      installAll: notWired('setup.installAll') as () => Promise<SetupInstallResult>,
+      uninstallRtkHook: notWired(
+        'setup.uninstallRtkHook',
+      ) as () => Promise<SetupInstallResult>,
+      openClaudeDir: notWired('setup.openClaudeDir') as () => Promise<void>,
+      runClaude: notWired(
+        'setup.runClaude',
+      ) as () => Promise<SetupClaudeRunResult>,
+      onProgress: () => () => undefined,
     },
   } as unknown as DevspaceApi;
 }
