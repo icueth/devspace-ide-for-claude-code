@@ -24,6 +24,10 @@
     "dist:mac": "electron-vite build && electron-builder --mac",
     "predist:mac:arm64": "node scripts/fetch-uv.mjs",
     "dist:mac:arm64": "electron-vite build && electron-builder --mac --arm64",
+    "predist:mac:x64": "node scripts/fetch-uv.mjs --mac",
+    "dist:mac:x64": "electron-vite build && electron-builder --mac --x64",
+    "predist:mac:universal": "node scripts/fetch-uv.mjs --mac",
+    "dist:mac:universal": "electron-vite build && electron-builder --mac --universal",
     "postinstall": "electron-rebuild -f -o node-pty,better-sqlite3 || echo 'native rebuild skipped (terminal/memory features will be disabled)'"
   },
   "pnpm": {
