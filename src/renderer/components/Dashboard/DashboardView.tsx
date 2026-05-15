@@ -46,6 +46,8 @@ import type {
   MemoryType,
 } from '@shared/types';
 
+declare const __APP_VERSION__: string;
+
 // Friendly relative-time labels for the "Updated 3h ago" hints on list rows.
 function formatRelative(ts: number): string {
   const diff = Math.floor((Date.now() - ts) / 1000);
@@ -378,7 +380,7 @@ function DashboardTopBar({ onNewEntry, onSettings }: DashboardTopBarProps) {
         <h1 className="text-[13.5px] font-semibold text-text">Memory dashboard</h1>
       </div>
       <div className="ml-2 hidden text-[10.5px] uppercase tracking-wider text-text-dim md:block">
-        v0.19
+        v{__APP_VERSION__}
       </div>
       <div className="relative ml-auto w-[380px] max-w-[40vw]">
         <Search
