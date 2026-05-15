@@ -22,6 +22,12 @@ export interface MemPalaceStatus {
   settingsFile: string;
   /** Platform support summary — false on hosts without a bundled uv binary. */
   hostSupported: boolean;
+  /**
+   * Where the `mempalace` executable was detected, when `checks.mempalacePackage === 'ok'`.
+   * Surfaces the actual install (venv / pipx / uv tool / brew / pip --user) so the
+   * Memory tab can show users that an existing install was respected.
+   */
+  mempalacePackagePath?: string;
 }
 
 export interface MemPalaceInstallInput {

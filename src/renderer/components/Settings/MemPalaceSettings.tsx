@@ -211,24 +211,43 @@ function ChecklistCard({ status }: { status: MemPalaceStatus }) {
     'hooks',
     'plugin',
   ];
+  const detailFor = (k: MemPalaceCheck): string | null => {
+    if (k === 'mempalacePackage' && status.mempalacePackagePath) {
+      return status.mempalacePackagePath;
+    }
+    if (k === 'vault') return status.vaultPath;
+    if (k === 'hooks') return status.hooksDir;
+    if (k === 'plugin') return status.settingsFile;
+    return null;
+  };
   return (
     <div className="rounded-[10px] border border-border bg-surface-2/60 p-3">
       <div className="mb-2 text-[10.5px] font-semibold uppercase tracking-wide text-text-muted">
         Installation checks
       </div>
       <ul className="flex flex-col gap-1">
-        {order.map((key) => (
-          <li
-            key={key}
-            className="flex items-center gap-2 rounded-[6px] px-2 py-1 text-[11.5px]"
-          >
-            <CheckIcon state={status.checks[key]} />
-            <span className="text-text">{CHECK_LABELS[key]}</span>
-            <span className="ml-auto text-[10px] text-text-muted">
-              {checkStateLabel(status.checks[key])}
-            </span>
-          </li>
-        ))}
+        {order.map((key) => {
+          const detail = detailFor(key);
+          return (
+            <li
+              key={key}
+              className="flex flex-col gap-0.5 rounded-[6px] px-2 py-1 text-[11.5px]"
+            >
+              <div className="flex items-center gap-2">
+                <CheckIcon state={status.checks[key]} />
+                <span className="text-text">{CHECK_LABELS[key]}</span>
+                <span className="ml-auto text-[10px] text-text-muted">
+                  {checkStateLabel(status.checks[key])}
+                </span>
+              </div>
+              {detail && status.checks[key] === 'ok' && (
+                <div className="ml-[21px] truncate font-mono text-[10px] text-text-muted">
+                  {detail}
+                </div>
+              )}
+            </li>
+          );
+        })}
       </ul>
     </div>
   );

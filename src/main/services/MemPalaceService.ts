@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as fsp from 'node:fs/promises';
+import * as os from 'node:os';
 import * as path from 'node:path';
 import { shell, type WebContents } from 'electron';
 
@@ -333,17 +334,88 @@ async function uninstallHooks(): Promise<void> {
   }
 }
 
-async function mempalacePackageInstalled(): Promise<boolean> {
-  // uv tool install drops a `mempalace` console script into the tool bin
-  // dir. Presence of that file is the cheapest signal that doesn't require
-  // launching a subprocess.
+// Locate the `mempalace` executable across install methods users actually
+// use: uv tool install (~/.local/bin), pipx (~/.local/pipx/venvs/...),
+// pip --user (~/.local/bin or ~/Library/Python/<ver>/bin), Homebrew, or a
+// project venv (~/.venv/bin). Falls back to spawning the user's login shell
+// to parse PATH/alias, which catches custom setups we can't predict.
+//
+// The earlier code required the bundled uv to declare mempalace "installed",
+// which was wrong: users with a working MemPalace from another method don't
+// need our bundled uv at all. We only need uv when the user clicks Install.
+async function detectMempalaceBinary(): Promise<string | null> {
   const exe = process.platform === 'win32' ? 'mempalace.exe' : 'mempalace';
-  try {
-    await fsp.access(path.join(getUvToolBinDir(), exe), fs.constants.X_OK);
-    return true;
-  } catch {
-    return false;
+  const candidates: string[] = [
+    path.join(getUvToolBinDir(), exe), // uv tool install
+    path.join(os.homedir(), '.local', 'bin', exe), // pip --user / uv tool
+    path.join(os.homedir(), '.venv', 'bin', exe), // common project venv
+    path.join(os.homedir(), '.local', 'pipx', 'venvs', 'mempalace', 'bin', exe),
+    path.join(os.homedir(), 'venv', 'bin', exe),
+    '/opt/homebrew/bin/' + exe,
+    '/usr/local/bin/' + exe,
+  ];
+
+  // macOS pip --user puts entry points under ~/Library/Python/<ver>/bin.
+  if (process.platform === 'darwin') {
+    try {
+      const pyDir = path.join(os.homedir(), 'Library', 'Python');
+      const versions = await fsp.readdir(pyDir);
+      for (const v of versions) {
+        candidates.push(path.join(pyDir, v, 'bin', exe));
+      }
+    } catch {
+      // ~/Library/Python/ may not exist — that's fine.
+    }
   }
+
+  for (const c of candidates) {
+    try {
+      await fsp.access(c, fs.constants.X_OK);
+      return c;
+    } catch {
+      // try next
+    }
+  }
+
+  // Last resort: ask the user's login shell. This picks up custom PATH
+  // entries and aliases that don't propagate to GUI app environment.
+  const fromShell = await resolveFromLoginShell(exe);
+  if (fromShell) return fromShell;
+
+  return null;
+}
+
+function resolveFromLoginShell(exe: string): Promise<string | null> {
+  if (process.platform === 'win32') return Promise.resolve(null);
+  const shellBin = process.env.SHELL || '/bin/zsh';
+  // `command -v` returns the resolved path for a binary, the literal name
+  // for a function, or `alias mempalace='/full/path'` style for aliases on
+  // bash. zsh's `command -v` returns the alias target directly on -i.
+  return new Promise((resolve) => {
+    const child = spawn(
+      shellBin,
+      ['-ilc', `command -v ${exe} 2>/dev/null; alias ${exe} 2>/dev/null`],
+      { env: process.env },
+    );
+    const out: string[] = [];
+    child.stdout.on('data', (d) => out.push(String(d)));
+    child.on('error', () => resolve(null));
+    child.on('exit', () => {
+      const text = out.join('').trim();
+      if (!text) return resolve(null);
+      // Pull the first absolute path we see — works for `command -v` output
+      // ("/Users/x/.venv/bin/mempalace") and `alias` output
+      // ("alias mempalace=/Users/x/.venv/bin/mempalace").
+      const match = text.match(/(\/[^\s'"]+)/);
+      if (!match) return resolve(null);
+      const found = match[1];
+      // Sanity-check: only trust paths that actually exist.
+      fsp.access(found, fs.constants.F_OK).then(
+        () => resolve(found),
+        () => resolve(null),
+      );
+    });
+  });
 }
 
 async function hookFilesPresent(): Promise<boolean> {
@@ -378,10 +450,15 @@ export async function getStatus(): Promise<MemPalaceStatus> {
   const hostSupported = bundledUvExists();
   const settings = await readSettings();
   const vaultPath = vaultPathFromSettings(settings);
+  const mempalacePackagePath = await detectMempalaceBinary();
 
   const checks: MemPalaceStatus['checks'] = {
-    uv: hostSupported ? 'ok' : 'unsupported',
-    mempalacePackage: (await mempalacePackageInstalled()) ? 'ok' : 'missing',
+    // `uv` is treated as a host-capability marker, not an install
+    // requirement. If the user already has mempalace from another method we
+    // don't need our bundled uv at all — surface 'ok' so the dashboard
+    // doesn't nag about a dependency the user doesn't actually depend on.
+    uv: hostSupported ? 'ok' : mempalacePackagePath ? 'ok' : 'unsupported',
+    mempalacePackage: mempalacePackagePath ? 'ok' : 'missing',
     vault: (await vaultPresent(vaultPath)) ? 'ok' : 'missing',
     hooks: (await hookFilesPresent()) ? 'ok' : 'missing',
     plugin: (await pluginEnabledInSettings()) ? 'ok' : 'missing',
@@ -396,6 +473,7 @@ export async function getStatus(): Promise<MemPalaceStatus> {
     hooksDir: getInstalledHooksDir(),
     settingsFile: getClaudeSettingsFile(),
     hostSupported,
+    mempalacePackagePath: mempalacePackagePath ?? undefined,
   };
 }
 
