@@ -1,7 +1,7 @@
 {
   "name": "devspace",
   "type": "module",
-  "version": "0.22.0",
+  "version": "0.22.1",
   "description": "One-window MacBook dev workspace with Claude Code CLI at the core",
   "license": "MIT",
   "author": {
@@ -20,12 +20,16 @@
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.node.json",
     "test": "vitest run",
     "test:watch": "vitest",
+    "rebuild:native:arm64": "electron-rebuild -f -o node-pty,better-sqlite3 --arch=arm64",
+    "rebuild:native:x64": "electron-rebuild -f -o node-pty,better-sqlite3 --arch=x64",
     "predist:mac": "node scripts/fetch-uv.mjs --mac",
     "dist:mac": "electron-vite build && electron-builder --mac",
-    "predist:mac:arm64": "node scripts/fetch-uv.mjs",
+    "predist:mac:arm64": "node scripts/fetch-uv.mjs && pnpm run rebuild:native:arm64",
     "dist:mac:arm64": "electron-vite build && electron-builder --mac --arm64",
-    "predist:mac:x64": "node scripts/fetch-uv.mjs --mac",
+    "postdist:mac:arm64": "pnpm run rebuild:native:arm64",
+    "predist:mac:x64": "node scripts/fetch-uv.mjs --mac && pnpm run rebuild:native:x64",
     "dist:mac:x64": "electron-vite build && electron-builder --mac --x64",
+    "postdist:mac:x64": "pnpm run rebuild:native:arm64",
     "predist:mac:universal": "node scripts/fetch-uv.mjs --mac",
     "dist:mac:universal": "electron-vite build && electron-builder --mac --universal",
     "postinstall": "electron-rebuild -f -o node-pty,better-sqlite3 || echo 'native rebuild skipped (terminal/memory features will be disabled)'"
