@@ -9,6 +9,12 @@ import { api } from '@renderer/lib/api';
 interface TerminalPaneProps {
   projectId: string;
   projectPath: string;
+  // Identifies which shell tab this pane backs. Each tab gets its own PTY
+  // keyed `${projectId}:shell:${tabId}` so multiple shells per project can
+  // coexist (e.g. frontend dev server in one tab, backend API in another).
+  // Defaults to 'default' for backward compat with callers from before
+  // multi-tab — they keep their original single-session behavior.
+  tabId?: string;
   isActive?: boolean;
 }
 
@@ -19,7 +25,12 @@ const THEME = {
   selectionBackground: 'rgba(59,130,246,0.35)',
 };
 
-export function TerminalPane({ projectId, projectPath, isActive }: TerminalPaneProps) {
+export function TerminalPane({
+  projectId,
+  projectPath,
+  tabId = 'default',
+  isActive,
+}: TerminalPaneProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
@@ -68,6 +79,7 @@ export function TerminalPane({ projectId, projectPath, isActive }: TerminalPaneP
             .create({
               projectId,
               kind: 'shell',
+              tabId,
               cwd: projectPath,
               cols: term.cols,
               rows: term.rows,
@@ -124,7 +136,7 @@ export function TerminalPane({ projectId, projectPath, isActive }: TerminalPaneP
       termRef.current = null;
       fitRef.current = null;
     };
-  }, [projectId, projectPath]);
+  }, [projectId, projectPath, tabId]);
 
   useEffect(() => {
     if (!isActive) return;

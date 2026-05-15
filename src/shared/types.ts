@@ -685,6 +685,17 @@ export interface CliTab {
   reloadGen?: number;
 }
 
+// Per-project shell terminal tab. The bottom-panel terminal supports many
+// concurrent shells per project (frontend dev, backend api, build, …),
+// each backed by an independent PTY whose key is `${projectId}:shell:${id}`.
+// Tabs survive project switches because BottomPanel is mounted per-project.
+export interface ShellTab {
+  id: string;
+  projectId: string;
+  label: string;
+  createdAt: number;
+}
+
 // Snapshot of a project's identity stored alongside CliTabs so the dock
 // can render and respawn its PTY even after the user switches to a
 // workspace that doesn't include this project. Without this, switching

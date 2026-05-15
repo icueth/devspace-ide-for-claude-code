@@ -1,9 +1,10 @@
 import { ChevronDown, Terminal as TerminalIcon, GitBranch, Search } from 'lucide-react';
-import { lazy, Suspense, useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
 
 import { GitStatusPanel } from '@renderer/components/Bottom/GitStatusPanel';
 import { cn } from '@renderer/lib/utils';
 import { useLayoutStore } from '@renderer/state/layout';
+import { useShellTabsStore } from '@renderer/state/shellTabs';
 
 // Lazy-load heavy tabs so the boot path stays lean. Each tab stays mounted
 // after its first activation to preserve its own state (terminal scrollback,
@@ -14,20 +15,44 @@ const SearchPanel = lazy(() =>
 const TerminalPane = lazy(() =>
   import('@renderer/components/Bottom/TerminalPane').then((m) => ({ default: m.TerminalPane })),
 );
+const TerminalTabs = lazy(() =>
+  import('@renderer/components/Bottom/TerminalTabs').then((m) => ({ default: m.TerminalTabs })),
+);
 
 interface BottomPanelProps {
   projectId: string;
   projectPath: string;
   initialTab?: Tab;
+  // When false the entire panel is hidden (display:none) — used by App.tsx
+  // to keep one BottomPanel per docked project mounted at all times so dev
+  // servers stay visually live across project switches without the buffer
+  // replay flicker.
+  isVisible?: boolean;
 }
 
 type Tab = 'terminal' | 'git' | 'search';
 
-export function BottomPanel({ projectId, projectPath, initialTab }: BottomPanelProps) {
+export function BottomPanel({
+  projectId,
+  projectPath,
+  initialTab,
+  isVisible = true,
+}: BottomPanelProps) {
   const [active, setActive] = useState<Tab>(initialTab ?? 'terminal');
   const setBottomOpen = useLayoutStore((s) => s.setBottomOpen);
   const [mountedTabs, setMountedTabs] = useState<Set<Tab>>(
     () => new Set<Tab>([initialTab ?? 'terminal']),
+  );
+
+  // Per-project shell tabs, keyed by projectId. Reading by projectId means
+  // each panel only re-renders when its own tabs change — switching active
+  // project doesn't slosh state into siblings.
+  const ensureTabsForProject = useShellTabsStore((s) => s.ensureTabsForProject);
+  const shellTabs = useShellTabsStore(
+    (s) => s.tabsByProject[projectId] ?? [],
+  );
+  const activeShellTabId = useShellTabsStore(
+    (s) => s.activeTabIdByProject[projectId] ?? null,
   );
 
   useEffect(() => {
@@ -37,13 +62,33 @@ export function BottomPanel({ projectId, projectPath, initialTab }: BottomPanelP
     }
   }, [initialTab]);
 
+  // Seed at least one shell tab the first time we render this project's
+  // panel — uses the legacy 'default' tab id so any pre-existing PTY keyed
+  // `${projectId}:shell:default` reattaches with its rolling buffer.
+  useEffect(() => {
+    if (shellTabs.length === 0) {
+      ensureTabsForProject(projectId);
+    }
+  }, [projectId, shellTabs.length, ensureTabsForProject]);
+
+  const tabs = shellTabs.length > 0 ? shellTabs : ensureTabsForProject(projectId);
+  const resolvedActiveShellId = useMemo(() => {
+    if (activeShellTabId && tabs.some((t) => t.id === activeShellTabId)) {
+      return activeShellTabId;
+    }
+    return tabs[0]?.id ?? null;
+  }, [activeShellTabId, tabs]);
+
   const activate = (tab: Tab) => {
     setActive(tab);
     setMountedTabs((prev) => (prev.has(tab) ? prev : new Set(prev).add(tab)));
   };
 
   return (
-    <div className="flex h-full flex-col">
+    <div
+      className="flex h-full flex-col"
+      style={{ display: isVisible ? 'flex' : 'none' }}
+    >
       <div
         className="flex h-9 shrink-0 items-center justify-between border-b border-border px-1"
         style={{ background: 'var(--color-surface-2)' }}
@@ -54,6 +99,7 @@ export function BottomPanel({ projectId, projectPath, initialTab }: BottomPanelP
             onClick={() => activate('terminal')}
             icon={<TerminalIcon size={12} />}
             label="Terminal"
+            count={shellTabs.length > 1 ? shellTabs.length : undefined}
           />
           <TabButton
             active={active === 'git'}
@@ -85,14 +131,43 @@ export function BottomPanel({ projectId, projectPath, initialTab }: BottomPanelP
               pointerEvents: active === 'terminal' ? 'auto' : 'none',
               zIndex: active === 'terminal' ? 1 : 0,
             }}
-            className="absolute inset-0"
+            className="absolute inset-0 flex flex-col"
           >
             <Suspense fallback={null}>
-              <TerminalPane
+              <TerminalTabs
                 projectId={projectId}
-                projectPath={projectPath}
-                isActive={active === 'terminal'}
+                tabs={tabs}
+                activeTabId={resolvedActiveShellId}
               />
+              <div className="relative min-h-0 flex-1">
+                {tabs.map((tab) => {
+                  const isActiveShell = tab.id === resolvedActiveShellId;
+                  return (
+                    <div
+                      key={tab.id}
+                      style={{
+                        visibility:
+                          isVisible && active === 'terminal' && isActiveShell
+                            ? 'visible'
+                            : 'hidden',
+                        pointerEvents:
+                          active === 'terminal' && isActiveShell ? 'auto' : 'none',
+                        zIndex: isActiveShell ? 1 : 0,
+                      }}
+                      className="absolute inset-0"
+                    >
+                      <TerminalPane
+                        projectId={projectId}
+                        projectPath={projectPath}
+                        tabId={tab.id}
+                        isActive={
+                          isVisible && active === 'terminal' && isActiveShell
+                        }
+                      />
+                    </div>
+                  );
+                })}
+              </div>
             </Suspense>
           </div>
         )}
@@ -132,9 +207,10 @@ interface TabButtonProps {
   onClick: () => void;
   icon: React.ReactNode;
   label: string;
+  count?: number;
 }
 
-function TabButton({ active, onClick, icon, label }: TabButtonProps) {
+function TabButton({ active, onClick, icon, label, count }: TabButtonProps) {
   return (
     <button
       onClick={onClick}
@@ -151,6 +227,16 @@ function TabButton({ active, onClick, icon, label }: TabButtonProps) {
       )}
       <span className={active ? 'text-accent-2' : 'text-text-muted'}>{icon}</span>
       <span>{label}</span>
+      {count !== undefined && (
+        <span
+          className={cn(
+            'ml-0.5 rounded-full px-1.5 text-[9.5px] leading-[14px]',
+            active ? 'bg-accent/20 text-accent-2' : 'bg-surface-raised text-text-muted',
+          )}
+        >
+          {count}
+        </span>
+      )}
     </button>
   );
 }

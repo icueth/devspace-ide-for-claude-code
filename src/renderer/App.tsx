@@ -156,6 +156,29 @@ function AppInner() {
     [projects, activeProjectId],
   );
 
+  // Union of (active project) ∪ (docked projects) — one BottomPanel mounts
+  // per id so each project's terminal tabs (and the dev servers running in
+  // them) stay alive across project switches. Only the active panel is
+  // visible; the rest sit at z-index 0 with pointer-events disabled.
+  const dockedProjectsById = useCliTabsStore((s) => s.projectsById);
+  const dockedOrder = useCliTabsStore((s) => s.dockedOrder);
+  const bottomPanelProjects = useMemo(() => {
+    const seen = new Set<string>();
+    const out: Array<{ id: string; path: string }> = [];
+    if (activeProject) {
+      seen.add(activeProject.id);
+      out.push({ id: activeProject.id, path: activeProject.path });
+    }
+    for (const id of dockedOrder) {
+      if (seen.has(id)) continue;
+      const meta = dockedProjectsById[id];
+      if (!meta) continue;
+      seen.add(id);
+      out.push({ id: meta.id, path: meta.path });
+    }
+    return out;
+  }, [activeProject, dockedOrder, dockedProjectsById]);
+
   // Keep git status fresh for the active project — indicators in the file tree
   // and bottom panel should always reflect real state.
   const refreshGit = useGitStore((s) => s.refresh);
@@ -586,13 +609,28 @@ function AppInner() {
                     />
                     <section
                       style={{ height: bottomHeight }}
-                      className="shrink-0 border-t border-border bg-surface"
+                      className="relative shrink-0 border-t border-border bg-surface"
                     >
-                      <BottomPanel
-                        projectId={activeProject.id}
-                        projectPath={activeProject.path}
-                        initialTab={bottomInitialTab}
-                      />
+                      {bottomPanelProjects.map((p) => (
+                        <div
+                          key={p.id}
+                          className="absolute inset-0"
+                          style={{
+                            visibility: p.id === activeProject.id ? 'visible' : 'hidden',
+                            zIndex: p.id === activeProject.id ? 1 : 0,
+                            pointerEvents: p.id === activeProject.id ? 'auto' : 'none',
+                          }}
+                        >
+                          <BottomPanel
+                            projectId={p.id}
+                            projectPath={p.path}
+                            initialTab={
+                              p.id === activeProject.id ? bottomInitialTab : undefined
+                            }
+                            isVisible={p.id === activeProject.id}
+                          />
+                        </div>
+                      ))}
                     </section>
                   </>
                 )}
