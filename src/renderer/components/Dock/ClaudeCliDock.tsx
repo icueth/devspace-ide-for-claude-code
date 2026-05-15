@@ -1,5 +1,6 @@
+import * as Dialog from '@radix-ui/react-dialog';
 import { Columns2, Plus, RotateCcw, Trash2, X } from 'lucide-react';
-import { lazy, Suspense, useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 
 import { cn } from '@renderer/lib/utils';
 import { useCliTabsStore } from '@renderer/state/cliTabs';
@@ -363,6 +364,28 @@ function CliTabBar({
 
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
 
+  // Promise-based confirm. Closing a chat tab kills its tmux session
+  // (the only place the scrollback + claude state live), so we always
+  // ask first. Re-entrancy guard: if a prior dialog is open, the new
+  // request resolves it as cancelled first to avoid stacking.
+  const [confirmRequest, setConfirmRequest] = useState<{
+    title: string;
+    body: string;
+    confirmLabel: string;
+    resolve: (ok: boolean) => void;
+  } | null>(null);
+  const requestConfirm = useCallback(
+    (opts: { title: string; body: string; confirmLabel: string }): Promise<boolean> => {
+      return new Promise((resolve) => {
+        setConfirmRequest((prev) => {
+          if (prev) prev.resolve(false);
+          return { ...opts, resolve };
+        });
+      });
+    },
+    [],
+  );
+
   const handleSelect = (projectId: string, tabId: string): void => {
     // setActiveTab pins the active column AND mirrors selection into the
     // legacy single-pane state.
@@ -377,7 +400,17 @@ function CliTabBar({
     addTab(activeDockedProjectId);
   };
 
-  const handleClose = (projectId: string, tabId: string): void => {
+  const handleClose = async (projectId: string, tabId: string): Promise<void> => {
+    const project = dockedProjects.find((p) => p.id === projectId);
+    const tab = tabsByProject[projectId]?.find((t) => t.id === tabId);
+    const label = tab?.label ?? 'this chat';
+    const projectName = project?.name ?? 'project';
+    const ok = await requestConfirm({
+      title: 'Close chat tab?',
+      body: `Closing "${label}" in ${projectName} ends the tmux session and discards its scrollback. There's no undo — a new tab will start fresh.`,
+      confirmLabel: 'Close & end session',
+    });
+    if (!ok) return;
     removeTab(projectId, tabId);
   };
 
@@ -398,10 +431,20 @@ function CliTabBar({
     closeContextMenu();
   };
 
-  const handleCloseProject = (): void => {
+  const handleCloseProject = async (): Promise<void> => {
     if (!contextMenu) return;
-    undockProject(contextMenu.projectId);
+    const project = dockedProjects.find((p) => p.id === contextMenu.projectId);
+    const tabCount = tabsByProject[contextMenu.projectId]?.length ?? 0;
     closeContextMenu();
+    const ok = await requestConfirm({
+      title: 'Close project?',
+      body: `Closing "${project?.name ?? 'this project'}" will end ${tabCount} tmux session${
+        tabCount === 1 ? '' : 's'
+      } and discard their scrollback. There's no undo.`,
+      confirmLabel: 'Close all tabs',
+    });
+    if (!ok) return;
+    undockProject(contextMenu.projectId);
   };
 
   // Build a flat row of (project, tab) chips. A chip is "active" when it
@@ -495,7 +538,77 @@ function CliTabBar({
           onCloseProject={handleCloseProject}
         />
       )}
+      <ConfirmDialog
+        open={!!confirmRequest}
+        title={confirmRequest?.title ?? ''}
+        body={confirmRequest?.body ?? ''}
+        confirmLabel={confirmRequest?.confirmLabel ?? 'Confirm'}
+        onConfirm={() => {
+          confirmRequest?.resolve(true);
+          setConfirmRequest(null);
+        }}
+        onCancel={() => {
+          confirmRequest?.resolve(false);
+          setConfirmRequest(null);
+        }}
+      />
     </>
+  );
+}
+
+interface ConfirmDialogProps {
+  open: boolean;
+  title: string;
+  body: string;
+  confirmLabel: string;
+  onConfirm: () => void;
+  onCancel: () => void;
+}
+
+function ConfirmDialog({
+  open,
+  title,
+  body,
+  confirmLabel,
+  onConfirm,
+  onCancel,
+}: ConfirmDialogProps) {
+  return (
+    <Dialog.Root
+      open={open}
+      onOpenChange={(o) => {
+        if (!o) onCancel();
+      }}
+    >
+      <Dialog.Portal>
+        <Dialog.Overlay className="fixed inset-0 z-40 bg-black/40" />
+        <Dialog.Content className="fixed left-1/2 top-24 z-50 w-[min(420px,85vw)] -translate-x-1/2 overflow-hidden rounded-lg border border-border-emphasis bg-surface-raised shadow-2xl">
+          <Dialog.Title className="border-b border-border-subtle bg-surface-sidebar px-4 py-2 text-[12px] font-medium text-text">
+            {title}
+          </Dialog.Title>
+          <Dialog.Description className="px-4 py-3 text-[12px] text-text-secondary">
+            {body}
+          </Dialog.Description>
+          <div className="flex justify-end gap-2 border-t border-border-subtle bg-surface-sidebar px-3 py-2 text-[11px]">
+            <button
+              type="button"
+              onClick={onCancel}
+              className="rounded px-2 py-1 text-text-secondary hover:bg-surface-overlay hover:text-text"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={onConfirm}
+              autoFocus
+              className="rounded bg-red-600 px-3 py-1 text-white transition hover:bg-red-700"
+            >
+              {confirmLabel}
+            </button>
+          </div>
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
   );
 }
 

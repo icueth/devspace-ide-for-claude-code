@@ -5,6 +5,26 @@ All notable changes to DevSpace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.20.1] — 2026-05-15
+
+### Added
+
+- **Claude CLI tabs now start with `--dangerously-skip-permissions`.**
+  Interactive panes always launch claude with the global skip flag so it
+  can edit files / run tools without prompting every turn. The pane is
+  already a trust boundary (user drives the conversation themselves) so
+  the friction of repeated approvals doesn't add safety. Applied in both
+  tmux-backed and direct-spawn paths in `ClaudeCliLauncher.launchClaudeCli`.
+  Design generation (`claude -p`) is unaffected — it still passes
+  `--disallowed-tools` to keep the non-interactive sandbox tight.
+- **Confirmation dialog before closing a Claude CLI tab.** Clicking the
+  X on a chip — or selecting "Close project" from the chip context menu
+  — now opens a destructive-styled Radix dialog explaining that closing
+  ends the tmux session and discards its scrollback (no undo). The
+  dialog is promise-based with a re-entrancy guard so spam-clicks can't
+  stack dialogs. Closes a quiet footgun where one stray click on the X
+  would silently kill claude state the user assumed was persistent.
+
 ## [0.20.0] — 2026-05-14
 
 ### Added

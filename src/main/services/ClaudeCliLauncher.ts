@@ -104,6 +104,14 @@ export async function launchClaudeCli(
   const env = await resolveInteractiveShellEnv();
   const shell = env.SHELL ?? process.env.SHELL ?? '/bin/zsh';
 
+  // --dangerously-skip-permissions: user-requested default for interactive
+  // CLI panes so claude can edit files / run tools without prompting every
+  // turn. The interactive pane is already a trust boundary (user types the
+  // commands themselves) so a global skip matches the workflow expectation.
+  // NOTE: only applied here — claude -p sites (Design generation) still pass
+  // --disallowed-tools to keep the sandbox tight.
+  const claudeArgs = ['--dangerously-skip-permissions'];
+
   // Prefer tmux so the CLI session survives app restarts / pane remounts.
   // `new-session -A` attaches to an existing session with the same name or
   // creates it — which gives us free resume-on-reopen.
@@ -128,6 +136,7 @@ export async function launchClaudeCli(
         '-c',
         opts.cwd,
         claudeBin,
+        ...claudeArgs,
       ],
       cols: opts.cols,
       rows: opts.rows,
@@ -144,7 +153,7 @@ export async function launchClaudeCli(
       tabId,
       cwd: opts.cwd,
       command: claudeBin,
-      args: [],
+      args: claudeArgs,
       cols: opts.cols,
       rows: opts.rows,
     });
