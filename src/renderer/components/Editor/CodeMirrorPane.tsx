@@ -355,11 +355,16 @@ export function CodeMirrorPane({
     }
     (async () => {
       try {
-        const { oldContent } = await api.git.diff(activeProjectPath, rel);
+        const { oldContent, inHead } = await api.git.diff(activeProjectPath, rel);
         if (cancelled) return;
-        // oldContent === '' typically means "untracked / brand-new" — in
-        // that case every line is an addition, which is exactly what
-        // computeLineDiff() yields when baseline is empty.
+        // Untracked / brand-new files have no baseline in HEAD. Painting
+        // every line green is misleading — matches Cursor/VS Code which
+        // omit the gutter for untracked files. Only render diff when the
+        // file actually exists in HEAD.
+        if (!inHead) {
+          view.dispatch({ effects: setGitBaseline.of(null) });
+          return;
+        }
         view.dispatch({ effects: setGitBaseline.of(oldContent) });
       } catch {
         if (cancelled) return;

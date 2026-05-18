@@ -142,6 +142,10 @@ const api = {
     setConfig: (cfg: unknown) => ipcRenderer.invoke(IPC.TMUX_SET_CONFIG, cfg),
     renderConf: (cfg: unknown) => ipcRenderer.invoke(IPC.TMUX_RENDER_CONF, cfg),
     resolveBinary: () => ipcRenderer.invoke(IPC.TMUX_RESOLVE_BINARY),
+    findStale: (maxAgeMs?: number) =>
+      ipcRenderer.invoke(IPC.TMUX_FIND_STALE, maxAgeMs),
+    pruneStale: (maxAgeMs?: number) =>
+      ipcRenderer.invoke(IPC.TMUX_PRUNE_STALE, maxAgeMs),
   },
   settings: {
     list: (projectPath: string | null) =>

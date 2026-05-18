@@ -71,6 +71,8 @@ export const IPC = {
   TMUX_SET_CONFIG: 'tmux:set-config',
   TMUX_RENDER_CONF: 'tmux:render-conf',
   TMUX_RESOLVE_BINARY: 'tmux:resolve-binary',
+  TMUX_FIND_STALE: 'tmux:find-stale',
+  TMUX_PRUNE_STALE: 'tmux:prune-stale',
 
   // Claude config browser (Settings dialog)
   SETTINGS_LIST: 'settings:list',

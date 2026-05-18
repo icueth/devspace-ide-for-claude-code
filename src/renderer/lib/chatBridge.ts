@@ -34,8 +34,48 @@ type Listener = (event: ChatPrefillEvent) => void;
 
 const listeners = new Set<Listener>();
 
+// Buffer for events emitted before the target ChatPanel has subscribed.
+// Right-clicking a file in the sidebar and picking "Add to Chat" can fire
+// emit *before* React has rendered ChatPanel for a newly-docked project
+// — the panel mounts a microtask later. Without this buffer the event
+// would simply drop on the floor (the symptom users hit in 0.24.2).
+//
+// Keyed by projectPath; capped per-project; entries expire after 3s so
+// stale events from a tab the user closed don't replay later.
+interface PendingEntry {
+  event: ChatPrefillEvent;
+  ts: number;
+}
+const pending = new Map<string, PendingEntry[]>();
+const PENDING_TTL_MS = 3000;
+const PENDING_CAP = 5;
+
+function purgePending(projectPath: string, now: number): PendingEntry[] {
+  const list = pending.get(projectPath);
+  if (!list || list.length === 0) return [];
+  const fresh = list.filter((e) => now - e.ts <= PENDING_TTL_MS);
+  if (fresh.length === 0) pending.delete(projectPath);
+  else pending.set(projectPath, fresh);
+  return fresh;
+}
+
 export function onChatPrefill(listener: Listener): () => void {
   listeners.add(listener);
+  // Drain any pending events the listener might be the intended target
+  // for — the listener filters by projectPath itself, so just replay
+  // everything fresh in the buffer.
+  const now = Date.now();
+  for (const projectPath of Array.from(pending.keys())) {
+    const fresh = purgePending(projectPath, now);
+    for (const entry of fresh) {
+      try {
+        listener(entry.event);
+      } catch (err) {
+        console.error('[chatBridge] listener threw on replay', err);
+      }
+    }
+    pending.delete(projectPath); // events delivered once, drop the buffer
+  }
   return () => {
     listeners.delete(listener);
   };
@@ -44,13 +84,36 @@ export function onChatPrefill(listener: Listener): () => void {
 export function emitChatPrefill(event: ChatPrefillEvent): void {
   // Iterate a snapshot so handlers can safely unsubscribe during dispatch.
   const snapshot = Array.from(listeners);
+  let delivered = false;
   for (const fn of snapshot) {
     try {
-      fn(event);
+      const result = fn(event);
+      // Listeners filter by projectPath internally and return implicitly;
+      // we can't tell from here whether a given listener actually matched.
+      // Treat *any* listener call as a delivery attempt — if no listener
+      // exists at all (snapshot empty), buffer instead.
+      delivered = true;
+      void result;
     } catch (err) {
       console.error('[chatBridge] listener threw', err);
     }
   }
+  // Buffer when there are no listeners at all — the most common cause of
+  // "Add to Chat does nothing" on a project that hasn't been docked yet.
+  if (!delivered) {
+    const now = Date.now();
+    const list = purgePending(event.projectPath, now);
+    list.push({ event, ts: now });
+    if (list.length > PENDING_CAP) list.splice(0, list.length - PENDING_CAP);
+    pending.set(event.projectPath, list);
+  }
+}
+
+// Test-only — clears the buffer between tests so leakage doesn't cause
+// false positives.
+export function __resetChatBridgeForTests(): void {
+  listeners.clear();
+  pending.clear();
 }
 
 // Format a chat prefill from a DesignScreen reference. Pure helper so it

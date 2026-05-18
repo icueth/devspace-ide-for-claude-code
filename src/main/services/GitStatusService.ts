@@ -117,10 +117,11 @@ export async function getStatus(cwd: string): Promise<GitSnapshot> {
 export async function getFileDiff(
   cwd: string,
   relativePath: string,
-): Promise<{ oldContent: string; newContent: string }> {
+): Promise<{ oldContent: string; newContent: string; inHead: boolean }> {
   assertRelativePath(relativePath);
   const git = getGit(cwd);
   let oldContent = '';
+  let inHead = false;
   try {
     // Use `-- <path>` separator so git treats the arg as a pathspec, never a flag.
     oldContent = await git.show(['HEAD', '--', relativePath]).catch(async () => {
@@ -128,8 +129,10 @@ export async function getFileDiff(
       // to the legacy form, knowing the path was already validated.
       return git.show([`HEAD:${relativePath}`]);
     });
+    inHead = true;
   } catch {
     oldContent = '';
+    inHead = false;
   }
 
   let newContent = '';
@@ -140,7 +143,7 @@ export async function getFileDiff(
     newContent = '';
   }
 
-  return { oldContent, newContent };
+  return { oldContent, newContent, inHead };
 }
 
 export async function stageFiles(cwd: string, paths: string[]): Promise<void> {

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  __resetChatBridgeForTests,
   buildChatPrefill,
   emitChatPrefill,
   onChatPrefill,
@@ -129,6 +130,7 @@ describe('buildChatPrefill', () => {
 const cleanupFns: Array<() => void> = [];
 afterEach(() => {
   while (cleanupFns.length > 0) cleanupFns.pop()?.();
+  __resetChatBridgeForTests();
 });
 
 function subscribe(fn: (e: ChatPrefillEvent) => void): void {
@@ -205,5 +207,33 @@ describe('emitChatPrefill / onChatPrefill', () => {
 
     expect(got).toHaveLength(1);
     expect(got[0]!.attachPath).toBe('/proj/src/index.ts');
+  });
+
+  // v0.24.3 regression: "Add to Chat" silently dropped events when the
+  // target ChatPanel hadn't mounted yet (dockProject schedules the panel
+  // for the *next* render). The buffer replays fresh events on the
+  // first subscribe so the workflow doesn't depend on render timing.
+  it('buffers events emitted before any listener subscribes', () => {
+    emitChatPrefill({
+      projectPath: '/proj',
+      text: '',
+      attachPath: '/proj/src/foo.ts',
+    });
+    const got: ChatPrefillEvent[] = [];
+    subscribe((e) => got.push(e));
+    expect(got).toHaveLength(1);
+    expect(got[0]!.attachPath).toBe('/proj/src/foo.ts');
+  });
+
+  it('only replays buffered events once even with multiple subscribers', () => {
+    emitChatPrefill({ projectPath: '/proj', text: 'queued' });
+    const a: ChatPrefillEvent[] = [];
+    const b: ChatPrefillEvent[] = [];
+    subscribe((e) => a.push(e));
+    subscribe((e) => b.push(e));
+    // The buffer is drained by the first subscriber; the second one only
+    // gets future events.
+    expect(a).toHaveLength(1);
+    expect(b).toHaveLength(0);
   });
 });

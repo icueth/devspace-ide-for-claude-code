@@ -5,6 +5,30 @@ All notable changes to DevSpace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.24.3] — 2026-05-18
+
+### Fixed
+
+- **Git diff gutter painted every line green (untracked files) or amber
+  (large files).** `getFileDiff` now returns an `inHead` flag; CodeMirrorPane
+  skips the gutter entirely for files that aren't in HEAD instead of
+  treating an empty baseline as "every line is new". The all-amber case
+  was the 400-line truncation fallback firing on perfectly normal source
+  files — raised `MAX_LINES` from 400 → 4000 (LCS table still under 16M
+  cells) and changed the over-cap fallback to render no markers instead
+  of marking everything as modified.
+- **"Add to Chat" from the sidebar silently did nothing on first use.**
+  `dockProject()` queues the ChatPanel to mount on the next render, but
+  `emitChatPrefill()` fired synchronously immediately after — the listener
+  hadn't subscribed yet so the event dropped. The bridge now buffers
+  events (per project, 3s TTL, cap 5) and replays them when the first
+  listener subscribes.
+- **Tmux session names had no project context + accumulated forever.**
+  Chat-run sessions now embed a project slug (`devspace-chatrun-<slug>-<runId>`)
+  so you can tell sessions apart at a glance in Settings → tmux. App
+  startup prunes any `devspace-*` session older than 2 days; Settings →
+  tmux surfaces the stale count plus a manual **Prune** button.
+
 ## [0.24.2] — 2026-05-18
 
 ### Added

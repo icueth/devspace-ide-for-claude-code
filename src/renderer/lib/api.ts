@@ -202,6 +202,8 @@ export interface DevspaceApi {
     setConfig: (cfg: TmuxConfig) => Promise<TmuxConfig>;
     renderConf: (cfg: TmuxConfig) => Promise<string>;
     resolveBinary: () => Promise<{ path: string | null; configured: string | null }>;
+    findStale: (maxAgeMs?: number) => Promise<Array<{ name: string; ageMs: number }>>;
+    pruneStale: (maxAgeMs?: number) => Promise<string[]>;
   };
   settings: {
     list: (projectPath: string | null) => Promise<SettingsCategory[]>;
@@ -714,6 +716,8 @@ function makeStubApi(): DevspaceApi {
       setConfig: notWired('tmux.setConfig'),
       renderConf: notWired('tmux.renderConf'),
       resolveBinary: () => Promise.resolve({ path: null, configured: null }),
+      findStale: () => Promise.resolve([]),
+      pruneStale: () => Promise.resolve([]),
     },
     settings: {
       list: () => Promise.resolve([]),

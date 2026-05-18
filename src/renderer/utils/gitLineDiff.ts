@@ -27,11 +27,12 @@ export interface DeletedBlock {
   lines: string[];
 }
 
-// Same bounds as main-process diffPreview — 400 lines per side keeps the
-// O(m·n) LCS table under 160k cells. Files over the cap fall back to
-// "everything is mod" so the gutter still shows *something* useful.
-const MAX_LINES = 400;
-const MAX_BYTES = 1_000_000;
+// 4000 lines per side keeps the O(m·n) LCS table under 16M cells, still
+// well under the main-thread budget on modern hardware (~60-80ms worst
+// case). Beyond that, the gutter renders *nothing* — painting every line
+// amber is more confusing than no gutter at all.
+const MAX_LINES = 4000;
+const MAX_BYTES = 4_000_000;
 
 // Per-line truncation for the deletion widget — long minified lines
 // would blow up the rendered phantom. The marker still records the full
@@ -68,20 +69,17 @@ export function computeLineDiff(oldText: string, newText: string): LineDiffResul
     return { markers: new Map(), deletions: new Map(), truncated: false };
   }
 
-  // Bound the LCS table. If either side blows past the cap, treat the
-  // whole new file as "modified" — better than freezing main thread or
-  // showing nothing at all.
+  // Bound the LCS table. If either side blows past the cap, render NO
+  // markers — painting every line amber is misleading because most of
+  // them are unchanged. The `truncated` flag lets callers surface a
+  // small banner if they want, but the gutter itself stays clean.
   if (
     oldLines.length > MAX_LINES ||
     newLines.length > MAX_LINES ||
     oldText.length > MAX_BYTES ||
     newText.length > MAX_BYTES
   ) {
-    const markers = new Map<number, LineMarker>();
-    for (let i = 0; i < newLines.length; i++) {
-      markers.set(i + 1, { kind: 'mod' });
-    }
-    return { markers, deletions: new Map(), truncated: true };
+    return { markers: new Map(), deletions: new Map(), truncated: true };
   }
 
   // Standard LCS table + backtrack. Collapses adjacent add+del into 'mod'

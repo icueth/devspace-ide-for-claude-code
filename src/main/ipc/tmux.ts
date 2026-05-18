@@ -7,6 +7,10 @@ import {
   tmuxSocketArgs,
 } from '@main/services/ClaudeCliLauncher';
 import {
+  findStaleSessions,
+  pruneStaleSessions,
+} from '@main/services/TmuxChatRunner';
+import {
   loadTmuxConfig,
   renderTmuxConfSnippet,
   saveTmuxConfig,
@@ -259,6 +263,29 @@ export function registerTmuxIpc(): void {
       return { path: resolved, configured: cfg.binaryPath };
     },
   );
+
+  ipcMain.handle(
+    IPC.TMUX_FIND_STALE,
+    async (_e, maxAgeMs?: number): Promise<Array<{ name: string; ageMs: number }>> => {
+      // Default 2 days; renderer can override for a "show me everything"
+      // preview pass.
+      const age = typeof maxAgeMs === 'number' && maxAgeMs > 0
+        ? Math.min(maxAgeMs, 90 * 24 * 60 * 60 * 1000)
+        : 2 * 24 * 60 * 60 * 1000;
+      const stale = await findStaleSessions(age);
+      return stale.map((s) => ({ name: s.name, ageMs: s.ageMs }));
+    },
+  );
+
+  ipcMain.handle(
+    IPC.TMUX_PRUNE_STALE,
+    async (_e, maxAgeMs?: number): Promise<string[]> => {
+      const age = typeof maxAgeMs === 'number' && maxAgeMs > 0
+        ? Math.min(maxAgeMs, 90 * 24 * 60 * 60 * 1000)
+        : 2 * 24 * 60 * 60 * 1000;
+      return pruneStaleSessions(age);
+    },
+  );
 }
 
 function classifySession(
@@ -285,6 +312,16 @@ function classifySession(
       kind: 'shell',
       projectId: shell[1] ?? null,
       tabId: shell[2] ?? 'default',
+    };
+  }
+  // chatrun: `<prefix>-chatrun-<projectSlug>-<runId>`. projectSlug carries
+  // the user-visible "which project" hint, runId is the disambiguator.
+  const chatrun = new RegExp(`^${escaped}-chatrun-([^-]+)-(.+)$`).exec(name);
+  if (chatrun) {
+    return {
+      kind: 'chatrun',
+      projectId: chatrun[1] ?? null,
+      tabId: chatrun[2] ?? null,
     };
   }
   return { kind: 'other', projectId: null, tabId: null };

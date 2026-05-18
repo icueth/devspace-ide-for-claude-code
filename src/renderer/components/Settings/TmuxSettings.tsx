@@ -118,13 +118,52 @@ export function TmuxSettings() {
       const project = projectById.get(s.projectId) ?? `project ${s.projectId.slice(0, 6)}`;
       return { primary: `Shell · ${project}`, secondary: s.name };
     }
+    if (s.kind === 'chatrun' && s.projectId) {
+      // projectId here is the project basename slug (folder name), not the
+      // workspace project id — match against project.path basename for the
+      // most informative label.
+      const slug = s.projectId;
+      const match = projects.find((p) => {
+        const base = p.path.split('/').filter(Boolean).pop() ?? '';
+        return base.replace(/[^a-zA-Z0-9._-]/g, '_').replace(/_+/g, '_').slice(0, 24) === slug;
+      });
+      const project = match?.name ?? slug;
+      return { primary: `Chat run · ${project}`, secondary: s.name };
+    }
     return { primary: s.name, secondary: null };
   };
 
   const total = sessions?.length ?? 0;
   const claudeCount = sessions?.filter((s) => s.kind === 'claude-cli').length ?? 0;
   const shellCount = sessions?.filter((s) => s.kind === 'shell').length ?? 0;
+  const chatrunCount = sessions?.filter((s) => s.kind === 'chatrun').length ?? 0;
   const otherCount = sessions?.filter((s) => s.kind === 'other').length ?? 0;
+  const TWO_DAYS_MS = 2 * 24 * 60 * 60 * 1000;
+  const now = Date.now();
+  const staleCount = sessions?.filter((s) => {
+    if (!s.name.startsWith('devspace-')) return false;
+    const created = s.created * 1000;
+    if (!Number.isFinite(created) || created <= 0) return false;
+    return now - created > TWO_DAYS_MS;
+  }).length ?? 0;
+
+  const handlePrune = async () => {
+    if (staleCount === 0) return;
+    if (!window.confirm(`Prune ${staleCount} devspace tmux session${staleCount === 1 ? '' : 's'} older than 2 days?`)) {
+      return;
+    }
+    try {
+      const killed = await api.tmux.pruneStale();
+      setStatus({
+        kind: 'ok',
+        message: `Pruned ${killed.length} stale session${killed.length === 1 ? '' : 's'}`,
+        ts: Date.now(),
+      });
+      await refresh(false);
+    } catch (err) {
+      setStatus({ kind: 'error', message: (err as Error).message });
+    }
+  };
 
   return (
     <div className="flex h-full flex-col">
@@ -144,12 +183,28 @@ export function TmuxSettings() {
             {shellCount} shell
           </span>
         )}
+        {chatrunCount > 0 && (
+          <span className="rounded-full bg-[rgba(76,141,255,0.15)] px-2 py-[1px] text-[10px] text-[var(--color-accent-2)]">
+            {chatrunCount} chat run
+          </span>
+        )}
         {otherCount > 0 && (
           <span className="rounded-full bg-surface-3 px-2 py-[1px] text-[10px] text-text-muted">
             {otherCount} other
           </span>
         )}
         <div className="flex-1" />
+        {staleCount > 0 && (
+          <button
+            type="button"
+            onClick={() => void handlePrune()}
+            className="inline-flex items-center gap-1 rounded-[6px] border border-[rgba(251,191,36,0.4)] bg-[rgba(251,191,36,0.1)] px-2 py-[4px] text-[11px] text-[#fcd34d] transition hover:bg-[rgba(251,191,36,0.18)] hover:text-[#fde68a]"
+            title="Kill devspace tmux sessions older than 2 days"
+          >
+            <Trash2 size={11} />
+            Prune {staleCount} stale
+          </button>
+        )}
         {status.kind === 'ok' && (
           <span className="flex items-center gap-1 text-[10.5px] text-semantic-success">
             <Check size={10} /> {status.message}
@@ -266,15 +321,19 @@ export function TmuxSettings() {
                                 s.kind === 'claude-cli'
                                   ? 'bg-[rgba(168,85,247,0.15)] text-[#d8b4fe]'
                                   : s.kind === 'shell'
-                                    ? 'bg-[rgba(76,141,255,0.15)] text-[var(--color-accent-2)]'
-                                    : 'bg-surface-3 text-text-muted',
+                                    ? 'bg-[rgba(34,197,94,0.12)] text-[#86efac]'
+                                    : s.kind === 'chatrun'
+                                      ? 'bg-[rgba(76,141,255,0.15)] text-[var(--color-accent-2)]'
+                                      : 'bg-surface-3 text-text-muted',
                               )}
                             >
                               {s.kind === 'claude-cli'
                                 ? 'claude'
                                 : s.kind === 'shell'
                                   ? 'shell'
-                                  : 'other'}
+                                  : s.kind === 'chatrun'
+                                    ? 'chat run'
+                                    : 'other'}
                             </span>
                           </div>
                         </div>

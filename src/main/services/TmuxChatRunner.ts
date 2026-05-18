@@ -112,6 +112,15 @@ function shquote(s: string): string {
   return `'${s.replace(/'/g, `'\\''`)}'`;
 }
 
+// Project slug for tmux session names. tmux only accepts a narrow charset
+// in session names (alphanumeric, dash, underscore, dot, '@'). Strip
+// anything else from the cwd basename and cap at 24 chars so the full
+// session name stays readable.
+export function slugForSessionName(cwd: string): string {
+  const base = path.basename(path.resolve(cwd));
+  return base.replace(/[^a-zA-Z0-9._-]/g, '_').replace(/_+/g, '_').slice(0, 24);
+}
+
 // Build the shell command that runs inside `tmux new-session -d ... sh -c '<cmd>'`.
 //   1. Trap EXIT to write the exit code to done file — fires on normal exit
 //      AND on signals (SIGTERM, SIGHUP, SIGINT). Critical for "stuck working"
@@ -189,6 +198,81 @@ async function tmuxKillSession(
       logger.warn(`kill-session ${sessionName} failed: ${msg}`);
     }
   }
+}
+
+export interface StaleSession {
+  name: string;
+  createdAt: number; // epoch ms
+  ageMs: number;
+}
+
+// Parse tmux list-sessions output. Format string returns one session per
+// line: `name<TAB>session_created_epoch_seconds`. We use TAB explicitly so
+// session names containing dashes never confuse the split.
+function parseListSessions(stdout: string): StaleSession[] {
+  const now = Date.now();
+  const out: StaleSession[] = [];
+  for (const line of stdout.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const tab = trimmed.indexOf('\t');
+    if (tab < 0) continue;
+    const name = trimmed.slice(0, tab);
+    const epoch = parseInt(trimmed.slice(tab + 1), 10);
+    if (!Number.isFinite(epoch) || epoch <= 0) continue;
+    const createdAt = epoch * 1000;
+    out.push({ name, createdAt, ageMs: now - createdAt });
+  }
+  return out;
+}
+
+// Look at every tmux session on our socket whose name starts with
+// `devspace-` and return the ones older than `maxAgeMs`. Used by the
+// startup pruner so chat/design/CLI sessions don't pile up forever.
+export async function findStaleSessions(maxAgeMs: number): Promise<StaleSession[]> {
+  const tmuxBin = await resolveTmuxBinary();
+  if (!tmuxBin) return [];
+  try {
+    const { stdout } = await execFileP(tmuxBin, [
+      ...tmuxSocketArgs(),
+      'list-sessions',
+      '-F',
+      '#{session_name}\t#{session_created}',
+    ]);
+    return parseListSessions(stdout).filter(
+      (s) => s.name.startsWith('devspace-') && s.ageMs > maxAgeMs,
+    );
+  } catch (err) {
+    // "no server running" is the cold-start case — nothing to prune.
+    const msg = (err as Error).message;
+    if (msg.includes('no server running') || msg.includes('error connecting')) {
+      return [];
+    }
+    logger.warn(`list-sessions failed: ${msg}`);
+    return [];
+  }
+}
+
+// Kill every devspace-prefixed tmux session older than `maxAgeMs`. Returns
+// the names that were actually killed. The two-day default lines up with
+// "ran a chat over the weekend, forgot about it" — long enough that you
+// rarely lose anything you cared about, short enough that the session
+// list stays manageable.
+export async function pruneStaleSessions(
+  maxAgeMs = 2 * 24 * 60 * 60 * 1000,
+): Promise<string[]> {
+  const tmuxBin = await resolveTmuxBinary();
+  if (!tmuxBin) return [];
+  const stale = await findStaleSessions(maxAgeMs);
+  const killed: string[] = [];
+  for (const s of stale) {
+    await tmuxKillSession(tmuxBin, s.name);
+    killed.push(s.name);
+    logger.info(
+      `pruned stale tmux session ${s.name} (age ${Math.floor(s.ageMs / 3600000)}h)`,
+    );
+  }
+  return killed;
 }
 
 interface TailLoopOpts {
@@ -386,8 +470,14 @@ export async function startChatRun(opts: StartRunOptions): Promise<ChatRunHandle
   const shellCmd = buildShellCommand(opts.claudeBin, opts.args, runDir);
   const tmuxBin = await resolveTmuxBinary();
 
-  // Session name: 80-char tmux limit. Prefix + 12 chars of runId is plenty.
-  const sessionName = `devspace-chatrun-${opts.runId}`.slice(0, 60);
+  // Session name: 80-char tmux limit. Encode the project basename so users
+  // browsing `tmux ls` (or our Settings pane) can tell sessions apart at a
+  // glance — previously every chat run looked like `devspace-chatrun-abc1`
+  // with no project context. cwd basename is fine because the renderer
+  // already de-duplicates project rows by absolute path; collisions just
+  // make the session name less informative, not incorrect.
+  const projectSlug = slugForSessionName(opts.cwd) || 'unknown';
+  const sessionName = `devspace-chatrun-${projectSlug}-${opts.runId}`.slice(0, 60);
 
   if (tmuxBin) {
     // Spawn tmux new-session -d so the tmux server daemonizes the inner

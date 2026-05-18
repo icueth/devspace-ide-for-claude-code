@@ -56,6 +56,7 @@ import { shutdownAll as shutdownDevServers } from '@main/services/DevServerServi
 import { shutdownWatchers } from '@main/services/FileWatcherService';
 import { init as initMemory } from '@main/services/MemoryService';
 import { shutdownAll as shutdownPtyPool } from '@main/services/PtyPool';
+import { pruneStaleSessions as pruneStaleTmuxSessions } from '@main/services/TmuxChatRunner';
 import { getTmuxConfigSync } from '@main/services/TmuxConfigService';
 import { resolveInteractiveShellEnv } from '@main/utils/shellEnv';
 
@@ -282,6 +283,16 @@ app.whenReady().then(async () => {
   void initMemory().catch((err) => {
     console.error('[main] memory init failed:', (err as Error).message);
   });
+
+  // Prune stale tmux sessions older than 2 days. Sessions are created by
+  // chat runs, design generations, and CLI launchers — without this, a
+  // user who runs DevSpace daily ends up with hundreds of dead `devspace-*`
+  // sessions over a month. Deferred 5s so the renderer mounts first.
+  setTimeout(() => {
+    void pruneStaleTmuxSessions().catch((err) => {
+      console.error('[main] tmux prune failed:', (err as Error).message);
+    });
+  }, 5000);
 
   await createWindow();
 

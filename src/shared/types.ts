@@ -806,7 +806,7 @@ export interface TmuxSession {
   // Best-effort labels parsed out of the devspace-prefixed naming scheme.
   // null when the session wasn't spawned by us (e.g. an external tmux session
   // the user attached to manually).
-  kind: 'claude-cli' | 'shell' | 'other';
+  kind: 'claude-cli' | 'shell' | 'chatrun' | 'other';
   projectId: string | null;
   tabId: string | null;
 }
@@ -835,6 +835,12 @@ export interface GitSnapshot {
 export interface GitDiff {
   oldContent: string;
   newContent: string;
+  // True when the file resolves successfully against HEAD. False for new/
+  // untracked files where `git show HEAD:<path>` returns an error — in that
+  // case `oldContent` is `''` and consumers should treat the file as having
+  // no meaningful baseline (skip the gutter rather than paint every line
+  // green).
+  inHead: boolean;
 }
 
 export interface GitBranchInfo {

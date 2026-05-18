@@ -35,12 +35,29 @@ describe('computeLineDiff', () => {
     expect(markers.get(3)?.kind).toBe('add');
   });
 
-  it('falls back to all-mod with truncated flag when over the line cap', () => {
-    const big = Array.from({ length: 500 }, (_, i) => `line ${i}`).join('\n');
+  it('renders no markers when over the line cap (truncated flag set)', () => {
+    // v0.24.3: MAX_LINES is 4000 — anything above that returns empty
+    // markers so the gutter stays clean instead of misleading "all amber".
+    const big = Array.from({ length: 4500 }, (_, i) => `line ${i}`).join('\n');
     const bigPlus = `${big}\nextra`;
     const { markers, truncated } = computeLineDiff(big, bigPlus);
     expect(truncated).toBe(true);
-    expect(markers.size).toBeGreaterThan(0);
+    expect(markers.size).toBe(0);
+  });
+
+  it('does NOT truncate at 500 lines (below new MAX_LINES cap)', () => {
+    // Regression for v0.18.0 behavior where MAX_LINES=400 caused most
+    // real source files to render as "all amber" — common files 500-2000
+    // lines should now diff properly line-by-line.
+    const lines = Array.from({ length: 500 }, (_, i) => `line ${i}`);
+    const oldText = lines.join('\n');
+    lines[100] = 'changed';
+    const newText = lines.join('\n');
+    const { markers, truncated } = computeLineDiff(oldText, newText);
+    expect(truncated).toBe(false);
+    expect(markers.get(101)?.kind).toBe('mod');
+    expect(markers.has(100)).toBe(false);
+    expect(markers.has(102)).toBe(false);
   });
 
   it('returns empty when newText is empty (whole-file delete)', () => {
