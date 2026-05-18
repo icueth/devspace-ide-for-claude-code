@@ -5,6 +5,19 @@ All notable changes to DevSpace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.24.2] — 2026-05-18
+
+### Added
+
+- **`@` file picker in chat.** Type `@` at the start of input or after
+  whitespace and a fuzzy picker opens above the textarea listing files
+  from the active project. Arrow keys navigate, Enter/Tab inserts, Esc
+  closes; mouse click works too. Selected entries become `@<rel-path>`
+  tokens — same syntax Claude Code already expands as file attachments.
+  Basename matches outrank directory-only matches; ties break by
+  shorter path. File list is cached per project and refreshed each time
+  the picker re-opens.
+
 ## [0.24.1] — 2026-05-18
 
 ### Fixed

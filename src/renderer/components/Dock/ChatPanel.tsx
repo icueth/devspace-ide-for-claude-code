@@ -44,6 +44,11 @@ import ReactMarkdown from 'react-markdown';
 import rehypeHighlight from 'rehype-highlight';
 import remarkGfm from 'remark-gfm';
 
+import {
+  AtMentionPicker,
+  filterAtMentionFiles,
+  findAtMentionToken,
+} from '@renderer/components/Dock/AtMentionPicker';
 import { ChatSettingsDrawer } from '@renderer/components/Dock/ChatSettingsDrawer';
 import {
   parseSlashInput,
@@ -189,6 +194,27 @@ export function ChatPanel({ projectPath }: ChatPanelProps) {
   // Slash palette state — only meaningful while `input` starts with '/'.
   const [paletteHighlight, setPaletteHighlight] = useState(0);
   const slashActive = input.startsWith('/') && !input.includes('\n');
+  // @-mention picker state. Triggered by typing `@` at start-of-input or
+  // after whitespace; closes when the cursor leaves the token or user
+  // hits Escape. `tokenStart` is the byte offset of the `@` character
+  // so we can splice the picked path back in without reparsing.
+  const [atMention, setAtMention] = useState<{
+    tokenStart: number;
+    query: string;
+    highlight: number;
+  } | null>(null);
+  // Lazy-loaded list of files in the active project, cached per project.
+  // Refreshed on focus so a freshly-added file shows up without restart.
+  const [filesCache, setFilesCache] = useState<{
+    project: string;
+    files: string[];
+  } | null>(null);
+  const [filesLoading, setFilesLoading] = useState(false);
+  const atFiles = filesCache?.project === projectPath ? filesCache.files : [];
+  const atVisible = useMemo(
+    () => (atMention ? filterAtMentionFiles(atFiles, atMention.query) : []),
+    [atMention, atFiles],
+  );
   // Sticky scroll — same pattern Slack/Discord use. The container
   // auto-scrolls to bottom on every content change BUT only while the
   // user is "near bottom". If the user scrolls up to read earlier
@@ -242,6 +268,85 @@ export function ChatPanel({ projectPath }: ChatPanelProps) {
 
   const onAttachClick = useCallback(() => {
     fileInputRef.current?.click();
+  }, []);
+
+  // Replace the current `@<query>` segment with `@<picked-path> `. Keeps
+  // any text after the cursor untouched and re-focuses the textarea so
+  // the user can keep typing without reaching for the mouse.
+  const acceptAtMention = useCallback(
+    (picked: string) => {
+      setAtMention((current) => {
+        if (!current) return null;
+        setInput((prev) => {
+          const head = prev.slice(0, current.tokenStart);
+          const tailStart = current.tokenStart + 1 + current.query.length;
+          const tail = prev.slice(tailStart);
+          const needsGap = tail.length > 0 && !tail.startsWith(' ') && !tail.startsWith('\n');
+          return `${head}@${picked} ${needsGap ? tail : tail.replace(/^\s+/, '')}`;
+        });
+        return null;
+      });
+      // Move caret to just after the inserted `@<path> ` token.
+      requestAnimationFrame(() => {
+        const el = inputRef.current;
+        if (!el) return;
+        el.focus();
+      });
+    },
+    [],
+  );
+
+  // Lazy-load the project file list the first time the @-picker opens for
+  // a given project. We also refresh on every fresh trigger (close → open
+  // cycle) so files added since the last open show up without restart.
+  useEffect(() => {
+    if (!atMention) return;
+    if (filesCache?.project === projectPath) return;
+    let cancelled = false;
+    setFilesLoading(true);
+    void api.fs
+      .listFiles(projectPath)
+      .then((files) => {
+        if (cancelled) return;
+        setFilesCache({ project: projectPath, files });
+      })
+      .catch(() => {
+        // Silent: picker still renders with empty state.
+      })
+      .finally(() => {
+        if (!cancelled) setFilesLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [atMention, projectPath, filesCache]);
+
+  // Reset cache when project changes so we don't show stale paths from
+  // the previous workspace.
+  useEffect(() => {
+    setFilesCache(null);
+    setAtMention(null);
+  }, [projectPath]);
+
+  // Update the @-mention state in response to text or caret changes.
+  // Pulled into a helper so both `onChange` and post-mutation effects
+  // (e.g. queue restore) can re-evaluate without duplicating logic.
+  const refreshAtMention = useCallback((value: string, caret: number) => {
+    const hit = findAtMentionToken(value, caret);
+    if (!hit) {
+      setAtMention(null);
+      return;
+    }
+    setAtMention((prev) => {
+      if (
+        prev &&
+        prev.tokenStart === hit.tokenStart &&
+        prev.query === hit.query
+      ) {
+        return prev;
+      }
+      return { tokenStart: hit.tokenStart, query: hit.query, highlight: 0 };
+    });
   }, []);
 
   const onFilePicked = useCallback(
@@ -1116,6 +1221,18 @@ export function ChatPanel({ projectPath }: ChatPanelProps) {
             <span>{notice}</span>
           </div>
         )}
+        {atMention && (
+          <AtMentionPicker
+            query={atMention.query}
+            files={atFiles}
+            loading={filesLoading}
+            highlight={atMention.highlight}
+            onHighlight={(idx) =>
+              setAtMention((m) => (m ? { ...m, highlight: idx } : m))
+            }
+            onPick={acceptAtMention}
+          />
+        )}
         {slashActive && (
           <SlashPalette
             query={input}
@@ -1174,8 +1291,60 @@ export function ChatPanel({ projectPath }: ChatPanelProps) {
           <textarea
             ref={inputRef}
             value={input}
-            onChange={(e) => setInput(e.target.value)}
+            onChange={(e) => {
+              const value = e.target.value;
+              setInput(value);
+              refreshAtMention(value, e.target.selectionStart ?? value.length);
+            }}
+            onSelect={(e) => {
+              // Caret moved via arrow keys / mouse without changing text —
+              // re-evaluate the @-trigger so navigating out of a mention
+              // closes the picker.
+              const t = e.currentTarget;
+              refreshAtMention(t.value, t.selectionStart ?? t.value.length);
+            }}
+            onBlur={() => {
+              // Close the picker when focus leaves the textarea. We close
+              // on a microtask so a mousedown on a picker row (which
+              // triggers blur) still gets to fire its handler first.
+              setTimeout(() => setAtMention(null), 80);
+            }}
             onKeyDown={(e) => {
+              // @-mention picker navigation runs BEFORE slash to avoid
+              // hijacking arrow keys when both could theoretically match
+              // (slash is anchored at index 0, @-mention can be anywhere).
+              if (atMention && atVisible.length > 0) {
+                if (e.key === 'ArrowDown') {
+                  e.preventDefault();
+                  setAtMention((m) =>
+                    m ? { ...m, highlight: (m.highlight + 1) % atVisible.length } : m,
+                  );
+                  return;
+                }
+                if (e.key === 'ArrowUp') {
+                  e.preventDefault();
+                  setAtMention((m) =>
+                    m
+                      ? {
+                          ...m,
+                          highlight: (m.highlight - 1 + atVisible.length) % atVisible.length,
+                        }
+                      : m,
+                  );
+                  return;
+                }
+                if (e.key === 'Enter' || e.key === 'Tab') {
+                  e.preventDefault();
+                  const picked = atVisible[atMention.highlight] ?? atVisible[0]!;
+                  acceptAtMention(picked);
+                  return;
+                }
+                if (e.key === 'Escape') {
+                  e.preventDefault();
+                  setAtMention(null);
+                  return;
+                }
+              }
               // Slash palette navigation takes precedence over normal
               // editing. The palette is only "live" when input starts
               // with `/` and has no newline (multi-line slash inputs
@@ -1277,7 +1446,7 @@ export function ChatPanel({ projectPath }: ChatPanelProps) {
               }
             }}
             rows={2}
-            placeholder="Ask claude…  (Enter to send, Shift+Enter for newline; @path to attach, / for commands)"
+            placeholder="Ask claude…  (Enter to send, Shift+Enter for newline; @ to pick a file, / for commands)"
             className="min-h-0 flex-1 resize-none rounded-[7px] border border-border-subtle bg-surface-3 px-3 py-2 text-[12.5px] text-text placeholder:text-text-dim focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/40"
           />
           {isStreaming ? (
