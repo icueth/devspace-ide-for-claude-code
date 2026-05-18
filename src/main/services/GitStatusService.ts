@@ -123,12 +123,13 @@ export async function getFileDiff(
   let oldContent = '';
   let inHead = false;
   try {
-    // Use `-- <path>` separator so git treats the arg as a pathspec, never a flag.
-    oldContent = await git.show(['HEAD', '--', relativePath]).catch(async () => {
-      // Older git versions don't accept the separator on `show`; fall back
-      // to the legacy form, knowing the path was already validated.
-      return git.show([`HEAD:${relativePath}`]);
-    });
+    // `git show HEAD:<path>` is the only form that prints blob content.
+    // The `HEAD -- <path>` form silently returns empty for clean files
+    // (it tries to print a diff that doesn't exist) which made every
+    // unchanged tracked file render as 100% green in the gutter.
+    // Path is already validated by assertRelativePath above so the colon
+    // form can't be tricked into resolving a flag or escaping the repo.
+    oldContent = await git.show([`HEAD:${relativePath}`]);
     inHead = true;
   } catch {
     oldContent = '';

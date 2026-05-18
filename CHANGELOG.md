@@ -5,6 +5,19 @@ All notable changes to DevSpace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.24.4] — 2026-05-18
+
+### Fixed
+
+- **Git diff gutter painted every line green on tracked, unchanged files.**
+  `getFileDiff` called `git show HEAD -- <path>`, which prints the *diff*
+  for a commit-vs-path pair — an empty string when the file is unchanged.
+  The renderer received `oldContent=''` with `inHead=true` and treated the
+  whole file as new (LCS degenerate case → every line marked `add`).
+  Switched to `git show HEAD:<path>` which is the documented form for
+  printing blob content; path is already validated by `assertRelativePath`
+  before reaching the git call so the colon form is safe.
+
 ## [0.24.3] — 2026-05-18
 
 ### Fixed
