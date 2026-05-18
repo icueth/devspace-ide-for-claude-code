@@ -1820,20 +1820,53 @@ async function readSuggestionsFile(projectPath: string): Promise<SuggestionsFile
   ) {
     return { suggestions: [], dailyCount: {} };
   }
-  // Sanitize entries.
+  // Sanitize entries. v0.25 SEC: the suggestions file is on disk and could
+  // be planted by a hostile project clone — every renderer-bound field
+  // must be enum/regex-validated before we surface it as a suggestion the
+  // user clicks. Bad entries are dropped, not "fixed", to keep behavior
+  // predictable.
+  const VALID_REASONS = new Set<ForgeSuggestion['reason']>([
+    'repeated-question',
+    'repeated-agent-dispatch',
+    'repeated-files',
+    'repeated-boilerplate',
+    'project-stack-match',
+  ]);
+  const VALID_KINDS = new Set<ForgeKind>(['skill', 'agent']);
+  const MAX_BRIEF_LEN = 4 * 1024;
+  const MAX_EVIDENCE_ITEMS = 16;
+  const MAX_EVIDENCE_ITEM_LEN = 512;
   const cleanSuggestions: ForgeSuggestion[] = [];
   for (const s of parsed.suggestions) {
     if (
       !s ||
       typeof s.id !== 'string' ||
+      s.id.length > 128 ||
       typeof s.projectPath !== 'string' ||
       typeof s.reason !== 'string' ||
+      !VALID_REASONS.has(s.reason as ForgeSuggestion['reason']) ||
       typeof s.suggestedKind !== 'string' ||
-      typeof s.suggestedSlug !== 'string'
+      !VALID_KINDS.has(s.suggestedKind as ForgeKind) ||
+      typeof s.suggestedSlug !== 'string' ||
+      !SLUG_RE.test(s.suggestedSlug) ||
+      s.suggestedSlug.length > MAX_SLUG_LEN ||
+      typeof s.suggestedBrief !== 'string' ||
+      s.suggestedBrief.length === 0 ||
+      s.suggestedBrief.length > MAX_BRIEF_LEN
     ) {
       continue;
     }
-    cleanSuggestions.push(s);
+    // Bound evidence array — drop any non-string / oversized entries.
+    let evidence: string[] = [];
+    if (Array.isArray(s.evidence)) {
+      evidence = s.evidence
+        .filter(
+          (e: unknown): e is string =>
+            typeof e === 'string' && e.length <= MAX_EVIDENCE_ITEM_LEN,
+        )
+        .slice(0, MAX_EVIDENCE_ITEMS);
+    }
+    cleanSuggestions.push({ ...s, evidence } as ForgeSuggestion);
   }
   return { suggestions: cleanSuggestions.slice(0, MAX_SUGGESTIONS), dailyCount: parsed.dailyCount ?? {} };
 }

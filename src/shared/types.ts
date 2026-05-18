@@ -1346,6 +1346,10 @@ export interface DevlogSettings {
   enabled: boolean;
   // Auto-capture Task() dispatches → agent entries. ON by default.
   autoCaptureAgents: boolean;
+  // v0.25: end-of-turn smart capture (edits >=10 lines / completion
+  // keyword / ship bash → result entry; first user turn or direction
+  // change → plan entry). ON by default. Set false to silence.
+  autoCaptureWork: boolean;
   // Auto-capture release commits (chore(release): X.Y.Z) → result entries.
   // Wired in v0.25; flag exists in 0.24 for forward-compat.
   autoCaptureReleases: boolean;

@@ -585,4 +585,28 @@ describe('DevlogService.settings', () => {
     );
     expect(updated.maxInjectEntries).toBeLessThanOrEqual(100);
   });
+
+  // v0.25: new auto-capture toggle for end-of-turn work signals.
+  // Defaults true (smart threshold), persists across reload, and merges
+  // with other settings without clobbering them. Regression: ChatService
+  // reads this flag through getSettings — if either layer drops it the
+  // smart capture goes silent without errors.
+  it('defaults autoCaptureWork to true and persists overrides', async () => {
+    const fresh = await getSettings(projectAbs);
+    expect(fresh.autoCaptureWork).toBe(true);
+    const updated = await setSettings(
+      { autoCaptureWork: false },
+      projectAbs,
+    );
+    expect(updated.autoCaptureWork).toBe(false);
+    // Other fields unaffected.
+    expect(updated.autoCaptureAgents).toBe(true);
+    expect(updated.injectOnNewThread).toBe(true);
+    // Reset cache and reload from disk.
+    __resetForTests(homeTmp);
+    await init();
+    const reloaded = await getSettings(projectAbs);
+    expect(reloaded.autoCaptureWork).toBe(false);
+    expect(reloaded.autoCaptureAgents).toBe(true);
+  });
 });

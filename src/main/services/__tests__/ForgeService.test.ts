@@ -706,6 +706,82 @@ describe('ForgeService.suggestions', () => {
     expect(list.some((s) => s.reason === 'repeated-boilerplate')).toBe(true);
   });
 
+  // v0.25 SEC regression: listSuggestions sanitizes the on-disk file. A
+  // hostile project clone could plant a suggestions.json with invalid /
+  // attacker-controlled fields; we drop bad entries rather than surface
+  // them in the renderer (where the brief feeds into ForgeGenerateDialog).
+  it('listSuggestions drops entries with invalid kind, reason, slug, or oversized brief', async () => {
+    const forgeDir = path.join(projectAbs, '.devspace', 'forge');
+    fs.mkdirSync(forgeDir, { recursive: true });
+    const planted = {
+      suggestions: [
+        // Valid — should survive
+        {
+          id: 'ok-1',
+          projectPath: projectAbs,
+          reason: 'repeated-question',
+          suggestedKind: 'skill',
+          suggestedSlug: 'good-slug',
+          suggestedBrief: 'a valid brief',
+          evidence: [],
+          createdAt: Date.now(),
+        },
+        // Invalid reason
+        {
+          id: 'bad-reason',
+          projectPath: projectAbs,
+          reason: 'invented-reason',
+          suggestedKind: 'skill',
+          suggestedSlug: 'x',
+          suggestedBrief: 'b',
+          evidence: [],
+          createdAt: Date.now(),
+        },
+        // Invalid kind
+        {
+          id: 'bad-kind',
+          projectPath: projectAbs,
+          reason: 'repeated-question',
+          suggestedKind: 'something-else',
+          suggestedSlug: 'x',
+          suggestedBrief: 'b',
+          evidence: [],
+          createdAt: Date.now(),
+        },
+        // Invalid slug — uppercase, spaces
+        {
+          id: 'bad-slug',
+          projectPath: projectAbs,
+          reason: 'repeated-question',
+          suggestedKind: 'skill',
+          suggestedSlug: 'Bad Slug!',
+          suggestedBrief: 'b',
+          evidence: [],
+          createdAt: Date.now(),
+        },
+        // Oversized brief — should drop
+        {
+          id: 'big-brief',
+          projectPath: projectAbs,
+          reason: 'repeated-question',
+          suggestedKind: 'skill',
+          suggestedSlug: 'x',
+          suggestedBrief: 'x'.repeat(10000),
+          evidence: [],
+          createdAt: Date.now(),
+        },
+      ],
+      dailyCount: {},
+    };
+    fs.writeFileSync(
+      path.join(forgeDir, 'suggestions.json'),
+      JSON.stringify(planted),
+      'utf8',
+    );
+    const list = await listSuggestions(projectAbs);
+    expect(list.map((s) => s.id)).toEqual(['ok-1']);
+  });
+
   it('proposeFromChat is a no-op when autoSuggest is off', async () => {
     await setSettings({ autoSuggest: 'off' }, projectAbs);
     const now = Date.now();

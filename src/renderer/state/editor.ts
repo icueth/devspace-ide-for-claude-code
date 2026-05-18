@@ -13,8 +13,7 @@ export type EditorTabKind =
   | 'design'
   | 'live-preview'
   | 'dashboard'
-  | 'devlog'
-  | 'forge';
+  | 'devlog';
 
 export interface EditorTab {
   path: string;
@@ -58,14 +57,6 @@ export interface EditorTab {
   // Populated when kind === 'devlog' — points the Devlog tab at the project
   // whose `.devspace/devlog/` should be shown. Tab `path` = `devlog:<projectPath>`.
   devlogProjectPath?: string;
-  // Populated when kind === 'forge' — points the Forge tab at the project
-  // whose `.devspace/forge/` workshop should be shown. `path` = `forge:<projectPath>`.
-  forgeProjectPath?: string;
-  // v0.24 Forge → chat bridge: pre-fill draft brief from a chat slash
-  // command. Consumed on first mount, then cleared.
-  forgePrefillBrief?: string;
-  forgePrefillKind?: 'skill' | 'agent';
-  forgePrefillConsumed?: boolean;
 }
 
 export interface OpenOptions {
@@ -122,13 +113,6 @@ interface EditorState {
   openDashboard: () => void;
   // v0.24: per-project Devlog tab. Synthetic key `devlog:<projectPath>`.
   openDevlog: (projectPath: string, projectName: string) => void;
-  // v0.24: per-project Forge tab. Synthetic key `forge:<projectPath>`.
-  openForge: (
-    projectPath: string,
-    projectName: string,
-    prefill?: { brief?: string; kind?: 'skill' | 'agent' },
-  ) => void;
-  consumeForgePrefill: (tabPath: string) => void;
   close: (path: string, pane?: PaneId) => void;
   closeOthers: (path: string, pane?: PaneId) => void;
   closeToRight: (path: string, pane?: PaneId) => void;
@@ -395,54 +379,6 @@ export const useEditorStore = create<
       devlogProjectPath: projectPath,
     };
     set((s) => ({ tabs: [...s.tabs, tab], activeTabPath: tabPath }));
-  },
-
-  openForge(projectPath, projectName, prefill) {
-    const tabPath = `forge:${projectPath}`;
-    const existing = get().tabs.find((t) => t.path === tabPath);
-    if (existing) {
-      if (prefill && (prefill.brief || prefill.kind)) {
-        set((s) => ({
-          tabs: s.tabs.map((t) =>
-            t.path === tabPath
-              ? {
-                  ...t,
-                  forgePrefillBrief: prefill.brief,
-                  forgePrefillKind: prefill.kind,
-                  forgePrefillConsumed: false,
-                }
-              : t,
-          ),
-          activeTabPath: tabPath,
-        }));
-      } else {
-        set({ activeTabPath: tabPath });
-      }
-      return;
-    }
-    const tab: EditorTab = {
-      path: tabPath,
-      name: `${projectName} · Forge`,
-      kind: 'forge',
-      content: '',
-      savedContent: '',
-      loading: false,
-      forgeProjectPath: projectPath,
-      forgePrefillBrief: prefill?.brief,
-      forgePrefillKind: prefill?.kind,
-      forgePrefillConsumed: false,
-    };
-    set((s) => ({ tabs: [...s.tabs, tab], activeTabPath: tabPath }));
-  },
-
-  consumeForgePrefill(tabPath) {
-    set((s) => ({
-      tabs: s.tabs.map((t) =>
-        t.path === tabPath && !t.forgePrefillConsumed
-          ? { ...t, forgePrefillConsumed: true }
-          : t,
-      ),
-    }));
   },
 
   closeOthers(path, pane = 'left') {

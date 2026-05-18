@@ -21,6 +21,7 @@ import {
   Plus,
   Search,
   Send,
+  Sparkles,
   Terminal,
   Trash2,
   User,
@@ -68,6 +69,7 @@ import {
   type QueuedMessage,
 } from '@renderer/state/chatQueue';
 import { useEditorStore } from '@renderer/state/editor';
+import { useForgePrefillStore } from '@renderer/state/forgePrefill';
 import { suggestSkillSlugs, type DesignSkill } from '@shared/design';
 import type {
   ChatEvent,
@@ -225,6 +227,12 @@ export function ChatPanel({ projectPath }: ChatPanelProps) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const stickRef = useRef(true);
   const [showJump, setShowJump] = useState(false);
+  // v0.25: forge suggestion inbox surfaced inline above transcript. Polls
+  // listSuggestions per project (cheap reads), shows the top entry as a
+  // dismissible card with [Generate] / [Dismiss] actions.
+  const [forgeSuggestions, setForgeSuggestions] = useState<
+    import('@shared/types').ForgeSuggestion[]
+  >([]);
   // Ref to the chat input textarea so the chatBridge prefill listener can
   // focus it after dropping in text from the Design pane.
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
@@ -295,6 +303,28 @@ export function ChatPanel({ projectPath }: ChatPanelProps) {
     },
     [],
   );
+
+  // v0.25: load + subscribe forge suggestions for the active project.
+  // Fire-and-forget; ignore errors (Settings → Memory has the toggle).
+  useEffect(() => {
+    if (!projectPath) {
+      setForgeSuggestions([]);
+      return undefined;
+    }
+    void api.forge
+      .listSuggestions(projectPath)
+      .then((list) => setForgeSuggestions(list))
+      .catch(() => undefined);
+    const unsub = api.forge.onEvent((ev) => {
+      if (ev.kind === 'suggestion_added' || ev.kind === 'suggestion_dismissed') {
+        api.forge
+          .listSuggestions(projectPath)
+          .then((list) => setForgeSuggestions(list))
+          .catch(() => undefined);
+      }
+    });
+    return unsub;
+  }, [projectPath]);
 
   // Lazy-load the project file list the first time the @-picker opens for
   // a given project. We also refresh on every fresh trigger (close → open
@@ -1012,9 +1042,9 @@ export function ChatPanel({ projectPath }: ChatPanelProps) {
         }
         case 'skill':
         case 'agent': {
-          // v0.24: /skill or /agent <brief> opens the Forge tab pre-filled
-          // with the brief + correct kind. CR-10: refuse when no project
-          // is active — Forge requires a project anchor.
+          // v0.25: /skill or /agent <brief> opens Settings → Skills/Agents
+          // tab with the brief pre-filled for Claude-generation. Forge surface
+          // was retired in 0.25 — capabilities embedded in Settings instead.
           if (!projectPath) {
             setNotice(`Open a project before using /${trigger}.`);
             return true;
@@ -1024,12 +1054,12 @@ export function ChatPanel({ projectPath }: ChatPanelProps) {
             setNotice(`Usage: /${trigger} <brief>`);
             return true;
           }
-          const projectName = basename(projectPath);
-          useEditorStore.getState().openForge(projectPath, projectName, {
-            brief,
-            kind: trigger as 'skill' | 'agent',
-          });
-          setNotice(`Forge tab opened — ${trigger} draft prefilled.`);
+          const tab = trigger === 'skill' ? 'skills' : 'agents';
+          useForgePrefillStore.getState().set(trigger as 'skill' | 'agent', brief);
+          window.dispatchEvent(
+            new CustomEvent('devspace:open-settings', { detail: { tab } }),
+          );
+          setNotice(`Settings → ${trigger === 'skill' ? 'Skills' : 'Agents'} opened — Claude will draft from your brief.`);
           return true;
         }
         case 'log': {
@@ -1161,6 +1191,36 @@ export function ChatPanel({ projectPath }: ChatPanelProps) {
           </label>
         )}
       </div>
+
+      {forgeSuggestions.length > 0 && (
+        <ForgeSuggestionCard
+          suggestion={forgeSuggestions[0]!}
+          onGenerate={(s) => {
+            // Optimistic remove — prevents double-action if the user clicks
+            // again before the IPC round-trip + listSuggestions refetch.
+            setForgeSuggestions((cur) => cur.filter((x) => x.id !== s.id));
+            useForgePrefillStore
+              .getState()
+              .set(s.suggestedKind, s.suggestedBrief);
+            window.dispatchEvent(
+              new CustomEvent('devspace:open-settings', {
+                detail: { tab: s.suggestedKind === 'skill' ? 'skills' : 'agents' },
+              }),
+            );
+            void api.forge.dismissSuggestion({
+              projectPath,
+              suggestionId: s.id,
+            });
+          }}
+          onDismiss={(s) => {
+            setForgeSuggestions((cur) => cur.filter((x) => x.id !== s.id));
+            void api.forge.dismissSuggestion({
+              projectPath,
+              suggestionId: s.id,
+            });
+          }}
+        />
+      )}
 
       <div className="relative min-h-0 flex-1">
         <div
@@ -2998,6 +3058,64 @@ function QueuePillStrip({
             queued · auto-sends when current reply completes
           </span>
         )}
+      </div>
+    </div>
+  );
+}
+
+// v0.25: inline card for a single forge suggestion shown above the
+// transcript. Click Generate → write brief to forgePrefillStore + open
+// Settings on Skills/Agents tab; the matching settings panel consumes
+// the prefill in its mount effect and opens ForgeGenerateDialog.
+// Compact + dismissible — keeps suggestions from feeling spammy.
+function ForgeSuggestionCard({
+  suggestion,
+  onGenerate,
+  onDismiss,
+}: {
+  suggestion: import('@shared/types').ForgeSuggestion;
+  onGenerate: (s: import('@shared/types').ForgeSuggestion) => void;
+  onDismiss: (s: import('@shared/types').ForgeSuggestion) => void;
+}) {
+  // Prototype-safe label lookup — `Object.create(null)` makes
+  // `__proto__`/`constructor` keys return undefined → fallback applies.
+  const reasonLabel: Record<string, string> = Object.assign(Object.create(null), {
+    'repeated-question': 'Asked similar questions',
+    'repeated-agent-dispatch': 'Dispatched same agent',
+    'repeated-files': 'Edits the same files together',
+    'repeated-boilerplate': 'Pasted similar boilerplate',
+    'project-stack-match': 'Curated for your stack',
+  });
+  const reasonText = reasonLabel[suggestion.reason] ?? 'Suggestion';
+  return (
+    <div className="mx-4 mt-3 rounded-[8px] border border-amber-500/40 bg-amber-500/5 p-2.5 text-[11px]">
+      <div className="mb-1 flex items-center justify-between gap-2">
+        <span className="inline-flex items-center gap-1 text-amber-300">
+          <Sparkles size={10} />
+          <span className="font-medium">{reasonText}</span>
+        </span>
+        <button
+          onClick={() => onDismiss(suggestion)}
+          className="rounded p-0.5 text-text-muted hover:bg-surface-3 hover:text-text"
+          title="Dismiss"
+        >
+          <X size={10} />
+        </button>
+      </div>
+      <p className="mb-2 leading-snug text-text-secondary">
+        {suggestion.suggestedBrief}
+      </p>
+      <div className="flex items-center gap-2">
+        <button
+          onClick={() => onGenerate(suggestion)}
+          className="inline-flex items-center gap-1 rounded-[6px] bg-accent px-2 py-1 text-[10.5px] font-medium text-white transition hover:brightness-110"
+        >
+          <Sparkles size={9} />
+          Generate {suggestion.suggestedKind}
+        </button>
+        <span className="font-mono text-[10px] text-text-dim">
+          → {suggestion.suggestedSlug}
+        </span>
       </div>
     </div>
   );

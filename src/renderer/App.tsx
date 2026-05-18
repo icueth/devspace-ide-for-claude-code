@@ -4,7 +4,6 @@ import {
   EyeOff,
   GitBranch,
   Globe,
-  Hammer,
   Maximize2,
   Minimize2,
   Paintbrush,
@@ -67,7 +66,6 @@ function AppInner() {
   const openLivePreview = useEditorStore((s) => s.openLivePreview);
   const openDashboard = useEditorStore((s) => s.openDashboard);
   const openDevlog = useEditorStore((s) => s.openDevlog);
-  const openForge = useEditorStore((s) => s.openForge);
 
   const sidebarWidth = useLayoutStore((s) => s.sidebarWidth);
   const dockWidth = useLayoutStore((s) => s.dockWidth);
@@ -111,24 +109,28 @@ function AppInner() {
   >('account');
 
   useEffect(() => {
+    // Defense-in-depth: validate the tab value against an allowlist before
+    // routing — guards against arbitrary `setSettingsInitialTab` if XSS
+    // ever surfaces in a renderer module and dispatches a forged event.
+    const ALLOWED_TABS = new Set([
+      'setup',
+      'account',
+      'files',
+      'tmux',
+      'llm',
+      'agents',
+      'mcp',
+      'memory',
+      'skills',
+      'teams',
+      'design',
+    ] as const);
+    type AllowedTab = typeof ALLOWED_TABS extends Set<infer T> ? T : never;
     const handler = (e: Event) => {
-      const detail = (
-        e as CustomEvent<{
-          tab?:
-            | 'setup'
-            | 'account'
-            | 'files'
-            | 'tmux'
-            | 'llm'
-            | 'agents'
-            | 'mcp'
-            | 'memory'
-            | 'skills'
-            | 'teams'
-            | 'design';
-        }>
-      ).detail;
-      if (detail?.tab) setSettingsInitialTab(detail.tab);
+      const detail = (e as CustomEvent<{ tab?: string }>).detail;
+      if (detail?.tab && (ALLOWED_TABS as Set<string>).has(detail.tab)) {
+        setSettingsInitialTab(detail.tab as AllowedTab);
+      }
       setSettingsOpen(true);
     };
     window.addEventListener('devspace:open-settings', handler);
@@ -428,22 +430,6 @@ function AppInner() {
           >
             <BookOpen size={11} />
             <span>Devlog</span>
-          </button>
-          <button
-            onClick={() => {
-              if (activeProject) openForge(activeProject.path, activeProject.name);
-            }}
-            disabled={!activeProject}
-            className={cn(
-              'inline-flex h-[26px] items-center gap-1.5 rounded-[7px] border px-2.5 text-[11px] transition',
-              !activeProject
-                ? 'cursor-not-allowed border-border-subtle bg-surface-3 text-text-muted opacity-40'
-                : 'border-border-subtle bg-surface-3 text-text-secondary hover:border-border-hi hover:bg-surface-4 hover:text-text',
-            )}
-            title="Forge — self-evolving skill / agent workshop"
-          >
-            <Hammer size={11} />
-            <span>Forge</span>
           </button>
           <button
             onClick={() => {

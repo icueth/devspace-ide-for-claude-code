@@ -5,6 +5,56 @@ All notable changes to DevSpace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.25.0] — 2026-05-18
+
+### Changed
+
+- **Removed Dashboard "Forge" tab; embedded Forge capabilities into
+  Settings → Skills/Agents + Chat.** The dedicated ForgeView surface
+  duplicated what users already manage in Settings — net deleted 1857
+  lines of UI, added 454 lines of focused integration. Generated
+  skills/agents still write to the same `.claude/skills/` and
+  `.claude/agents/` paths via existing services, so nothing in the
+  on-disk layout changes; only the surface differs.
+- **`/skill <brief>` and `/agent <brief>` slash commands** now open
+  Settings on the matching tab with the brief pre-filled in a Claude-
+  generation dialog (was: opened a separate Forge tab).
+
+### Added
+
+- **End-of-turn smart devlog auto-capture** (`ChatService.captureWorkSignalsToDevlog`).
+  Beyond `Task()` dispatches the existing system already wrote, finalize
+  now scans the just-completed turn for four signal classes and writes
+  at most one entry per turn (highest priority wins):
+  - `result`: edits totaling ≥10 changed lines, ship-class bash commands
+    (`git commit` / `pnpm test` / `vitest run` / `cargo test`) that
+    didn't error, or completion keywords (EN + TH: shipped/done/เสร็จแล้ว)
+    in user prose paired with at least one tool mutation
+  - `plan`: first user turn of a thread ≥200 chars, OR a direction-change
+    marker (EN + TH: actually/never mind/เปลี่ยนแผน) in a follow-up turn
+  Settings gate `DevlogSettings.autoCaptureWork` (default ON, smart
+  threshold) — set false in Memory Settings to silence.
+- **"Generate with Claude" button + Claude-streaming dialog
+  (`ForgeGenerateDialog`)** in Settings → Skills and Settings → Agents.
+  Picks scope (project/global), validates slug, streams Claude's draft
+  into a preview pane, saves through existing `api.forge.saveDraft`
+  which writes the SKILL.md / agent .md to the correct `.claude/` path.
+- **Stats chip on every sidebar row** (`★ + uses`) when the
+  skill/agent has been used at least once. Pure helper
+  `computeForgeRating` derives 1–5 stars from useful/ignored/harmful
+  signal counters; tooltip shows raw counts.
+- **Catalog banner** at top of Skills "empty state" surfaces 5 highest-
+  scoring curated skills matched against the project's detected stack
+  (Vitest/Tailwind/Electron/etc.). Dismissible.
+- **Forge suggestion inbox card** rendered inline above the chat
+  transcript. Shows the most relevant `repeated-question` /
+  `repeated-files` / `repeated-boilerplate` / `project-stack-match`
+  detection; [Generate] writes the brief to a new `forgePrefillStore`,
+  opens Settings on the matching tab, and consumes there.
+- **`forgePrefillStore`** — tiny zustand bridge that carries `/skill`
+  `/agent` slash-command brief from chat into Settings without
+  reintroducing a synthetic tab kind.
+
 ## [0.24.4] — 2026-05-18
 
 ### Fixed

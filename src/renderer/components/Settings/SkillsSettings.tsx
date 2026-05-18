@@ -25,15 +25,30 @@ import {
   Plus,
   Save,
   Search,
+  Sparkles,
+  Star,
   Trash2,
 } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { api } from '@renderer/lib/api';
 import { cn } from '@renderer/lib/utils';
+import { useForgePrefillStore } from '@renderer/state/forgePrefill';
 import { useWorkspaceStore } from '@renderer/state/workspace';
 import { baseEditorTheme } from '@renderer/utils/codemirrorTheme';
-import type { SkillDef, SkillScope } from '@shared/types';
+import { computeForgeRating } from '@renderer/utils/forgeRating';
+import type {
+  ForgeCatalogItem,
+  ForgeStats,
+  SkillDef,
+  SkillScope,
+} from '@shared/types';
+
+const ForgeGenerateDialog = lazy(() =>
+  import('@renderer/components/Settings/ForgeGenerateDialog').then((m) => ({
+    default: m.ForgeGenerateDialog,
+  })),
+);
 
 const MODEL_OPTIONS = ['', 'sonnet', 'opus', 'haiku'];
 const TOOL_OPTIONS = [
@@ -86,6 +101,14 @@ export function SkillsSettings() {
     null,
   );
   const [newSlug, setNewSlug] = useState('');
+  // v0.25: forge integration — Claude-generate dialog + stats chips + catalog banner
+  const [generateOpen, setGenerateOpen] = useState(false);
+  const [generateBrief, setGenerateBrief] = useState<string>('');
+  const [stats, setStats] = useState<ForgeStats[]>([]);
+  const [catalog, setCatalog] = useState<ForgeCatalogItem[]>([]);
+  const [catalogDismissed, setCatalogDismissed] = useState(false);
+  const forgePrefill = useForgePrefillStore((s) => s.pending);
+  const consumeForgePrefill = useForgePrefillStore((s) => s.consume);
 
   const reload = useCallback(async () => {
     const list = await api.skills.list(activeProject?.path ?? null, includePlugins);
@@ -97,6 +120,54 @@ export function SkillsSettings() {
     void reload();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeProject?.path, includePlugins]);
+
+  // v0.25: load forge stats + curated catalog matches for this project.
+  // Guard with a cancellation flag — switching projects mid-flight could
+  // otherwise let project A's response overwrite project B's after B
+  // resolved first (out-of-order IPC resolution).
+  useEffect(() => {
+    if (!activeProject?.path) {
+      setStats([]);
+      setCatalog([]);
+      return undefined;
+    }
+    let cancelled = false;
+    void api.forge
+      .listStats(activeProject.path)
+      .then((s) => {
+        if (!cancelled) setStats(s);
+      })
+      .catch(() => undefined);
+    void api.forge
+      .discoverMatches(activeProject.path)
+      .then((c) => {
+        if (!cancelled) setCatalog(c);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [activeProject?.path]);
+
+  // v0.25: consume chat /skill prefill — open generate dialog with brief
+  useEffect(() => {
+    if (forgePrefill && forgePrefill.kind === 'skill') {
+      setGenerateBrief(forgePrefill.brief);
+      setGenerateOpen(true);
+      consumeForgePrefill();
+    }
+  }, [forgePrefill, consumeForgePrefill]);
+
+  const statsByKey = useMemo(() => {
+    const m = new Map<string, ForgeStats>();
+    for (const s of stats) m.set(s.key, s);
+    return m;
+  }, [stats]);
+
+  const catalogSkills = useMemo(
+    () => catalog.filter((c) => c.kind === 'skill').slice(0, 5),
+    [catalog],
+  );
 
   useEffect(() => {
     if (!selectedPath) {
@@ -266,6 +337,18 @@ export function SkillsSettings() {
         style={{ background: 'var(--color-surface-2)' }}
       >
         <div className="border-b border-border-subtle bg-surface-3/40 p-2">
+          {/* v0.25: Generate with Claude — entry to ForgeGenerateDialog */}
+          <button
+            onClick={() => {
+              setGenerateBrief('');
+              setGenerateOpen(true);
+            }}
+            className="mb-2 inline-flex w-full items-center justify-center gap-1.5 rounded-[7px] bg-gradient-to-r from-accent to-fuchsia-500 px-3 py-1.5 text-[11px] font-medium text-white transition hover:brightness-110"
+            title="Have Claude draft a SKILL.md from a brief"
+          >
+            <Sparkles size={11} />
+            Generate with Claude
+          </button>
           <div className="relative">
             <Search
               size={11}
@@ -389,6 +472,7 @@ export function SkillsSettings() {
                       <SkillRow
                         key={s.path}
                         skill={s}
+                        stats={statsByKey.get(`${s.scope}:skill:${s.slug}`) ?? null}
                         isActive={selectedPath === s.path}
                         canDuplicateToProject={!!activeProject}
                         onSelect={() => setSelectedPath(s.path)}
@@ -417,7 +501,35 @@ export function SkillsSettings() {
             onDuplicate={onDuplicate}
           />
         ) : (
-          <div className="flex h-full items-center justify-center text-[12px] text-text-muted">
+          <div className="flex h-full flex-col items-center justify-center gap-4 p-6 text-[12px] text-text-muted">
+            {/* v0.25: catalog banner — curated skills matched against project stack */}
+            {!catalogDismissed && catalogSkills.length > 0 && (
+              <div className="w-full max-w-md rounded-[8px] border border-amber-500/40 bg-amber-500/5 p-3">
+                <div className="mb-1.5 flex items-start justify-between gap-2">
+                  <div className="flex items-center gap-1.5 text-[11px] font-medium text-amber-300">
+                    <Sparkles size={11} />
+                    {catalogSkills.length} skill{catalogSkills.length > 1 ? 's' : ''} match this project's stack
+                  </div>
+                  <button
+                    onClick={() => setCatalogDismissed(true)}
+                    className="rounded p-0.5 text-text-muted hover:bg-surface-3 hover:text-text"
+                    title="Dismiss"
+                  >
+                    ×
+                  </button>
+                </div>
+                <ul className="space-y-1">
+                  {catalogSkills.map((c) => (
+                    <li key={c.slug} className="text-[10.5px] text-text-secondary">
+                      <span className="font-mono">{c.slug}</span> — {c.description}
+                    </li>
+                  ))}
+                </ul>
+                <div className="mt-2 text-[10px] text-text-dim">
+                  Browse Built-in (read-only) on the left, then Duplicate to your project.
+                </div>
+              </div>
+            )}
             <div className="text-center">
               <Lightbulb size={24} className="mx-auto mb-2 text-text-dim" />
               <div>Select a skill from the left.</div>
@@ -428,6 +540,22 @@ export function SkillsSettings() {
           </div>
         )}
       </div>
+      {generateOpen && (
+        <Suspense fallback={null}>
+          <ForgeGenerateDialog
+            open={generateOpen}
+            kind="skill"
+            projectPath={activeProject?.path ?? null}
+            initialBrief={generateBrief}
+            onClose={() => setGenerateOpen(false)}
+            onSaved={(saved) => {
+              void reload().then(() => {
+                setSelectedPath(saved.path);
+              });
+            }}
+          />
+        </Suspense>
+      )}
     </div>
   );
 }
@@ -439,12 +567,14 @@ export function SkillsSettings() {
 // is obvious at a glance.
 function SkillRow({
   skill,
+  stats,
   isActive,
   canDuplicateToProject,
   onSelect,
   onDuplicateReadOnly,
 }: {
   skill: SkillDef;
+  stats: ForgeStats | null;
   isActive: boolean;
   canDuplicateToProject: boolean;
   onSelect: () => void;
@@ -452,6 +582,9 @@ function SkillRow({
 }) {
   const isReadOnly = skill.scope === 'plugin' || skill.scope === 'builtin';
   const isOverridden = skill.overridden === true;
+  // v0.25: derive star rating from implicit forge signals. 5★ = pure thanks,
+  // 1★ = mostly corrections. Falls back to "—" when fewer than 2 signals.
+  const rating = computeForgeRating(stats);
   return (
     <div
       className={cn(
@@ -487,6 +620,17 @@ function SkillRow({
             title={`Restricted to: ${skill.allowedTools.join(', ')}`}
           >
             {skill.allowedTools.length}t
+          </span>
+        )}
+        {stats && stats.uses > 0 && (
+          <span
+            className="inline-flex shrink-0 items-center gap-0.5 rounded-full bg-surface-3 px-1.5 text-[9px] text-amber-300"
+            title={`${stats.uses} use${stats.uses > 1 ? 's' : ''}${
+              rating !== null ? ` · ${rating.toFixed(1)}★` : ''
+            }`}
+          >
+            <Star size={8} fill="currentColor" />
+            {stats.uses}
           </span>
         )}
       </button>
@@ -847,3 +991,4 @@ function BodyEditor({
     </div>
   );
 }
+

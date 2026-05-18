@@ -569,6 +569,7 @@ function buildBaselineDefaults(): DevlogSettings {
   return {
     enabled: true,
     autoCaptureAgents: true,
+    autoCaptureWork: true,
     autoCaptureReleases: false,
     injectOnNewThread: true,
     maxInjectEntries: DEFAULT_MAX_INJECT_ENTRIES,
@@ -597,6 +598,8 @@ function normalizeSettings(raw: Partial<DevlogSettings>): DevlogSettings {
   if (typeof raw.enabled === 'boolean') out.enabled = raw.enabled;
   if (typeof raw.autoCaptureAgents === 'boolean')
     out.autoCaptureAgents = raw.autoCaptureAgents;
+  if (typeof raw.autoCaptureWork === 'boolean')
+    out.autoCaptureWork = raw.autoCaptureWork;
   if (typeof raw.autoCaptureReleases === 'boolean')
     out.autoCaptureReleases = raw.autoCaptureReleases;
   if (typeof raw.injectOnNewThread === 'boolean')

@@ -25,15 +25,25 @@ import {
   Package,
   Plus,
   Save,
+  Sparkles,
+  Star,
   Trash2,
 } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { api } from '@renderer/lib/api';
 import { cn } from '@renderer/lib/utils';
+import { useForgePrefillStore } from '@renderer/state/forgePrefill';
 import { useWorkspaceStore } from '@renderer/state/workspace';
 import { baseEditorTheme } from '@renderer/utils/codemirrorTheme';
-import type { AgentDef, AgentScope } from '@shared/types';
+import { computeForgeRating } from '@renderer/utils/forgeRating';
+import type { AgentDef, AgentScope, ForgeStats } from '@shared/types';
+
+const ForgeGenerateDialog = lazy(() =>
+  import('@renderer/components/Settings/ForgeGenerateDialog').then((m) => ({
+    default: m.ForgeGenerateDialog,
+  })),
+);
 
 const MODEL_OPTIONS = ['', 'sonnet', 'opus', 'haiku'];
 const TOOL_OPTIONS = [
@@ -79,6 +89,12 @@ export function AgentsSettings() {
   const [error, setError] = useState<string | null>(null);
   const [creatingScope, setCreatingScope] = useState<AgentScope | null>(null);
   const [newSlug, setNewSlug] = useState('');
+  // v0.25: forge integration
+  const [generateOpen, setGenerateOpen] = useState(false);
+  const [generateBrief, setGenerateBrief] = useState<string>('');
+  const [stats, setStats] = useState<ForgeStats[]>([]);
+  const forgePrefill = useForgePrefillStore((s) => s.pending);
+  const consumeForgePrefill = useForgePrefillStore((s) => s.consume);
 
   const reload = useCallback(async () => {
     const list = await api.agents.list(activeProject?.path ?? null);
@@ -92,6 +108,40 @@ export function AgentsSettings() {
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeProject?.path]);
+
+  // v0.25: load forge stats for stars on rows. Cancellation flag prevents
+  // a slow response from project A from overwriting fresh project B data.
+  useEffect(() => {
+    if (!activeProject?.path) {
+      setStats([]);
+      return undefined;
+    }
+    let cancelled = false;
+    void api.forge
+      .listStats(activeProject.path)
+      .then((s) => {
+        if (!cancelled) setStats(s);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [activeProject?.path]);
+
+  // v0.25: consume chat /agent prefill — open generate dialog with brief
+  useEffect(() => {
+    if (forgePrefill && forgePrefill.kind === 'agent') {
+      setGenerateBrief(forgePrefill.brief);
+      setGenerateOpen(true);
+      consumeForgePrefill();
+    }
+  }, [forgePrefill, consumeForgePrefill]);
+
+  const statsByKey = useMemo(() => {
+    const m = new Map<string, ForgeStats>();
+    for (const s of stats) m.set(s.key, s);
+    return m;
+  }, [stats]);
 
   useEffect(() => {
     if (!selectedPath) {
@@ -264,6 +314,20 @@ export function AgentsSettings() {
         className="flex w-[280px] shrink-0 flex-col overflow-y-auto border-r border-border"
         style={{ background: 'var(--color-surface-2)' }}
       >
+        {/* v0.25: Generate with Claude — entry to ForgeGenerateDialog */}
+        <div className="border-b border-border-subtle bg-surface-3/40 p-2">
+          <button
+            onClick={() => {
+              setGenerateBrief('');
+              setGenerateOpen(true);
+            }}
+            className="inline-flex w-full items-center justify-center gap-1.5 rounded-[7px] bg-gradient-to-r from-accent to-fuchsia-500 px-3 py-1.5 text-[11px] font-medium text-white transition hover:brightness-110"
+            title="Have Claude draft an agent .md from a brief"
+          >
+            <Sparkles size={11} />
+            Generate with Claude
+          </button>
+        </div>
         {(['global', 'project', 'builtin'] as AgentScope[]).map((scope) => {
           const list = grouped[scope];
           const isCollapsed = collapsed[scope];
@@ -355,6 +419,7 @@ export function AgentsSettings() {
                       <AgentRow
                         key={a.path}
                         agent={a}
+                        stats={statsByKey.get(`${a.scope}:agent:${a.slug}`) ?? null}
                         isActive={isActive}
                         canDuplicateToProject={!!activeProject}
                         onSelect={() => setSelectedPath(a.path)}
@@ -392,12 +457,29 @@ export function AgentsSettings() {
               <FolderOpen size={24} className="mx-auto mb-2 text-text-dim" />
               <div>Select an agent from the left to edit it.</div>
               <div className="mt-1 text-[10.5px] text-text-dim">
-                Or click <Plus size={9} className="-mt-0.5 inline" /> to create a new one.
+                Or click <Plus size={9} className="-mt-0.5 inline" /> to create a new one,
+                or <Sparkles size={9} className="-mt-0.5 inline" /> Generate with Claude.
               </div>
             </div>
           </div>
         )}
       </div>
+      {generateOpen && (
+        <Suspense fallback={null}>
+          <ForgeGenerateDialog
+            open={generateOpen}
+            kind="agent"
+            projectPath={activeProject?.path ?? null}
+            initialBrief={generateBrief}
+            onClose={() => setGenerateOpen(false)}
+            onSaved={(saved) => {
+              void reload().then(() => {
+                setSelectedPath(saved.path);
+              });
+            }}
+          />
+        </Suspense>
+      )}
     </div>
   );
 }
@@ -410,12 +492,14 @@ export function AgentsSettings() {
 // understands precedence at a glance.
 function AgentRow({
   agent,
+  stats,
   isActive,
   canDuplicateToProject,
   onSelect,
   onDuplicateBuiltin,
 }: {
   agent: AgentDef;
+  stats: ForgeStats | null;
   isActive: boolean;
   canDuplicateToProject: boolean;
   onSelect: () => void;
@@ -423,6 +507,7 @@ function AgentRow({
 }) {
   const isBuiltin = agent.scope === 'builtin';
   const isOverridden = agent.overridden === true;
+  const rating = computeForgeRating(stats);
   return (
     <div
       className={cn(
@@ -455,6 +540,17 @@ function AgentRow({
         {agent.model && (
           <span className="shrink-0 rounded-full bg-surface-3 px-1.5 text-[9px] uppercase text-text-muted">
             {agent.model}
+          </span>
+        )}
+        {stats && stats.uses > 0 && (
+          <span
+            className="inline-flex shrink-0 items-center gap-0.5 rounded-full bg-surface-3 px-1.5 text-[9px] text-amber-300"
+            title={`${stats.uses} use${stats.uses > 1 ? 's' : ''}${
+              rating !== null ? ` · ${rating.toFixed(1)}★` : ''
+            }`}
+          >
+            <Star size={8} fill="currentColor" />
+            {stats.uses}
           </span>
         )}
       </button>

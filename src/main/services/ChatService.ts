@@ -431,6 +431,202 @@ async function captureTaskToDevlog(
   }
 }
 
+// ─── v0.25: smart devlog auto-capture from end-of-turn signals ─────────────
+// Beyond `Task()` (handled by captureTaskToDevlog above) we surface 4 more
+// signal classes so users who don't dispatch subagents still see entries.
+// Each detector returns null when the signal is absent — we cap to 1 entry
+// per turn (highest-priority signal wins) to avoid spam.
+
+// Wrap untrusted model/user prose in a fenced code block so any embedded
+// markdown / link / HTML can't escape into the devlog renderer as live
+// content. Triple-backtick fence breakouts are neutered by spacing out
+// any internal ``` sequences.
+export function fenceUntrusted(raw: string): string {
+  if (!raw) return '';
+  const safe = raw.replace(/```/g, '` ` `');
+  return '```text\n' + safe + '\n```';
+}
+
+// Defensive scrub for frontmatter list values. The serializer emits paths
+// as `filesTouched: [a, b, c]` — comma-separated, unquoted — so any path
+// containing comma / bracket / quote / newline would corrupt the
+// round-trip parse. We drop anything questionable rather than escape; a
+// missing entry is strictly better than a bad parse.
+export function sanitizePathForFrontmatter(p: string): string {
+  if (!p) return '';
+  if (/[,\[\]"'\r\n]/.test(p)) return '';
+  return p;
+}
+
+// Keywords that mark explicit completion in user/assistant prose. Matched
+// case-insensitive, EN + TH. We require a tool-mutation in the same turn
+// before treating these as "this turn shipped something".
+const COMPLETION_RE =
+  /\b(shipped|merged|done|completed|finished|deployed|ปิดงาน|เสร็จแล้ว|จบงาน|ทำเสร็จ)\b/i;
+// User saying "make a 180" mid-thread — capture as a plan revision.
+const DIRECTION_CHANGE_RE =
+  /\b(actually|never mind|forget that|change of plan|ลองแบบใหม่|เปลี่ยน(แผน|ทิศ|วิธี))\b/i;
+// Bash invocations we treat as "ship signal" when stdout/exit looks clean.
+const SHIP_BASH_RE = /\b(git\s+commit|pnpm\s+test|npm\s+test|vitest\s+run|cargo\s+test)\b/i;
+
+interface ToolCall {
+  id: string;
+  name: string;
+  input: Record<string, unknown>;
+  result?: string;
+  isError?: boolean;
+  diffStats?: { additions: number; deletions: number; path: string };
+}
+
+// Roll up file-mutating tools across a turn into a single diff summary.
+function summarizeDiffs(toolCalls: ToolCall[]): {
+  files: number;
+  additions: number;
+  deletions: number;
+  paths: string[];
+} | null {
+  let additions = 0;
+  let deletions = 0;
+  const paths = new Set<string>();
+  for (const tc of toolCalls) {
+    if (!tc.diffStats) continue;
+    additions += tc.diffStats.additions;
+    deletions += tc.diffStats.deletions;
+    if (tc.diffStats.path) paths.add(tc.diffStats.path);
+  }
+  if (paths.size === 0) return null;
+  return {
+    files: paths.size,
+    additions,
+    deletions,
+    paths: Array.from(paths).slice(0, 8),
+  };
+}
+
+// Single helper that picks at most ONE high-priority signal and writes one
+// devlog entry. Never throws; returns void. Settings-gated via
+// DevlogSettings.autoCaptureWork (defaults to true via smart threshold).
+async function captureWorkSignalsToDevlog(
+  projectPath: string,
+  thread: ChatThread,
+  user: ChatMessage | null,
+  assistant: ChatMessage,
+): Promise<void> {
+  try {
+    const settings = await getDevlogSettings(projectPath);
+    if (!settings.enabled || settings.autoCaptureWork === false) return;
+    if (assistant.status !== 'done') return;
+
+    const tcs = (assistant.toolCalls ?? []) as ToolCall[];
+    const diff = summarizeDiffs(tcs);
+    const userText = (user?.content ?? '').slice(0, 4000);
+    const assistantText = (assistant.content ?? '').slice(0, 4000);
+
+    // Did this turn run a "ship" bash command? The Bash tool's `isError`
+    // only flags shell-exec failures, NOT a non-zero exit from the actual
+    // subprocess (e.g. `pnpm test` exits 1 with red failures and the tool
+    // still returns isError=false). Scan the result text for the standard
+    // failure markers Anthropic's Bash tool emits, AND require the command
+    // input to match a ship verb. False positives downgrade verdict; we
+    // mark `partial` instead of `success` when result text looks fishy.
+    const shipTool = tcs.find(
+      (tc) =>
+        tc.name === 'Bash' &&
+        !tc.isError &&
+        typeof tc.input?.command === 'string' &&
+        SHIP_BASH_RE.test(tc.input.command as string),
+    );
+    const shippedViaBash = Boolean(shipTool);
+    const shipResultText = shipTool?.result ?? '';
+    // Conservative failure detection — these tokens are stable in vitest /
+    // jest / cargo test output + git's pre-commit-hook-failed format.
+    const shipLooksFailed = /\b(failed|FAIL|test failed|hook failed|exit code [1-9])/i.test(
+      shipResultText,
+    );
+
+    // ─── Priority 1: result (ship signal) ─────────────────────────────────
+    // Edit/Write totaling ≥10 changed lines, OR ship bash command, OR
+    // completion keyword in user message after a tool mutation.
+    const completionKeyword = COMPLETION_RE.test(userText);
+    const isResult =
+      (diff && diff.additions + diff.deletions >= 10) ||
+      shippedViaBash ||
+      (completionKeyword && diff !== null);
+    if (isResult) {
+      const titleSource =
+        userText.split('\n').find((l) => l.trim())?.trim() ??
+        (diff ? `Edit ${diff.files} file${diff.files > 1 ? 's' : ''}` : 'work');
+      const title = titleSource.length > 140 ? titleSource.slice(0, 137) + '…' : titleSource;
+      const bodyLines: string[] = [];
+      if (diff) {
+        bodyLines.push(
+          `Changed **${diff.files}** file${diff.files > 1 ? 's' : ''}: +${diff.additions} / -${diff.deletions} lines`,
+        );
+        bodyLines.push('');
+        for (const p of diff.paths) bodyLines.push(`- \`${p}\``);
+        bodyLines.push('');
+      }
+      if (shippedViaBash) {
+        bodyLines.push('_Ship signal: build/test/commit command succeeded_');
+        bodyLines.push('');
+      }
+      if (assistantText) {
+        bodyLines.push('### Summary');
+        bodyLines.push(fenceUntrusted(
+          assistantText.split('\n').slice(0, 8).join('\n'),
+        ));
+      }
+      await createDevlogEntry({
+        projectPath,
+        type: 'result',
+        title,
+        body: bodyLines.join('\n'),
+        verdict: shippedViaBash && shipLooksFailed ? 'partial' : 'success',
+        threadId: thread.id,
+        diffStats: diff
+          ? {
+              files: diff.files,
+              additions: diff.additions,
+              deletions: diff.deletions,
+            }
+          : undefined,
+        filesTouched: diff?.paths.map(sanitizePathForFrontmatter).filter(Boolean) as string[] | undefined,
+      });
+      return;
+    }
+
+    // ─── Priority 2: plan (direction change or first-turn intent) ─────────
+    // Only fire when user's message is the only user turn so far (intent
+    // capture) OR contains a direction-change marker (mid-thread pivot).
+    const isFirstUserTurn =
+      thread.messages.filter((m) => m.role === 'user').length <= 1;
+    const directionChange = DIRECTION_CHANGE_RE.test(userText);
+    const longEnoughIntent = userText.length >= 200;
+    if (
+      (isFirstUserTurn && longEnoughIntent) ||
+      (directionChange && userText.length >= 60)
+    ) {
+      const firstLine =
+        userText.split('\n').find((l) => l.trim())?.trim() ?? 'plan';
+      const title =
+        firstLine.length > 140 ? firstLine.slice(0, 137) + '…' : firstLine;
+      const body = fenceUntrusted(userText);
+      await createDevlogEntry({
+        projectPath,
+        type: 'plan',
+        title,
+        body,
+        status: 'in_progress',
+        threadId: thread.id,
+      });
+    }
+  } catch (err) {
+    logger.warn(
+      `devlog work-signal auto-capture failed: ${(err as Error).message}`,
+    );
+  }
+}
+
 /**
  * Build the system-prompt addition for orchestrator mode. Resolves each
  * team member's agent file (description + tools) and gives claude an
@@ -660,6 +856,19 @@ async function finalizeSoloRun(
   }).catch((err) => {
     logger.warn(`forge proposeFromChat failed: ${(err as Error).message}`);
   });
+
+  // v0.25: smart devlog auto-capture from end-of-turn signals (result /
+  // plan / direction-change). Fire-and-forget; settings-gated; never
+  // blocks chat finalize. Falls back silently when the project has no
+  // .devspace/devlog/ yet (DevlogService creates it on first write).
+  const userMsg =
+    [...thread.messages].reverse().find((m) => m.role === 'user') ?? null;
+  void captureWorkSignalsToDevlog(
+    state.projectPath,
+    thread,
+    userMsg,
+    assistant,
+  );
 }
 
 // ─── team execution (sequential) ────────────────────────────────────────────
@@ -852,6 +1061,27 @@ async function runTeamSequentialTurn(
   thread.updatedAt = Date.now();
   broadcast(state, thread.id, { kind: 'done', ts: Date.now() });
   await persistThread(state.projectPath, thread);
+
+  // v0.25: team runs auto-capture too — a sequential pipeline that ships
+  // a feature across 5 agents should produce one devlog entry, not zero.
+  // We synthesize a virtual "assistant" message that rolls up every
+  // team step's toolCalls so summarizeDiffs sees the full diff surface.
+  const teamAssistant: ChatMessage = {
+    id: assistant.id,
+    role: 'assistant',
+    content: assistant.teamRun?.steps.map((s) => s.content ?? '').join('\n\n') ?? '',
+    toolCalls: assistant.teamRun?.steps.flatMap((s) => s.toolCalls ?? []) ?? [],
+    createdAt: assistant.createdAt,
+    status: assistant.status,
+  };
+  const userMsg =
+    [...thread.messages].reverse().find((m) => m.role === 'user') ?? null;
+  void captureWorkSignalsToDevlog(
+    state.projectPath,
+    thread,
+    userMsg,
+    teamAssistant,
+  );
 }
 
 function buildSequentialStepPrompt(
