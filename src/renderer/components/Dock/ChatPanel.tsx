@@ -1521,6 +1521,7 @@ function AssistantFooter({ message }: { message: ChatMessage }) {
   const usage = message.usage;
   const label = (() => {
     if (message.status === 'streaming') return 'Working…';
+    if (message.awaitingUserAnswer) return 'Waiting for your answer';
     if (message.status === 'cancelled') return 'Cancelled';
     if (message.status === 'error') return 'Failed';
     return 'Done';
@@ -2567,6 +2568,12 @@ function applyEvent(
     if (last.status === 'streaming') {
       last.status = 'done';
     }
+  } else if (event.kind === 'awaiting_user_answer') {
+    // Claude called AskUserQuestion — backend will early-finalize the
+    // run and emit `done` next, but we set the flag now so the footer
+    // shows "Waiting for your answer" instead of "Working…" the moment
+    // the question UI appears.
+    last.awaitingUserAnswer = true;
   }
 
   return { ...thread, messages };

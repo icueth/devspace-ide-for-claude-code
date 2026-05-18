@@ -657,4 +657,74 @@ describe('segments — chronological assembly', () => {
     expect(idsFromSegments).toEqual(['t1', 't2', 't3']);
     expect(idsFromToolCalls).toEqual(idsFromSegments);
   });
+
+  it('fires onAskUserQuestion exactly once + flags assistant + emits event', () => {
+    const state = emptyState();
+    const thread = freshThread();
+    const assistant = freshAssistant();
+    const captured: { channel: string; payload: unknown }[] = [];
+    state.subscribers.add({
+      isDestroyed: () => false,
+      send: (channel: string, payload: unknown) => {
+        captured.push({ channel, payload });
+      },
+    } as unknown as Electron.WebContents);
+
+    let fireCount = 0;
+    const handle = makeSoloLineHandler(state, thread, assistant, () => {
+      fireCount += 1;
+    });
+
+    handle(
+      asLine({
+        type: 'assistant',
+        message: {
+          content: [
+            { type: 'tool_use', id: 'q1', name: 'AskUserQuestion', input: {} },
+          ],
+        },
+      }),
+    );
+    handle(
+      asLine({
+        type: 'assistant',
+        message: {
+          content: [
+            { type: 'tool_use', id: 'q2', name: 'AskUserQuestion', input: {} },
+          ],
+        },
+      }),
+    );
+
+    expect(fireCount).toBe(1);
+    expect(assistant.awaitingUserAnswer).toBe(true);
+    const events = captured.map(
+      (c) => (c.payload as { event: { kind: string } }).event,
+    );
+    expect(events.some((e) => e.kind === 'awaiting_user_answer')).toBe(true);
+  });
+
+  it('does not fire onAskUserQuestion for non-AskUserQuestion tools', () => {
+    const state = emptyState();
+    const thread = freshThread();
+    const assistant = freshAssistant();
+    let fired = false;
+    const handle = makeSoloLineHandler(state, thread, assistant, () => {
+      fired = true;
+    });
+
+    handle(
+      asLine({
+        type: 'assistant',
+        message: {
+          content: [
+            { type: 'tool_use', id: 'e1', name: 'Edit', input: {} },
+          ],
+        },
+      }),
+    );
+
+    expect(fired).toBe(false);
+    expect(assistant.awaitingUserAnswer).toBeFalsy();
+  });
 });

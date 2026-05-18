@@ -119,11 +119,19 @@ function appendToolUseToSegments(target: SegmentTarget, toolUseId: string): void
 // Build a line-handler that mutates the given assistant message + emits
 // solo-turn events (no stepIndex). The same factory drives both fresh
 // spawns and resume-on-boot tails.
+//
+// `onAskUserQuestion` is called the first time an AskUserQuestion
+// tool_use is observed in the stream. ChatService passes the run's
+// kill() so the tmux session is torn down early — otherwise claude
+// hangs waiting for a tool_result that DevSpace can't provide in
+// --print mode and the "Working…" indicator stays stuck.
 export function makeSoloLineHandler(
   state: ProjectState,
   thread: ChatThread,
   assistant: ChatMessage,
+  onAskUserQuestion?: () => void,
 ): (raw: string) => void {
+  let askUserQuestionFired = false;
   return (raw) => {
     const e = parseStreamLine(raw);
     if (!e) return;
@@ -171,6 +179,21 @@ export function makeSoloLineHandler(
             diffPreview,
             ts: Date.now(),
           });
+          if (toolName === 'AskUserQuestion' && !askUserQuestionFired) {
+            askUserQuestionFired = true;
+            assistant.awaitingUserAnswer = true;
+            broadcast(state, thread.id, {
+              kind: 'awaiting_user_answer',
+              ts: Date.now(),
+            });
+            try {
+              onAskUserQuestion?.();
+            } catch (err) {
+              logger.warn(
+                `onAskUserQuestion callback threw: ${(err as Error).message}`,
+              );
+            }
+          }
         }
       }
     } else if (e.type === 'user' && e.message?.content) {

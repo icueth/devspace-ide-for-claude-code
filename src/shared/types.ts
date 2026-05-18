@@ -149,7 +149,12 @@ export type ChatEventKind =
   // sub-agent dispatches show up as ordinary tool_use(name="Task") that
   // the renderer renders inline.
   | 'team_step_start'
-  | 'team_step_end';
+  | 'team_step_end'
+  // Emitted once when claude calls AskUserQuestion. The runtime can't
+  // programmatically answer it in --print mode so we early-finalize the
+  // turn — the renderer renders the question card and shows "Waiting
+  // for your answer" instead of "Working…".
+  | 'awaiting_user_answer';
 
 export interface ChatEvent {
   kind: ChatEventKind;
@@ -256,6 +261,12 @@ export interface ChatMessage {
   // Terminal state for the turn — drives the spinner / retry button.
   status: 'streaming' | 'done' | 'error' | 'cancelled';
   error?: string;
+  // Set when claude emitted an AskUserQuestion tool_use that DevSpace
+  // can't programmatically answer in --print mode. We early-finalize the
+  // run so the "Working…" indicator clears and the user sees the
+  // "Waiting for your answer" hint instead. The next user message
+  // resumes the conversation with full history.
+  awaitingUserAnswer?: boolean;
   // Present when this message was produced by a team run (sequential or
   // parallel). Orchestrator mode does NOT set this — the entire run is
   // a single claude turn whose Task tool calls already show up in

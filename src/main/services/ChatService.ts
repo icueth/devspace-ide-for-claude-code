@@ -400,7 +400,18 @@ async function runClaudeTurn(
   const env = await resolveInteractiveShellEnv();
   const args = buildClaudeArgs(config);
 
-  const handleLine = makeSoloLineHandler(state, thread, assistant);
+  // Forward ref: line handler needs handle.kill but handle isn't built
+  // until startChatRun returns. The closure binds late, so by the time
+  // an AskUserQuestion tool_use arrives via onLine the handle is set.
+  let runHandleRef: ChatRunHandle | null = null;
+  const handleLine = makeSoloLineHandler(state, thread, assistant, () => {
+    logger.info(
+      `AskUserQuestion in thread=${thread.id.slice(0, 8)} — early-finalizing run`,
+    );
+    runHandleRef?.kill().catch((err) => {
+      logger.warn(`kill on AskUserQuestion failed: ${(err as Error).message}`);
+    });
+  });
 
   logger.info(
     `spawn claude (chat) thread=${thread.id.slice(0, 8)} cwd=${state.projectPath} model=${config.model ?? 'default'} tools=${config.allowedTools?.length ?? 'all'}`,
@@ -421,6 +432,7 @@ async function runClaudeTurn(
       runRoot: path.join(state.projectPath, '.devspace', 'chat'),
       onLine: handleLine,
     });
+    runHandleRef = handle;
   } catch (err) {
     assistant.status = 'error';
     assistant.error = (err as Error).message;
@@ -474,7 +486,12 @@ async function finalizeSoloRun(
   }
   delete thread.activeRun;
 
-  if (result.cancelled) {
+  if (assistant.awaitingUserAnswer) {
+    // Claude called AskUserQuestion and we killed the run early. Treat
+    // the turn as a clean completion — user's next message resumes the
+    // conversation with full history including the question + answer.
+    assistant.status = 'done';
+  } else if (result.cancelled) {
     assistant.status = 'cancelled';
   } else if (result.error) {
     assistant.status = 'error';

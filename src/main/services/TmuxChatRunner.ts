@@ -32,6 +32,19 @@ const logger = createLogger('TmuxChatRunner');
 
 const POLL_MS = 100; // file growth + done-file polling interval
 
+// Safety net: if no new stdout bytes appear for this long AND tmux session
+// is still alive AND no done file written, force-resolve as cancelled with
+// "stream idle timeout" error. Catches:
+//   - claude hanging on AskUserQuestion waiting for tool_result we can't
+//     send programmatically (per-run finalize fix is preferred, this is
+//     belt-and-braces)
+//   - MCP/hook subprocess holding the pane open after claude exited
+//   - any other case the trap-based done write fails to capture
+// 10 minutes is intentionally generous — large Design generations or
+// long-running agent tasks legitimately go silent for minutes between
+// tool calls.
+const STREAM_IDLE_TIMEOUT_MS = 10 * 60 * 1000;
+
 export interface ChatRunResult {
   exitCode: number | null;
   cancelled: boolean;
@@ -100,12 +113,14 @@ function shquote(s: string): string {
 }
 
 // Build the shell command that runs inside `tmux new-session -d ... sh -c '<cmd>'`.
-//   1. Source env.sh (so PATH etc. matches the user's interactive shell)
-//   2. Exec claude with the stdin/stdout/stderr redirections
-//   3. Write the exit code to done file (this is what the watcher polls for)
+//   1. Trap EXIT to write the exit code to done file — fires on normal exit
+//      AND on signals (SIGTERM, SIGHUP, SIGINT). Critical for "stuck working"
+//      cases where claude or the wrapper is killed mid-run.
+//   2. Source env.sh (PATH etc. matches the user's interactive shell)
+//   3. Exec claude with stdin/stdout/stderr redirections
 //
-// Using `; echo $? > done` (not `&&`) so the sentinel always gets written
-// even when claude exits non-zero — otherwise the watcher would hang.
+// Note: SIGKILL bypasses traps (kernel-level kill, no userspace handler runs),
+// so `tmuxHasSession` is the second-line check that resolves the tail loop.
 function buildShellCommand(
   claudeBin: string,
   args: string[],
@@ -121,9 +136,9 @@ function buildShellCommand(
   const argsQuoted = args.map(shquote).join(' ');
 
   return [
+    `trap 'rc=$?; echo $rc > ${shquote(doneFile)}' EXIT INT TERM HUP`,
     `. ${shquote(envFile)}`,
     `${claudeQuoted} ${argsQuoted} < ${shquote(promptFile)} > ${shquote(outFile)} 2> ${shquote(errFile)}`,
-    `echo $? > ${shquote(doneFile)}`,
   ].join(' ; ');
 }
 
@@ -202,6 +217,7 @@ function startTailLoop(
   let stopped = false;
   let offset = 0;
   let partial = '';
+  let lastBytesAt = Date.now(); // last time we observed new stdout bytes
 
   const drainOnce = async (): Promise<void> => {
     let stat: fs.Stats;
@@ -211,6 +227,7 @@ function startTailLoop(
       return; // out.jsonl not created yet
     }
     if (stat.size <= offset) return;
+    lastBytesAt = Date.now();
 
     const fd = await fs.promises.open(opts.outFile, 'r');
     try {
@@ -308,6 +325,26 @@ function startTailLoop(
           });
           return;
         }
+      }
+
+      // Completion check 3: stream idle timeout. If nothing has come out
+      // of out.jsonl for STREAM_IDLE_TIMEOUT_MS, force-cancel — claude is
+      // either hung on AskUserQuestion or some subprocess is keeping the
+      // pane open with no useful work happening.
+      if (Date.now() - lastBytesAt > STREAM_IDLE_TIMEOUT_MS) {
+        logger.warn(
+          `stream idle for ${STREAM_IDLE_TIMEOUT_MS}ms on session ${opts.sessionName} — force-resolving as cancelled`,
+        );
+        if (opts.tmuxBin) {
+          await tmuxKillSession(opts.tmuxBin, opts.sessionName).catch(() => undefined);
+        }
+        await drainOnce().catch(() => undefined);
+        resolve({
+          exitCode: null,
+          cancelled: true,
+          error: 'stream idle timeout (10 min)',
+        });
+        return;
       }
 
       setTimeout(tick, POLL_MS);

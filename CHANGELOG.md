@@ -5,6 +5,38 @@ All notable changes to DevSpace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.23.2] — 2026-05-18
+
+### Fixed
+
+- **"Working…" indicator no longer stuck after finished turns or
+  pending AskUserQuestion.** Three independent fixes attack the same
+  symptom from different angles:
+  1. **Trap-based `done` file write.** The tmux wrapper script now
+     installs `trap 'echo $? > done' EXIT INT TERM HUP` instead of
+     appending `; echo $? > done` after claude. The trap fires on
+     normal exit AND on signals (SIGTERM/SIGHUP/SIGINT), so the
+     completion sentinel always gets written. SIGKILL still bypasses
+     it (kernel-level), but `tmuxHasSession` catches that case.
+  2. **AskUserQuestion early-finalize.** When `ChatLineHandler` sees a
+     tool_use with `name='AskUserQuestion'`, it flags the assistant
+     turn as `awaitingUserAnswer`, emits a new
+     `awaiting_user_answer` event, and calls back into ChatService to
+     kill the run handle. `finalizeSoloRun` honors the flag and
+     marks status `'done'` (not `'cancelled'`). User picks an option
+     in the question card UI → text drops into chat input → next
+     submit resumes the conversation with full history including
+     question + answer. No more hung claude waiting for tool_result
+     DevSpace can't programmatically supply in `--print` mode.
+  3. **Stream idle timeout.** Belt-and-braces — if `out.jsonl` shows
+     no new bytes for 10 minutes AND tmux session still alive AND no
+     `done` file, the tail loop force-cancels with error
+     `"stream idle timeout (10 min)"`. Catches any edge case the
+     first two fixes miss.
+- **Renderer status surface.** `AssistantFooter` now shows
+  "Waiting for your answer" (no spinner) when the new flag is set,
+  instead of the misleading "Working…".
+
 ## [0.23.1] — 2026-05-18
 
 ### Fixed
