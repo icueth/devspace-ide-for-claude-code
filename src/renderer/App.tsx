@@ -11,7 +11,6 @@ import {
   PanelLeftOpen,
   PanelRightClose,
   PanelRightOpen,
-  Sparkles,
   Terminal as TerminalIcon,
   Users,
   Workflow,
@@ -64,7 +63,6 @@ function AppInner() {
   const openCodeflow = useEditorStore((s) => s.openCodeflow);
   const openDesign = useEditorStore((s) => s.openDesign);
   const openLivePreview = useEditorStore((s) => s.openLivePreview);
-  const openDashboard = useEditorStore((s) => s.openDashboard);
   const openDevlog = useEditorStore((s) => s.openDevlog);
 
   const sidebarWidth = useLayoutStore((s) => s.sidebarWidth);
@@ -345,14 +343,6 @@ function AppInner() {
           />
           <span className="text-[12.5px] font-semibold text-text">devspace</span>
           <UpdateBadge fallbackVersion={version || '?'} />
-          <button
-            onClick={() => openDashboard()}
-            className="no-drag inline-flex h-[22px] items-center gap-1.5 rounded-[6px] border border-border-subtle bg-surface-3 px-2 text-[10.5px] text-text-secondary transition hover:border-border-hi hover:bg-surface-4 hover:text-text"
-            title="Memory dashboard — cross-project memories, diary, and auto-capture inbox"
-          >
-            <Sparkles size={10.5} />
-            <span>Dashboard</span>
-          </button>
           {activeProject && (
             <span
               className="ml-2 flex items-center gap-1.5 rounded-[7px] border border-border-subtle bg-surface-3 px-2.5 py-[3px] text-[11.5px] text-text-secondary"

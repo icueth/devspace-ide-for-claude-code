@@ -5,6 +5,48 @@ All notable changes to DevSpace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.25.2] — 2026-05-18
+
+### Removed
+
+- **Dashboard tab (`Sparkles` button next to the version chip).** The
+  cross-project memory dashboard added in v0.19 was a viewer surface, not
+  a write surface — it bundled four panes (Project Activity counts, the
+  DevSpace memory listing, a Settings shortcut grid, and a MemPalace
+  wings/rooms/drawers/triples viewer) into one tab. After v0.25.0 merged
+  Forge back into Settings, the only remaining viewer was MemPalace, and
+  in practice users hop to MemPalace via MCP tools or to per-project work
+  via the existing Devlog tab. Removing the tab drops ~1.5 MB of bundled
+  JS (`DashboardView` chunk + `Sparkles` icon) and one navbar widget; the
+  underlying systems are untouched.
+
+### Kept (so nothing else breaks)
+
+- **MemPalace itself** — MCP tools (`mempalace_search`, `mempalace_kg_query`,
+  `mempalace_diary_write`, the full wake-up protocol) continue working
+  unchanged. Data in `~/.mempalace/` is not touched. The `MemPalaceDataService`
+  IPC layer remains in place; only the renderer view that called it was
+  removed.
+- **DevSpace memory** (`~/.devspace/projects/<hash>/memory/`) — created via
+  `/remember`, manual right-click "Save to memory", and smart auto-capture
+  from chat signals. Still injected into chat boot. Backend untouched; only
+  the listing UI was on the dashboard.
+- **Devlog** — each project's `.devspace/devlog/` is still written by the
+  v0.25 smart auto-capture (≥10-line edits, completion words, successful
+  `git commit`/`pnpm test`, `Task()` dispatches, initial intent statements).
+  The per-project Devlog tab is the primary surface for browsing entries.
+- **Forge** — the Settings → Skills/Agents tabs still expose Claude-driven
+  generation, inline stats chips, the curated catalog banner, and the chat
+  inbox card for repeated-pattern suggestions. The v0.25 merge stands.
+
+### Removed code
+
+- `src/renderer/components/Dashboard/DashboardView.tsx` (entire file)
+- `'dashboard'` from `EditorTabKind` (`src/renderer/state/editor.ts`)
+- `openDashboard` action + interface entry (`src/renderer/state/editor.ts`)
+- Dashboard button + `Sparkles` import in `src/renderer/App.tsx`
+- Lazy import + `tab.kind === 'dashboard'` branch in `EditorArea.tsx`
+
 ## [0.25.1] — 2026-05-18
 
 ### Fixed

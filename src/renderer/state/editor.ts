@@ -12,7 +12,6 @@ export type EditorTabKind =
   | 'codeflow'
   | 'design'
   | 'live-preview'
-  | 'dashboard'
   | 'devlog';
 
 export interface EditorTab {
@@ -108,9 +107,6 @@ interface EditorState {
   // the view (focus another tab + return).
   consumeDesignPrefill: (tabPath: string) => void;
   openLivePreview: (projectPath: string, projectName: string) => void;
-  // v0.19: opens the cross-project memory dashboard. Synthetic tab key
-  // "dashboard:home" — one global tab, not per-project.
-  openDashboard: () => void;
   // v0.24: per-project Devlog tab. Synthetic key `devlog:<projectPath>`.
   openDevlog: (projectPath: string, projectName: string) => void;
   close: (path: string, pane?: PaneId) => void;
@@ -323,24 +319,6 @@ export const useEditorStore = create<
           : t,
       ),
     }));
-  },
-
-  openDashboard() {
-    const tabPath = 'dashboard:home';
-    const existing = get().tabs.find((t) => t.path === tabPath);
-    if (existing) {
-      set({ activeTabPath: tabPath });
-      return;
-    }
-    const tab: EditorTab = {
-      path: tabPath,
-      name: 'Dashboard',
-      kind: 'dashboard',
-      content: '',
-      savedContent: '',
-      loading: false,
-    };
-    set((s) => ({ tabs: [...s.tabs, tab], activeTabPath: tabPath }));
   },
 
   openLivePreview(projectPath, projectName) {

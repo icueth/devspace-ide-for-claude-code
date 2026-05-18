@@ -37,11 +37,6 @@ const LivePreviewView = lazy(() =>
     default: m.LivePreviewView,
   })),
 );
-const DashboardView = lazy(() =>
-  import('@renderer/components/Dashboard/DashboardView').then((m) => ({
-    default: m.DashboardView,
-  })),
-);
 const DevlogView = lazy(() =>
   import('@renderer/components/Editor/DevlogView').then((m) => ({
     default: m.DevlogView,
@@ -241,12 +236,6 @@ function EditorBody({ tab, onChange, onSave, onNavDone, mdMode }: EditorBodyProp
         <RouteErrorBoundary label="Codeflow">
           <Suspense fallback={<LazyFallback label="Loading codeflow…" />}>
             <CodeflowView projectPath={tab.codeflowProjectPath ?? ''} />
-          </Suspense>
-        </RouteErrorBoundary>
-      ) : tab.kind === 'dashboard' ? (
-        <RouteErrorBoundary label="Dashboard">
-          <Suspense fallback={<LazyFallback label="Loading dashboard…" />}>
-            <DashboardView />
           </Suspense>
         </RouteErrorBoundary>
       ) : tab.kind === 'design' ? (
