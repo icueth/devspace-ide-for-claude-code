@@ -30,6 +30,8 @@ import { registerChatIpc } from '@main/ipc/chat';
 import { registerCodeflowIpc } from '@main/ipc/codeflow';
 import { registerDesignIpc } from '@main/ipc/design';
 import { registerDevServerIpc } from '@main/ipc/devserver';
+import { registerDevlogIpc } from '@main/ipc/devlog';
+import { registerForgeIpc } from '@main/ipc/forge';
 import { registerFsIpc } from '@main/ipc/fs';
 import { registerGitIpc } from '@main/ipc/git';
 import { registerLlmIpc } from '@main/ipc/llm';
@@ -267,6 +269,8 @@ app.whenReady().then(async () => {
   registerDevServerIpc();
   registerStyleAdapterIpc();
   registerMemoryIpc();
+  registerDevlogIpc();
+  registerForgeIpc();
   registerMempalaceIpc();
   registerMempalaceDataIpc();
   registerSetupIpc();

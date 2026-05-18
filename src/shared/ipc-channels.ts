@@ -282,6 +282,41 @@ export const IPC = {
   // installing whatever the deterministic installer couldn't. Renderer
   // mounts an xterm against the returned PTY sessionId.
   SETUP_RUN_CLAUDE: 'setup:run-claude',
+
+  // Devlog system (v0.24). Per-project work log on disk; read/write through
+  // DevlogService — never touch `.devspace/devlog/*` from renderer directly.
+  DEVLOG_LIST: 'devlog:list',
+  DEVLOG_GET: 'devlog:get',
+  DEVLOG_CREATE: 'devlog:create',
+  DEVLOG_UPDATE: 'devlog:update',
+  DEVLOG_DELETE: 'devlog:delete',
+  DEVLOG_APPEND_LOG: 'devlog:append-log',
+  DEVLOG_BUILD_INJECT: 'devlog:build-inject',
+  DEVLOG_GET_SETTINGS: 'devlog:get-settings',
+  DEVLOG_SET_SETTINGS: 'devlog:set-settings',
+  DEVLOG_OPEN_DIR: 'devlog:open-dir',
+  DEVLOG_EVENTS: 'devlog:events',
+
+  // Forge system (v0.24). Generate + track skills/agents per project.
+  FORGE_LIST_DRAFTS: 'forge:list-drafts',
+  FORGE_GET_DRAFT: 'forge:get-draft',
+  FORGE_CREATE_DRAFT: 'forge:create-draft',
+  FORGE_GENERATE_DRAFT: 'forge:generate-draft',
+  FORGE_UPDATE_DRAFT: 'forge:update-draft',
+  FORGE_SAVE_DRAFT: 'forge:save-draft',
+  FORGE_DELETE_DRAFT: 'forge:delete-draft',
+  FORGE_CANCEL_DRAFT: 'forge:cancel-draft',
+  FORGE_LIST_STATS: 'forge:list-stats',
+  FORGE_RECORD_USE: 'forge:record-use',
+  FORGE_RECORD_SIGNAL: 'forge:record-signal',
+  FORGE_LIST_USES: 'forge:list-uses',
+  FORGE_LIST_SUGGESTIONS: 'forge:list-suggestions',
+  FORGE_DISMISS_SUGGESTION: 'forge:dismiss-suggestion',
+  FORGE_LIST_CATALOG: 'forge:list-catalog',
+  FORGE_DISCOVER_MATCHES: 'forge:discover-matches',
+  FORGE_GET_SETTINGS: 'forge:get-settings',
+  FORGE_SET_SETTINGS: 'forge:set-settings',
+  FORGE_EVENTS: 'forge:events',
 } as const;
 
 export type IpcChannel = (typeof IPC)[keyof typeof IPC];

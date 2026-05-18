@@ -154,7 +154,12 @@ export type ChatEventKind =
   // programmatically answer it in --print mode so we early-finalize the
   // turn — the renderer renders the question card and shows "Waiting
   // for your answer" instead of "Working…".
-  | 'awaiting_user_answer';
+  | 'awaiting_user_answer'
+  // v0.24: implicit Forge rating signal observed in the user turn that
+  // FOLLOWS an assistant message. Carries `forgeSignal` + the previous
+  // assistant message id so the consumer (ChatService) can look up
+  // which skills/agents were loaded for that turn.
+  | 'forge_signal';
 
 export interface ChatEvent {
   kind: ChatEventKind;
@@ -191,6 +196,13 @@ export interface ChatEvent {
   stepIndex?: number;
   // For team_step_start: which agent slug the step is dispatching to.
   stepAgent?: string;
+  // v0.24: forge_signal — the implicit signal kind observed in the
+  // following user message (thanks / correction / abandoned).
+  forgeSignal?: 'thanks' | 'correction' | 'abandoned';
+  // v0.24: forge_signal — id of the prior assistant message the signal
+  // refers to. The consumer looks up its `loadedSkillKeys` to fan the
+  // signal out to every loaded skill/agent.
+  prevAssistantId?: string;
   // Wall-clock ms at which the event was observed in the main process.
   ts: number;
 }
@@ -272,6 +284,14 @@ export interface ChatMessage {
   // a single claude turn whose Task tool calls already show up in
   // toolCalls[].
   teamRun?: TeamRun;
+  // v0.24: Forge stats keys for every skill/agent loaded into the
+  // system prompt when this assistant turn was constructed. Format:
+  // `<scope>:<kind>:<slug>` (e.g. 'project:skill:refactor-css'). The
+  // implicit signal pipeline reads this off the prior assistant
+  // message when the user's next turn matches a thanks/correction/
+  // abandoned heuristic — every loaded skill gets its counter bumped.
+  // Optional + back-compat: turns persisted before v0.24 omit it.
+  loadedSkillKeys?: string[];
 }
 
 // Snapshot of a team execution attached to one assistant message. Each
@@ -1241,6 +1261,271 @@ export interface MemoryEvent {
   targetId?: string;
   // The scope key (`global` or `project:<hash>`) the event belongs to.
   scopeKey?: string;
+  ts: number;
+}
+
+// ─── Devlog (v0.24) ─────────────────────────────────────────────────────────
+//
+// Per-project work log stored under `<project>/.devspace/devlog/`. Tracks
+// plans (user intent), agents (Task tool dispatches + outcomes), results
+// (release/feature completions), and a daily append-only log. Source of
+// truth = markdown files; we don't index in SQLite (FTS-on-disk on demand).
+//
+// All file IO goes through DevlogService — never write `.devspace/devlog/*`
+// directly. Service enforces:
+//   - filename validation (YYYY-MM-DD-<slug>.md, slug = ascii kebab ≤ 80c)
+//   - retention caps (log ≤ 90d, agents ≤ 60d, plans+results forever)
+//   - INDEX.md regen on every mutation
+//
+// Auto-capture writes 1 `agents/` entry per `Task(...)` tool_use that
+// completes, with verdict derived from `is_error` on the tool_result.
+
+export type DevlogEntryType = 'plan' | 'agent' | 'result' | 'log';
+
+export type DevlogPlanStatus = 'in_progress' | 'done' | 'abandoned';
+
+export type DevlogVerdict = 'success' | 'partial' | 'failed';
+
+export interface DevlogEntry {
+  // Stable id `<type>/<filename-without-ext>` for React keys + dedup.
+  id: string;
+  type: DevlogEntryType;
+  projectPath: string;
+  // Filename relative to the type dir, e.g. `2026-05-18-design-tier1.md`.
+  // Source of truth; everything else is derived from frontmatter.
+  filename: string;
+  // Display title (frontmatter `title:` or filename slug).
+  title: string;
+  createdAt: number;
+  updatedAt: number;
+  // Markdown body — loaded lazily by Dashboard. Index keeps `preview` only.
+  body?: string;
+  preview: string;
+  // Plan-only fields.
+  status?: DevlogPlanStatus;
+  // Agent-only fields. `subagentType` matches the `subagent_type` param of
+  // the Task tool — never trust unknown values from disk.
+  subagentType?: string;
+  durationMs?: number;
+  verdict?: DevlogVerdict;
+  // Files the agent touched (extracted from tool result, capped 50).
+  filesTouched?: string[];
+  // Cross-links — wiki-style `[[name]]` rendered as clickable in dashboard,
+  // resolved against the same project's index. Missing targets stay as
+  // dangling strings (just like memory entries).
+  links: string[];
+  // Cross-version tracking (result only). e.g. "0.24.0".
+  version?: string;
+  // For result entries — quick stats badge in timeline.
+  diffStats?: { files: number; additions: number; deletions: number };
+  testsPassing?: number;
+  // Linked entry ids (plan ↔ agents ↔ result). Populated by the service
+  // when wiki-links are resolved.
+  linkedPlanIds?: string[];
+  linkedAgentIds?: string[];
+  linkedResultIds?: string[];
+  // Source thread (when auto-captured from chat).
+  threadId?: string;
+  toolUseId?: string;
+}
+
+export interface DevlogIndex {
+  projectPath: string;
+  entries: DevlogEntry[];
+  // INDEX.md regen timestamp.
+  generatedAt: number;
+}
+
+export interface DevlogSettings {
+  enabled: boolean;
+  // Auto-capture Task() dispatches → agent entries. ON by default.
+  autoCaptureAgents: boolean;
+  // Auto-capture release commits (chore(release): X.Y.Z) → result entries.
+  // Wired in v0.25; flag exists in 0.24 for forward-compat.
+  autoCaptureReleases: boolean;
+  // Inject latest N devlog entries into chat system prompt on new threads.
+  // Bounded by `maxInjectLines`.
+  injectOnNewThread: boolean;
+  maxInjectEntries: number;
+  maxInjectLines: number;
+  // Commit devlog dir to repo (default OFF — added to .gitignore).
+  commitToRepo: boolean;
+  // Retention (days). 0 = forever.
+  logRetentionDays: number;
+  agentRetentionDays: number;
+}
+
+export interface DevlogEvent {
+  kind:
+    | 'entry_created'
+    | 'entry_updated'
+    | 'entry_deleted'
+    | 'index_rebuilt';
+  projectPath: string;
+  entryId?: string;
+  ts: number;
+}
+
+// ─── Forge (v0.24) ──────────────────────────────────────────────────────────
+//
+// Self-evolving skill/agent workshop. Lets the user (or Claude on their
+// behalf) generate new SKILL.md / agent .md files tailored to the current
+// project, track how often each skill is invoked, and roll up an aggregate
+// rating from a mix of explicit thumbs and implicit chat signals.
+//
+// Storage:
+//   <project>/.devspace/forge/
+//     drafts/         WIP skills/agents not yet committed to .claude/
+//     stats.json      uses + outcomes per slug
+//     suggestions.json auto-suggest inbox
+//
+// Stats key = `<scope>:<kind>:<slug>` (e.g. `project:skill:refactor-css`).
+// That key is stable across rename/move; if a skill is deleted, we keep
+// the stats row tagged `removed: true` for 30d so user can see what they
+// archived.
+
+export type ForgeKind = 'skill' | 'agent';
+
+export type ForgeScope = 'project' | 'global';
+
+// Generation lifecycle. Drafts can be saved to .claude/ once `ready`.
+export type ForgeDraftStatus = 'pending' | 'generating' | 'ready' | 'error';
+
+export interface ForgeDraft {
+  // Stable id (uuid). React key + storage filename.
+  id: string;
+  kind: ForgeKind;
+  scope: ForgeScope;
+  projectPath: string;
+  // User-provided one-line brief that seeded generation.
+  brief: string;
+  // Slug user picked (or generated). Will become directory name on save.
+  slug: string;
+  // Streamed chat turns from the generator run. Mirror DesignMessage shape.
+  messages: Array<{
+    id: string;
+    role: 'user' | 'assistant';
+    content: string;
+    ts: number;
+  }>;
+  // Final SKILL.md / agent.md body — separate from chat because we save
+  // exactly this, not the full transcript.
+  body: string;
+  // Frontmatter that will be merged on save.
+  frontmatter: {
+    name: string;
+    description: string;
+    [key: string]: unknown;
+  };
+  status: ForgeDraftStatus;
+  errorMessage?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface ForgeStats {
+  // Same keying as the map ("<scope>:<kind>:<slug>").
+  key: string;
+  scope: ForgeScope;
+  kind: ForgeKind;
+  slug: string;
+  // Where the artifact lives on disk (absolute). Null if removed.
+  path: string | null;
+  uses: number;
+  lastUsedAt: number | null;
+  // Counts of each outcome signal. Aggregated rating = useful / (uses or 1).
+  useful: number;
+  ignored: number;
+  harmful: number;
+  // Tracks explicit user thumbs separately so we can show "explicit ratings:
+  // 4" vs implicit signal-only counts.
+  explicit: { up: number; down: number };
+  // True when the underlying file is gone; row kept for grace window.
+  removed: boolean;
+  // Soft-archive grace window — stats GC drops the row after this.
+  archivedAt: number | null;
+  createdAt: number;
+}
+
+export type ForgeSignal = 'thanks' | 'correction' | 'abandoned' | 'commit' | 'explicit-up' | 'explicit-down';
+
+export interface ForgeUseEvent {
+  // Stable id (uuid). React key.
+  id: string;
+  key: string; // matches ForgeStats.key
+  threadId: string;
+  // Which Claude turn (assistant message id) this use was attributed to.
+  messageId: string;
+  ts: number;
+  // Implicit + explicit signal tags applied to this use. Multiple OK.
+  signals: ForgeSignal[];
+  // Free-form note user typed when applying explicit thumbs.
+  note?: string;
+}
+
+export interface ForgeSuggestion {
+  id: string;
+  projectPath: string;
+  // What pattern fired this suggestion.
+  reason:
+    | 'repeated-question'
+    | 'repeated-agent-dispatch'
+    | 'repeated-files'
+    | 'repeated-boilerplate'
+    | 'project-stack-match'; // capability D discover
+  suggestedKind: ForgeKind;
+  suggestedSlug: string;
+  suggestedBrief: string;
+  // Evidence — thread ids / phrases / file paths the detector saw.
+  evidence: string[];
+  createdAt: number;
+}
+
+export interface ForgeCatalogItem {
+  // Curated stack-match item bundled with the app. Source = the existing
+  // `resources/builtin-packs/skills/<slug>/SKILL.md` registry.
+  slug: string;
+  kind: ForgeKind;
+  name: string;
+  description: string;
+  // Which detected stack signals match this item ("vitest", "tailwind", …).
+  // Discover banner uses these to score relevance against ProjectProfile.
+  matches: string[];
+  builtinPath: string;
+}
+
+export interface ForgeSettings {
+  enabled: boolean;
+  // Auto-suggest mode mirrors memory autoCapture.
+  autoSuggest: 'smart' | 'manual' | 'off';
+  // Implicit signal sources. Each can be toggled off if user wants.
+  implicitThanks: boolean;
+  implicitCorrection: boolean;
+  implicitAbandoned: boolean;
+  // Show Discover banner on project first-open.
+  showDiscoverBanner: boolean;
+  // Max suggestions per day so we don't spam the inbox.
+  maxSuggestionsPerDay: number;
+}
+
+export interface ForgeEvent {
+  kind:
+    | 'draft_created'
+    | 'draft_updated'
+    | 'draft_streaming'
+    | 'draft_ready'
+    | 'draft_error'
+    | 'draft_saved'
+    | 'draft_deleted'
+    | 'stats_updated'
+    | 'suggestion_added'
+    | 'suggestion_dismissed';
+  projectPath?: string;
+  draftId?: string;
+  key?: string;
+  suggestionId?: string;
+  // For draft_streaming events: append-this-text-to-last-assistant-msg.
+  delta?: string;
   ts: number;
 }
 

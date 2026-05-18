@@ -5,6 +5,111 @@ All notable changes to DevSpace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.24.0] — 2026-05-18
+
+### Added
+
+- **Project Devlog system.** Per-project work log at
+  `<project>/.devspace/devlog/` with four entry types: **plans** (user
+  intent + status), **agents** (auto-captured Task tool dispatches with
+  verdict + duration + files touched), **results** (release/feature
+  outcomes with version + diff stats), and **log** (append-only daily
+  narrative). Devlog content is injected as `<<<devlog_context>>>` into
+  the chat system prompt on the first turn of every thread so Claude
+  has memory of recent work without re-explanation. New Devlog tab
+  (3-pane filter/timeline/detail layout, lucide icons per type) opens
+  from sidebar header + per-project. Auto-capture writes one agent
+  entry per completed `Task(...)` dispatch by default — toggle in
+  Settings. Frontmatter parser is hand-rolled (no js-yaml), local-tz
+  date helpers (filename + "Today" filter agree across the read/write
+  paths). 90-day log retention + 60-day agent retention with grace
+  preservation of plans + results forever. New `/log <body>` slash
+  command in chat appends to today's daily log without bothering Claude.
+- **Forge — skill + agent workshop.** Self-evolving Forge tab at
+  `<project>/.devspace/forge/` with four capabilities:
+  - **A (manual create).** "+ New skill" / "+ New agent" opens a
+    Create dialog (kind/scope/slug/brief), then a Chat dialog where
+    Claude streams a generated SKILL.md or agent .md tailored to the
+    project (uses `ProjectProfileBuilder` for stack context).
+    Save commits to `.claude/skills/<slug>/SKILL.md` or
+    `.claude/agents/<slug>.md` via existing SkillsService/AgentsService.
+  - **B (auto-suggest).** ForgeService.proposeFromChat detects three
+    patterns from the last 200 turns of a thread — **repeated-question**
+    (cosine-sim ≥0.7 across ≥3 questions in 7 days), **repeated-files**
+    (≥5 co-edited files), **repeated-boilerplate** (≥3 fenced blocks
+    ≥80 chars). Hits land in the project's Forge inbox; dedupes by
+    (kind, slug, reason), daily-cap via settings.
+  - **C (on-demand rating + implicit signals).** Stats card per
+    installed skill/agent (uses, ★ rating derived from useful/uses).
+    Three implicit signals attribute to the immediately-previous
+    assistant turn's `loadedSkillKeys`: **thanks** (multilingual
+    regex), **correction** (sentence-start anchored to avoid
+    "don't forget to commit" false positives), **abandoned** (5-min
+    idle gap, freshness-gated against suspend/wake). Explicit thumbs
+    in the Stats card override.
+  - **D (Discover catalog).** 32-item curated catalog of bundled
+    skills auto-matched against detected project stack (Vite, Next,
+    Tailwind, Vitest, ...). Shown as a "X starter skills match this
+    project" panel in the Forge sidebar.
+- **Chat slash commands.** `/skill <brief>`, `/agent <brief>`,
+  `/log <body>` — gated when no project is active.
+- **Dashboard "Project activity" section.** Strip across the top of
+  Home showing per-project devlog entry counts (last 7 days) with
+  click-to-open. Event-driven refresh (subscribes to
+  `api.devlog.onEvent`) + 250ms debounce — won't re-walk N projects
+  on every workspace reorder.
+
+### Security + correctness
+
+- Per-(project, file) async mutex on `stats.json` and `uses.jsonl`
+  writes — prevents lost increments when ChatService fans
+  recordSignal across multiple loadedSkillKeys in the same turn.
+- Per-project mutex around the `uses.jsonl` append+trim sequence so a
+  second append landing between trim-read and trim-write doesn't get
+  clobbered by atomic rename.
+- User-supplied brief + refinements fenced as
+  `<<<user_brief>>>` untrusted data in the Forge generation prompt
+  (system framing tells Claude to treat as content, not instructions).
+- `threadId` / `messageId` length-capped at 128 chars at the
+  IPC boundary.
+- `assertInDevlogDir` + `assertInForgeDir` path containment + `lstat`
+  symlink rejection on every read.
+- `listUses` sort breaks ts-ties by reverse insertion index — newest
+  record always wins regardless of millisecond-resolution clock ties.
+- ChatService `proposeFromChat` is fire-and-forget (chat finalize
+  never blocks on Forge analysis).
+
+### Changed
+
+- `detectForgeSignal` now strips fenced code blocks before regex
+  match so pasted blocks containing "stop the dev server" don't fire
+  a correction signal.
+- "Abandoned" signal requires the user message to be wall-clock fresh
+  (≤60s old) — laptop sleeping then resuming yesterday's chat no
+  longer poisons skill stats.
+- `DevlogService` time helpers (`ymd`, `hhmm`) use local timezone so
+  filename dates + "Today" filtering + HH:MM stamps all agree across
+  the read+write paths.
+
+### Files
+
+- New: `src/main/services/DevlogService.ts` (1000+ LOC, 32 tests)
+- New: `src/main/services/ForgeService.ts` (1500+ LOC, 39 tests)
+- New: `src/main/ipc/devlog.ts`, `src/main/ipc/forge.ts`
+- New: `src/renderer/components/Editor/DevlogView.tsx` (600 LOC)
+- New: `src/renderer/components/Editor/ForgeView.tsx` (700 LOC)
+- New: `src/renderer/components/Editor/forge/{CreateDraftDialog,ChatDraftDialog,ForgeStatsCard}.tsx`
+- Modified: `src/main/services/ChatService.ts` (devlog inject +
+  Task auto-capture + Forge signal fan-out + Forge proposal)
+- Modified: `src/main/services/ChatLineHandler.ts`
+  (`onTaskComplete` callback)
+- Modified: `src/shared/types.ts` (Devlog + Forge + ChatEvent
+  `forge_signal` kind + `ChatMessage.loadedSkillKeys`)
+- Modified: `src/shared/ipc-channels.ts` (11 DEVLOG_* +
+  19 FORGE_* channels)
+- Modified: `src/renderer/lib/api.ts`, `src/preload/index.ts`,
+  `src/renderer/state/editor.ts` (3 new tab kinds + actions)
+
 ## [0.23.2] — 2026-05-18
 
 ### Fixed

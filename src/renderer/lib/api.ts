@@ -54,6 +54,24 @@ import type {
   ThreadSummary,
 } from '@shared/types';
 import type {
+  DevlogEntry,
+  DevlogEntryType,
+  DevlogEvent,
+  DevlogPlanStatus,
+  DevlogSettings,
+  DevlogVerdict,
+  ForgeCatalogItem,
+  ForgeDraft,
+  ForgeEvent,
+  ForgeKind,
+  ForgeScope,
+  ForgeSettings,
+  ForgeSignal,
+  ForgeStats,
+  ForgeSuggestion,
+  ForgeUseEvent,
+} from '@shared/types';
+import type {
   MemPalaceInstallInput,
   MemPalaceInstallResult,
   MemPalaceProgressEvent,
@@ -536,6 +554,80 @@ export interface DevspaceApi {
     ) => Promise<SetupClaudeRunResult>;
     onProgress: (cb: (ev: SetupProgressEvent) => void) => () => void;
   };
+  devlog: {
+    list: (input: { projectPath: string; type?: DevlogEntryType }) => Promise<DevlogEntry[]>;
+    get: (input: { projectPath: string; entryId: string }) => Promise<DevlogEntry | null>;
+    create: (input: {
+      projectPath: string;
+      type: DevlogEntryType;
+      title: string;
+      body: string;
+      status?: DevlogPlanStatus;
+      verdict?: DevlogVerdict;
+      subagentType?: string;
+      version?: string;
+      threadId?: string;
+      toolUseId?: string;
+    }) => Promise<DevlogEntry>;
+    update: (input: {
+      projectPath: string;
+      entryId: string;
+      title?: string;
+      body?: string;
+      status?: DevlogPlanStatus;
+    }) => Promise<DevlogEntry>;
+    delete: (input: { projectPath: string; entryId: string }) => Promise<void>;
+    appendLog: (input: { projectPath: string; text: string }) => Promise<void>;
+    buildInject: (projectPath: string) => Promise<string>;
+    getSettings: () => Promise<DevlogSettings>;
+    setSettings: (patch: Partial<DevlogSettings>) => Promise<DevlogSettings>;
+    openDir: (projectPath: string) => Promise<void>;
+    onEvent: (cb: (event: DevlogEvent) => void) => () => void;
+  };
+  forge: {
+    listDrafts: (projectPath: string) => Promise<ForgeDraft[]>;
+    getDraft: (draftId: string) => Promise<ForgeDraft | null>;
+    createDraft: (input: {
+      projectPath: string;
+      kind: ForgeKind;
+      scope: ForgeScope;
+      slug: string;
+      brief: string;
+    }) => Promise<ForgeDraft>;
+    generateDraft: (input: { draftId: string }) => Promise<void>;
+    updateDraft: (input: {
+      draftId: string;
+      slug?: string;
+      body?: string;
+      frontmatter?: Partial<ForgeDraft['frontmatter']>;
+      userMessage?: string;
+    }) => Promise<ForgeDraft>;
+    saveDraft: (input: { draftId: string }) => Promise<{ path: string; key: string }>;
+    deleteDraft: (draftId: string) => Promise<void>;
+    cancelDraft: (draftId: string) => Promise<void>;
+    listStats: (projectPath: string) => Promise<ForgeStats[]>;
+    recordUse: (input: {
+      projectPath: string;
+      key: string;
+      threadId: string;
+      messageId: string;
+    }) => Promise<void>;
+    recordSignal: (input: {
+      projectPath: string;
+      key: string;
+      messageId: string;
+      signal: ForgeSignal;
+      note?: string;
+    }) => Promise<void>;
+    listUses: (input: { projectPath: string; key: string; limit?: number }) => Promise<ForgeUseEvent[]>;
+    listSuggestions: (projectPath: string) => Promise<ForgeSuggestion[]>;
+    dismissSuggestion: (input: { projectPath: string; suggestionId: string }) => Promise<void>;
+    listCatalog: () => Promise<ForgeCatalogItem[]>;
+    discoverMatches: (projectPath: string) => Promise<ForgeCatalogItem[]>;
+    getSettings: () => Promise<ForgeSettings>;
+    setSettings: (patch: Partial<ForgeSettings>) => Promise<ForgeSettings>;
+    onEvent: (cb: (event: ForgeEvent) => void) => () => void;
+  };
 }
 
 declare global {
@@ -873,6 +965,60 @@ function makeStubApi(): DevspaceApi {
         'setup.runClaude',
       ) as () => Promise<SetupClaudeRunResult>,
       onProgress: () => () => undefined,
+    },
+    devlog: {
+      list: () => Promise.resolve([]),
+      get: () => Promise.resolve(null),
+      create: notWired('devlog.create'),
+      update: notWired('devlog.update'),
+      delete: notWired('devlog.delete'),
+      appendLog: notWired('devlog.appendLog'),
+      buildInject: () => Promise.resolve(''),
+      getSettings: () =>
+        Promise.resolve({
+          enabled: true,
+          autoCaptureAgents: true,
+          autoCaptureReleases: false,
+          injectOnNewThread: true,
+          maxInjectEntries: 10,
+          maxInjectLines: 150,
+          commitToRepo: false,
+          logRetentionDays: 90,
+          agentRetentionDays: 60,
+        } as DevlogSettings),
+      setSettings: notWired('devlog.setSettings') as () => Promise<DevlogSettings>,
+      openDir: notWired('devlog.openDir') as () => Promise<void>,
+      onEvent: () => () => undefined,
+    },
+    forge: {
+      listDrafts: () => Promise.resolve([]),
+      getDraft: () => Promise.resolve(null),
+      createDraft: notWired('forge.createDraft'),
+      generateDraft: notWired('forge.generateDraft'),
+      updateDraft: notWired('forge.updateDraft'),
+      saveDraft: notWired('forge.saveDraft'),
+      deleteDraft: notWired('forge.deleteDraft'),
+      cancelDraft: notWired('forge.cancelDraft'),
+      listStats: () => Promise.resolve([]),
+      recordUse: notWired('forge.recordUse'),
+      recordSignal: notWired('forge.recordSignal'),
+      listUses: () => Promise.resolve([]),
+      listSuggestions: () => Promise.resolve([]),
+      dismissSuggestion: notWired('forge.dismissSuggestion'),
+      listCatalog: () => Promise.resolve([]),
+      discoverMatches: () => Promise.resolve([]),
+      getSettings: () =>
+        Promise.resolve({
+          enabled: true,
+          autoSuggest: 'smart',
+          implicitThanks: true,
+          implicitCorrection: true,
+          implicitAbandoned: true,
+          showDiscoverBanner: true,
+          maxSuggestionsPerDay: 3,
+        } as ForgeSettings),
+      setSettings: notWired('forge.setSettings') as () => Promise<ForgeSettings>,
+      onEvent: () => () => undefined,
     },
   } as unknown as DevspaceApi;
 }

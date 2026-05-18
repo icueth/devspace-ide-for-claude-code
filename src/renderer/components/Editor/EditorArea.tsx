@@ -42,6 +42,16 @@ const DashboardView = lazy(() =>
     default: m.DashboardView,
   })),
 );
+const DevlogView = lazy(() =>
+  import('@renderer/components/Editor/DevlogView').then((m) => ({
+    default: m.DevlogView,
+  })),
+);
+const ForgeView = lazy(() =>
+  import('@renderer/components/Editor/ForgeView').then((m) => ({
+    default: m.ForgeView,
+  })),
+);
 import { api } from '@renderer/lib/api';
 import { cn } from '@renderer/lib/utils';
 import { useEditorStore, type PaneId } from '@renderer/state/editor';
@@ -254,6 +264,18 @@ function EditorBody({ tab, onChange, onSave, onNavDone, mdMode }: EditorBodyProp
         <RouteErrorBoundary label="Live Preview">
           <Suspense fallback={<LazyFallback label="Loading live preview…" />}>
             <LivePreviewView projectPath={tab.livePreviewProjectPath ?? ''} />
+          </Suspense>
+        </RouteErrorBoundary>
+      ) : tab.kind === 'devlog' ? (
+        <RouteErrorBoundary label="Devlog">
+          <Suspense fallback={<LazyFallback label="Loading devlog…" />}>
+            <DevlogView tab={tab} />
+          </Suspense>
+        </RouteErrorBoundary>
+      ) : tab.kind === 'forge' ? (
+        <RouteErrorBoundary label="Forge">
+          <Suspense fallback={<LazyFallback label="Loading Forge…" />}>
+            <ForgeView tab={tab} />
           </Suspense>
         </RouteErrorBoundary>
       ) : tab.kind === 'image' ? (

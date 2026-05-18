@@ -12,7 +12,9 @@ export type EditorTabKind =
   | 'codeflow'
   | 'design'
   | 'live-preview'
-  | 'dashboard';
+  | 'dashboard'
+  | 'devlog'
+  | 'forge';
 
 export interface EditorTab {
   path: string;
@@ -53,6 +55,17 @@ export interface EditorTab {
   // the project whose dev-server should be detected/started/observed.
   // Tab `path` is the synthetic key "live-preview:<projectPath>".
   livePreviewProjectPath?: string;
+  // Populated when kind === 'devlog' — points the Devlog tab at the project
+  // whose `.devspace/devlog/` should be shown. Tab `path` = `devlog:<projectPath>`.
+  devlogProjectPath?: string;
+  // Populated when kind === 'forge' — points the Forge tab at the project
+  // whose `.devspace/forge/` workshop should be shown. `path` = `forge:<projectPath>`.
+  forgeProjectPath?: string;
+  // v0.24 Forge → chat bridge: pre-fill draft brief from a chat slash
+  // command. Consumed on first mount, then cleared.
+  forgePrefillBrief?: string;
+  forgePrefillKind?: 'skill' | 'agent';
+  forgePrefillConsumed?: boolean;
 }
 
 export interface OpenOptions {
@@ -107,6 +120,15 @@ interface EditorState {
   // v0.19: opens the cross-project memory dashboard. Synthetic tab key
   // "dashboard:home" — one global tab, not per-project.
   openDashboard: () => void;
+  // v0.24: per-project Devlog tab. Synthetic key `devlog:<projectPath>`.
+  openDevlog: (projectPath: string, projectName: string) => void;
+  // v0.24: per-project Forge tab. Synthetic key `forge:<projectPath>`.
+  openForge: (
+    projectPath: string,
+    projectName: string,
+    prefill?: { brief?: string; kind?: 'skill' | 'agent' },
+  ) => void;
+  consumeForgePrefill: (tabPath: string) => void;
   close: (path: string, pane?: PaneId) => void;
   closeOthers: (path: string, pane?: PaneId) => void;
   closeToRight: (path: string, pane?: PaneId) => void;
@@ -354,6 +376,73 @@ export const useEditorStore = create<
       livePreviewProjectPath: projectPath,
     };
     set((s) => ({ tabs: [...s.tabs, tab], activeTabPath: tabPath }));
+  },
+
+  openDevlog(projectPath, projectName) {
+    const tabPath = `devlog:${projectPath}`;
+    const existing = get().tabs.find((t) => t.path === tabPath);
+    if (existing) {
+      set({ activeTabPath: tabPath });
+      return;
+    }
+    const tab: EditorTab = {
+      path: tabPath,
+      name: `${projectName} · Devlog`,
+      kind: 'devlog',
+      content: '',
+      savedContent: '',
+      loading: false,
+      devlogProjectPath: projectPath,
+    };
+    set((s) => ({ tabs: [...s.tabs, tab], activeTabPath: tabPath }));
+  },
+
+  openForge(projectPath, projectName, prefill) {
+    const tabPath = `forge:${projectPath}`;
+    const existing = get().tabs.find((t) => t.path === tabPath);
+    if (existing) {
+      if (prefill && (prefill.brief || prefill.kind)) {
+        set((s) => ({
+          tabs: s.tabs.map((t) =>
+            t.path === tabPath
+              ? {
+                  ...t,
+                  forgePrefillBrief: prefill.brief,
+                  forgePrefillKind: prefill.kind,
+                  forgePrefillConsumed: false,
+                }
+              : t,
+          ),
+          activeTabPath: tabPath,
+        }));
+      } else {
+        set({ activeTabPath: tabPath });
+      }
+      return;
+    }
+    const tab: EditorTab = {
+      path: tabPath,
+      name: `${projectName} · Forge`,
+      kind: 'forge',
+      content: '',
+      savedContent: '',
+      loading: false,
+      forgeProjectPath: projectPath,
+      forgePrefillBrief: prefill?.brief,
+      forgePrefillKind: prefill?.kind,
+      forgePrefillConsumed: false,
+    };
+    set((s) => ({ tabs: [...s.tabs, tab], activeTabPath: tabPath }));
+  },
+
+  consumeForgePrefill(tabPath) {
+    set((s) => ({
+      tabs: s.tabs.map((t) =>
+        t.path === tabPath && !t.forgePrefillConsumed
+          ? { ...t, forgePrefillConsumed: true }
+          : t,
+      ),
+    }));
   },
 
   closeOthers(path, pane = 'left') {

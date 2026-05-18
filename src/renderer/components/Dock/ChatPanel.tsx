@@ -110,6 +110,27 @@ const SLASH_COMMANDS: SlashCommand[] = [
     argHint: '<append text>',
   },
   {
+    id: 'skill',
+    trigger: 'skill',
+    description: 'Forge — open a new skill draft with this brief',
+    hasArgs: true,
+    argHint: '<brief>',
+  },
+  {
+    id: 'agent',
+    trigger: 'agent',
+    description: 'Forge — open a new agent draft with this brief',
+    hasArgs: true,
+    argHint: '<brief>',
+  },
+  {
+    id: 'log',
+    trigger: 'log',
+    description: 'Devlog — append a log entry to this project',
+    hasArgs: true,
+    argHint: '<body>',
+  },
+  {
     id: 'help',
     trigger: 'help',
     description: 'Show this command palette',
@@ -884,6 +905,54 @@ export function ChatPanel({ projectPath }: ChatPanelProps) {
           void args;
           return true;
         }
+        case 'skill':
+        case 'agent': {
+          // v0.24: /skill or /agent <brief> opens the Forge tab pre-filled
+          // with the brief + correct kind. CR-10: refuse when no project
+          // is active — Forge requires a project anchor.
+          if (!projectPath) {
+            setNotice(`Open a project before using /${trigger}.`);
+            return true;
+          }
+          const brief = args.trim();
+          if (brief === '') {
+            setNotice(`Usage: /${trigger} <brief>`);
+            return true;
+          }
+          const projectName = basename(projectPath);
+          useEditorStore.getState().openForge(projectPath, projectName, {
+            brief,
+            kind: trigger as 'skill' | 'agent',
+          });
+          setNotice(`Forge tab opened — ${trigger} draft prefilled.`);
+          return true;
+        }
+        case 'log': {
+          // v0.24: /log <body> appends a quick devlog entry.
+          if (!projectPath) {
+            setNotice('Open a project before using /log.');
+            return true;
+          }
+          const body = args.trim();
+          if (body === '') {
+            setNotice('Usage: /log <body>');
+            return true;
+          }
+          const firstLine = body.split(/\r?\n/).find((l) => l.trim().length > 0)?.trim() ?? body;
+          const title = firstLine.slice(0, 80);
+          try {
+            await api.devlog.create({
+              projectPath,
+              type: 'log',
+              title,
+              body,
+            });
+            setNotice(`Devlog entry saved: "${title}".`);
+          } catch (err) {
+            setNotice(`Devlog failed: ${(err as Error).message}`);
+          }
+          return true;
+        }
         case 'help': {
           // Palette stays visible while input starts with `/`. Forcing
           // the input back to a single slash keeps every command shown.
@@ -894,7 +963,7 @@ export function ChatPanel({ projectPath }: ChatPanelProps) {
           return false;
       }
     },
-    [activeId],
+    [activeId, projectPath],
   );
 
   // Keep the ref pointed at the latest executeSlash so onSend's slash

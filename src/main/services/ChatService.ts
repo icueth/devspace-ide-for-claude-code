@@ -31,6 +31,16 @@ import {
   registerPostHydrate,
 } from '@main/services/ChatTranscript';
 import {
+  buildInjectPreamble as buildDevlogPreamble,
+  createEntry as createDevlogEntry,
+  getSettings as getDevlogSettings,
+} from '@main/services/DevlogService';
+import {
+  getSettings as getForgeSettings,
+  proposeFromChat as forgeProposeFromChat,
+  recordSignal as recordForgeSignal,
+} from '@main/services/ForgeService';
+import {
   buildInjectPreamble,
   summarizeThread as memorySummarizeThread,
 } from '@main/services/MemoryService';
@@ -224,6 +234,47 @@ export async function sendMessage(req: ChatSendRequest): Promise<{ messageId: st
     createdAt: Date.now(),
     status: 'done',
   };
+  // v0.24: implicit Forge signal detection. Inspect the user text
+  // against the IMMEDIATELY-PREVIOUS assistant turn — if we detect a
+  // thanks/correction/abandoned cue, emit a forge_signal event so the
+  // ForgeService can bump the per-skill counters for every key in
+  // prev.loadedSkillKeys. Fire-and-forget — chat must never block on
+  // this. See detectForgeSignal() at the bottom of this module.
+  try {
+    const prev = lastAssistantMessage(thread);
+    if (prev) {
+      const detected = detectForgeSignal(req.text, userMsg.createdAt, prev.createdAt);
+      if (detected) {
+        // Settings gate is async — broadcast / record only after the
+        // settings check resolves so a disabled toggle doesn't leak
+        // events. Fire-and-forget so the chat path isn't blocked.
+        const detectedKind = detected;
+        const prevId = prev.id;
+        const keys = prev.loadedSkillKeys ?? [];
+        void forgeSignalAllowed(detectedKind).then((ok) => {
+          if (!ok) return;
+          broadcast(s, thread.id, {
+            kind: 'forge_signal',
+            forgeSignal: detectedKind,
+            prevAssistantId: prevId,
+            ts: Date.now(),
+          });
+          for (const key of keys) {
+            recordForgeSignal({
+              projectPath: s.projectPath,
+              key,
+              messageId: prevId,
+              signal: detectedKind,
+            }).catch((err) => {
+              logger.warn(`forge recordSignal failed: ${(err as Error).message}`);
+            });
+          }
+        });
+      }
+    }
+  } catch (err) {
+    logger.warn(`forge signal detection threw: ${(err as Error).message}`);
+  }
   thread.messages.push(userMsg);
 
   // Give the thread a sensible title once it has its first user message.
@@ -259,12 +310,26 @@ export async function sendMessage(req: ChatSendRequest): Promise<{ messageId: st
   // content as system-prompt instructions.
   if (!thread.memoryInjected) {
     try {
-      const preamble = await buildInjectPreamble(s.projectPath);
-      if (preamble) {
-        const prior = effective.systemPromptAppend ?? '';
+      const memoryPre = await buildInjectPreamble(s.projectPath);
+      // Devlog preamble lives in its own fence so Claude can pattern-
+      // match the source — never throws (DevlogService swallows at the
+      // boundary). Both blocks get prepended to systemPromptAppend in
+      // sequence so the prior config / orchestrator prompt still flows
+      // after them.
+      const devlogPre = await buildDevlogPreamble(s.projectPath).catch(
+        (err) => {
+          logger.warn(`devlog inject failed: ${(err as Error).message}`);
+          return '';
+        },
+      );
+      const prior = effective.systemPromptAppend ?? '';
+      const blocks: string[] = [];
+      if (memoryPre) blocks.push(`## Project memory\n\n${memoryPre}`);
+      if (devlogPre) blocks.push(devlogPre);
+      if (prior) blocks.push(prior);
+      if (blocks.length > 0) {
         effective = mergeConfig(effective, {
-          systemPromptAppend:
-            `## Project memory\n\n${preamble}\n\n---\n\n${prior}`.trimEnd(),
+          systemPromptAppend: blocks.join('\n\n---\n\n').trimEnd(),
         });
       }
       thread.memoryInjected = true;
@@ -309,6 +374,61 @@ export async function sendMessage(req: ChatSendRequest): Promise<{ messageId: st
   });
 
   return { messageId: assistantMsg.id };
+}
+
+// Truncate the agent's output (the `text` field of the tool_result)
+// before persisting it to the devlog. 4KB is enough to give the user
+// a glance-able summary in the dashboard without bloating per-thread
+// auto-capture into a runaway disk-write.
+const MAX_AGENT_OUTPUT_BYTES = 4 * 1024;
+
+function truncateAgentOutput(raw: string): string {
+  if (!raw) return '';
+  const buf = Buffer.from(raw, 'utf8');
+  if (buf.byteLength <= MAX_AGENT_OUTPUT_BYTES) return raw;
+  const trimmed = buf.slice(0, MAX_AGENT_OUTPUT_BYTES).toString('utf8');
+  return `${trimmed}\n\n_(truncated to ${MAX_AGENT_OUTPUT_BYTES}B)_`;
+}
+
+// Auto-capture a completed Task() dispatch into the per-project
+// devlog. Gated on DevlogSettings.autoCaptureAgents — when off, this
+// is a no-op. Never throws (wrapped at the call site too); a devlog
+// write failure must never break chat finalize.
+async function captureTaskToDevlog(
+  projectPath: string,
+  ev: {
+    toolUseId: string;
+    subagentType: string;
+    description: string;
+    durationMs: number;
+    isError: boolean;
+    output: string;
+    threadId: string;
+  },
+): Promise<void> {
+  try {
+    const settings = await getDevlogSettings(projectPath);
+    if (!settings.enabled || !settings.autoCaptureAgents) return;
+    const title = ev.description
+      ? `${ev.subagentType}: ${ev.description}`
+      : ev.subagentType;
+    const body =
+      (ev.description ? `**${ev.description}**\n\n` : '') +
+      truncateAgentOutput(ev.output);
+    await createDevlogEntry({
+      projectPath,
+      type: 'agent',
+      title,
+      body,
+      subagentType: ev.subagentType,
+      durationMs: ev.durationMs,
+      verdict: ev.isError ? 'failed' : 'success',
+      threadId: ev.threadId,
+      toolUseId: ev.toolUseId,
+    });
+  } catch (err) {
+    logger.warn(`devlog auto-capture failed: ${(err as Error).message}`);
+  }
 }
 
 /**
@@ -404,14 +524,26 @@ async function runClaudeTurn(
   // until startChatRun returns. The closure binds late, so by the time
   // an AskUserQuestion tool_use arrives via onLine the handle is set.
   let runHandleRef: ChatRunHandle | null = null;
-  const handleLine = makeSoloLineHandler(state, thread, assistant, () => {
-    logger.info(
-      `AskUserQuestion in thread=${thread.id.slice(0, 8)} — early-finalizing run`,
-    );
-    runHandleRef?.kill().catch((err) => {
-      logger.warn(`kill on AskUserQuestion failed: ${(err as Error).message}`);
-    });
-  });
+  const handleLine = makeSoloLineHandler(
+    state,
+    thread,
+    assistant,
+    () => {
+      logger.info(
+        `AskUserQuestion in thread=${thread.id.slice(0, 8)} — early-finalizing run`,
+      );
+      runHandleRef?.kill().catch((err) => {
+        logger.warn(`kill on AskUserQuestion failed: ${(err as Error).message}`);
+      });
+    },
+    (ev) => {
+      // Devlog auto-capture for Task() dispatches. Fire-and-forget; the
+      // chat finalize path must never wait on (or break from) this.
+      void captureTaskToDevlog(state.projectPath, ev).catch((err) => {
+        logger.warn(`devlog capture failed: ${(err as Error).message}`);
+      });
+    },
+  );
 
   logger.info(
     `spawn claude (chat) thread=${thread.id.slice(0, 8)} cwd=${state.projectPath} model=${config.model ?? 'default'} tools=${config.allowedTools?.length ?? 'all'}`,
@@ -507,6 +639,27 @@ async function finalizeSoloRun(
   thread.updatedAt = Date.now();
   broadcast(state, thread.id, { kind: 'done', ts: Date.now() });
   await persistThread(state.projectPath, thread);
+
+  // v0.24: forge auto-suggestion. Scan the last ~200 turns of this thread
+  // for repeated patterns (questions, file pairs, boilerplate blocks) and
+  // surface as suggestions in the project's forge inbox. Fire-and-forget —
+  // chat must never block on it. The service self-gates on autoSuggest
+  // setting; on 'off' it returns early.
+  void forgeProposeFromChat({
+    projectPath: state.projectPath,
+    threadId: thread.id,
+    messages: thread.messages.slice(-200).map((m) => ({
+      role: m.role,
+      content: m.content,
+      ts: m.createdAt,
+      filesTouched: m.toolCalls
+        ?.flatMap((tc) =>
+          tc.diffStats?.path ? [tc.diffStats.path] : [],
+        ),
+    })),
+  }).catch((err) => {
+    logger.warn(`forge proposeFromChat failed: ${(err as Error).message}`);
+  });
 }
 
 // ─── team execution (sequential) ────────────────────────────────────────────
@@ -976,3 +1129,120 @@ async function finalizeResumedTeamStep(
 // renderer's listThreads IPC on chat panel mount. Tying it to module
 // load (instead of e.g. main.ts boot) keeps the dependency wiring local.
 registerPostHydrate(resumeActiveRuns);
+
+// ─── Forge signal detection ────────────────────────────────────────────────
+//
+// v0.24: when a new user message arrives, scan the text for cues that
+// implicitly rate the prior assistant turn. Three signals:
+//
+//   - thanks      → matches /(thank|thanks|perfect|exactly|ตรง|ใช่|ขอบคุณ|👍)/i
+//   - correction  → matches /(ไม่ใช่|ผิด|stop|don't|wrong|no that|that's wrong)/i
+//   - abandoned   → user message arrives ≥5 minutes after the prev
+//                    assistant turn (topic-shift detection deferred to
+//                    v0.25; the gap heuristic is the v0.24 baseline)
+//
+// Settings gating lives in ForgeSettings — when disabled we silently
+// return null so no signal is emitted.
+
+const THANKS_RE = /(thank|thanks|perfect|exactly|ตรง|ใช่|ขอบคุณ|👍)/i;
+// Tightened in CR-6 review: anchor to sentence-start signals so benign
+// phrases like "don't forget to commit" / "stop the dev server" / "the
+// wrong file is on prod" don't poison stats. Required form: phrase begins
+// at the start of the message (or just after newline).
+const CORRECTION_RE =
+  /(^|\n)\s*(ไม่ใช่|ผิด|stop\b|don'?t (do|use|add|change)|that'?s wrong|no that|wrong[, ]|no[, ])/i;
+const ABANDONED_GAP_MS = 5 * 60 * 1000;
+// Cap on how long an "abandoned" claim can be inferred from a clock gap:
+// if the user-message timestamp is more than this far behind wall-clock
+// (e.g. laptop slept overnight then resumed), suppress the abandoned
+// signal — we can't tell stale-thread-resumption from genuine give-up.
+const ABANDONED_FRESHNESS_MS = 60 * 1000;
+
+// Cached forge settings — refreshed on a short TTL so we don't read
+// disk every user turn. We don't have a per-project cache here because
+// the chat path doesn't know the projectPath until sendMessage runs; the
+// service caches per-project itself, this TTL just smooths the
+// chat-side fanout.
+let cachedForgeSettings: import('@shared/types').ForgeSettings | null = null;
+let cachedForgeSettingsExpiry = 0;
+const FORGE_SETTINGS_TTL_MS = 30_000;
+
+async function loadForgeSettingsCached(): Promise<
+  import('@shared/types').ForgeSettings | null
+> {
+  const now = Date.now();
+  if (cachedForgeSettings && now < cachedForgeSettingsExpiry) {
+    return cachedForgeSettings;
+  }
+  try {
+    const s = await getForgeSettings();
+    cachedForgeSettings = s;
+    cachedForgeSettingsExpiry = now + FORGE_SETTINGS_TTL_MS;
+    return s;
+  } catch (err) {
+    logger.warn(`load forge settings failed: ${(err as Error).message}`);
+    return null;
+  }
+}
+
+// Pure helper — exported for tests. Returns the detected signal kind
+// or null. Settings gating happens in the caller (sendMessage) before
+// emitting the event — keeping detection pure lets the unit test pin
+// regex behavior without spinning up the whole service.
+export function detectForgeSignal(
+  userText: string,
+  userTs: number,
+  prevAssistantTs: number,
+  now: number = Date.now(),
+): 'thanks' | 'correction' | 'abandoned' | null {
+  if (typeof userText !== 'string' || userText.length === 0) return null;
+  // Strip fenced code blocks before regex match so "stop the dev server"
+  // inside a paste doesn't trigger a correction.
+  const stripped = userText.replace(/```[\s\S]*?```/g, '').replace(/`[^`]*`/g, '');
+  // Correction wins over thanks if both match — a "no thanks, that's
+  // wrong" message is clearly a correction.
+  if (CORRECTION_RE.test(stripped)) return 'correction';
+  if (THANKS_RE.test(stripped)) return 'thanks';
+  // Abandoned gap detection — only fires when the user message is FRESH
+  // (composed within the last minute of wall-clock). Avoids classifying a
+  // post-suspend wake-up message as an abandonment of yesterday's chat.
+  if (
+    userTs - prevAssistantTs >= ABANDONED_GAP_MS &&
+    now - userTs <= ABANDONED_FRESHNESS_MS
+  ) {
+    return 'abandoned';
+  }
+  return null;
+}
+
+// Use loadForgeSettingsCached at the boundary in sendMessage. We don't
+// gate it inside detectForgeSignal to keep the helper pure for tests.
+// Wire it up here as a wrapper used only by sendMessage — but we want
+// to keep the change minimal, so the recordForgeSignal call sites in
+// sendMessage already swallow errors. Gate via settings before
+// recording. Returns true when the kind is allowed by current settings.
+async function forgeSignalAllowed(
+  kind: 'thanks' | 'correction' | 'abandoned',
+): Promise<boolean> {
+  const s = await loadForgeSettingsCached();
+  if (!s || !s.enabled) return false;
+  if (kind === 'thanks') return s.implicitThanks;
+  if (kind === 'correction') return s.implicitCorrection;
+  if (kind === 'abandoned') return s.implicitAbandoned;
+  return false;
+}
+
+// Reach the last assistant message in a thread — small helper used by
+// the signal detection path. Exported for tests.
+export function lastAssistantMessage(thread: ChatThread): ChatMessage | null {
+  for (let i = thread.messages.length - 1; i >= 0; i--) {
+    const m = thread.messages[i]!;
+    if (m.role === 'assistant') return m;
+  }
+  return null;
+}
+
+// Re-export so the IPC handler can be tested without importing service
+// internals.
+export { forgeSignalAllowed };
+

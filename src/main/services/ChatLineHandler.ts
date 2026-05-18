@@ -125,13 +125,36 @@ function appendToolUseToSegments(target: SegmentTarget, toolUseId: string): void
 // kill() so the tmux session is torn down early — otherwise claude
 // hangs waiting for a tool_result that DevSpace can't provide in
 // --print mode and the "Working…" indicator stays stuck.
+// Callback fired exactly once per Task() tool_use when the matching
+// tool_result arrives. Used by DevlogService auto-capture — the
+// handler doesn't import DevlogService directly so this module stays
+// testable in isolation (and so chat finalize can never throw from a
+// devlog write).
+export interface TaskCompleteEvent {
+  toolUseId: string;
+  subagentType: string;
+  description: string;
+  durationMs: number;
+  isError: boolean;
+  output: string;
+  threadId: string;
+}
+
 export function makeSoloLineHandler(
   state: ProjectState,
   thread: ChatThread,
   assistant: ChatMessage,
   onAskUserQuestion?: () => void,
+  onTaskComplete?: (ev: TaskCompleteEvent) => void,
 ): (raw: string) => void {
   let askUserQuestionFired = false;
+  // toolUseId → { dispatchedAt, subagentType, description } for
+  // outstanding Task() calls. Populated on tool_use, drained on the
+  // matching tool_result so we can compute durationMs.
+  const pendingTasks = new Map<
+    string,
+    { dispatchedAt: number; subagentType: string; description: string }
+  >();
   return (raw) => {
     const e = parseStreamLine(raw);
     if (!e) return;
@@ -194,6 +217,26 @@ export function makeSoloLineHandler(
               );
             }
           }
+          // Track Task() dispatches for devlog auto-capture. Only when
+          // a `subagent_type` arg is present — Claude always supplies it
+          // for the Task tool, but a hostile/malformed stream might not.
+          if (toolName === 'Task' && onTaskComplete) {
+            const subagentType =
+              typeof toolInput.subagent_type === 'string'
+                ? toolInput.subagent_type
+                : '';
+            const description =
+              typeof toolInput.description === 'string'
+                ? toolInput.description
+                : '';
+            if (subagentType) {
+              pendingTasks.set(id, {
+                dispatchedAt: Date.now(),
+                subagentType,
+                description,
+              });
+            }
+          }
         }
       }
     } else if (e.type === 'user' && e.message?.content) {
@@ -214,6 +257,29 @@ export function makeSoloLineHandler(
             toolIsError: !!block.is_error,
             ts: Date.now(),
           });
+          // Drain pending Task dispatches → emit devlog auto-capture
+          // event. Wrap in try/catch — chat finalize MUST NOT throw
+          // from a downstream devlog write.
+          const useId = block.tool_use_id;
+          if (useId && pendingTasks.has(useId) && onTaskComplete) {
+            const pending = pendingTasks.get(useId)!;
+            pendingTasks.delete(useId);
+            try {
+              onTaskComplete({
+                toolUseId: useId,
+                subagentType: pending.subagentType,
+                description: pending.description,
+                durationMs: Math.max(0, Date.now() - pending.dispatchedAt),
+                isError: !!block.is_error,
+                output: text,
+                threadId: thread.id,
+              });
+            } catch (err) {
+              logger.warn(
+                `onTaskComplete threw: ${(err as Error).message}`,
+              );
+            }
+          }
         }
       }
     } else if (e.type === 'result' && e.usage) {

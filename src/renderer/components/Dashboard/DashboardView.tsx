@@ -1,5 +1,6 @@
 import {
   AlertTriangle,
+  Activity,
   Brain,
   ChevronDown,
   ChevronRight,
@@ -16,6 +17,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { api } from '@renderer/lib/api';
 import { cn } from '@renderer/lib/utils';
+import { useEditorStore } from '@renderer/state/editor';
+import { useWorkspaceStore } from '@renderer/state/workspace';
 import type {
   MemPalaceDrawer,
   MemPalaceOverview,
@@ -23,6 +26,7 @@ import type {
   MemPalaceTriple,
   MemPalaceWing,
 } from '@shared/mempalaceData';
+import type { Project } from '@shared/types';
 
 declare const __APP_VERSION__: string;
 
@@ -229,6 +233,8 @@ export function DashboardView() {
           </button>
         </div>
       ) : null}
+
+      <ProjectActivitySection />
 
       <div className="flex min-h-0 flex-1">
         <WingRail
@@ -680,5 +686,137 @@ function formatFiledAt(value: string | null, full: boolean = false): string {
   const days = Math.floor(hours / 24);
   if (days < 30) return `${days}d`;
   return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+
+// --- Project Activity (v0.24) ----------------------------------------------
+//
+// Lightweight cross-project devlog summary embedded in the Home dashboard.
+// For each known project we count entries created in the last 7 days.
+// Click a card → open that project's Devlog tab.
+
+interface ProjectActivityRow {
+  project: Project;
+  count: number;
+}
+
+function ProjectActivitySection() {
+  const projects = useWorkspaceStore((s) => s.projects);
+  const openDevlog = useEditorStore((s) => s.openDevlog);
+  const [rows, setRows] = useState<ProjectActivityRow[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  // 7-day cutoff anchored to local midnight so "last 7 days" matches
+  // what the user sees on the wall clock.
+  const sinceMs = useMemo(() => {
+    const start = new Date();
+    start.setHours(0, 0, 0, 0);
+    return start.getTime() - 7 * 24 * 60 * 60 * 1000;
+  }, []);
+
+  // CR-3: memoize on the stable path list so refresh fires only when a
+  // project is added/removed/renamed — not on every workspace touch (e.g.
+  // collapse-state mutation that reorders the array).
+  const projectFingerprint = useMemo(
+    () => projects.map((p) => `${p.id}:${p.path}`).join('|'),
+    [projects],
+  );
+
+  const refreshRef = useRef<() => void>(() => undefined);
+
+  useEffect(() => {
+    if (projects.length === 0) {
+      setRows([]);
+      return;
+    }
+    let cancelled = false;
+    let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const refresh = () => {
+      if (debounceTimer) clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => {
+        if (cancelled) return;
+        setLoading(true);
+        void Promise.all(
+          projects.map(async (p) => {
+            try {
+              const entries = await api.devlog.list({ projectPath: p.path });
+              const recent = entries.filter((e) => e.createdAt >= sinceMs);
+              return { project: p, count: recent.length };
+            } catch {
+              return { project: p, count: 0 };
+            }
+          }),
+        )
+          .then((all) => {
+            if (cancelled) return;
+            const sorted = all.sort((a, b) => b.count - a.count);
+            setRows(sorted);
+          })
+          .finally(() => {
+            if (!cancelled) setLoading(false);
+          });
+      }, 250);
+    };
+    refreshRef.current = refresh;
+    refresh();
+
+    // Event-driven invalidation: any devlog mutation across any project
+    // triggers a debounced re-fetch. The debounce coalesces bursts like
+    // auto-capture writing multiple agent entries during a chat turn.
+    const off = api.devlog.onEvent(() => {
+      refreshRef.current();
+    });
+
+    return () => {
+      cancelled = true;
+      if (debounceTimer) clearTimeout(debounceTimer);
+      off();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectFingerprint, sinceMs]);
+
+  if (projects.length === 0) return null;
+
+  return (
+    <section className="border-b border-border-subtle bg-surface px-4 py-3">
+      <div className="mb-2 flex items-center gap-2 text-[10.5px] font-semibold uppercase tracking-wide text-text-muted">
+        <Activity className="h-3 w-3" />
+        Project activity
+        <span className="text-[10px] normal-case tracking-normal text-text-muted">
+          (devlog entries · last 7 days)
+        </span>
+        {loading && <Loader2 className="ml-1 h-3 w-3 animate-spin" />}
+      </div>
+      <div className="flex flex-wrap gap-1.5">
+        {rows.map((r) => (
+          <button
+            key={r.project.id}
+            type="button"
+            onClick={() => openDevlog(r.project.path, r.project.name)}
+            className={cn(
+              'inline-flex items-center gap-1.5 rounded-[6px] border bg-surface-2 px-2 py-1 text-[11px] transition',
+              r.count > 0
+                ? 'border-accent/40 text-text hover:border-accent hover:bg-surface-3'
+                : 'border-border-subtle text-text-muted hover:border-border-hi hover:bg-surface-3 hover:text-text',
+            )}
+            title={`Open ${r.project.name} devlog`}
+          >
+            <span className="truncate max-w-[180px]">{r.project.name}</span>
+            <span
+              className={cn(
+                'rounded-full px-1.5 py-[1px] font-mono text-[9.5px]',
+                r.count > 0 ? 'bg-accent/20 text-accent' : 'bg-surface-3 text-text-muted',
+              )}
+            >
+              {r.count}
+            </span>
+          </button>
+        ))}
+        {!loading && rows.length === 0 && (
+          <div className="text-[11px] text-text-muted">No projects loaded.</div>
+        )}
+      </div>
+    </section>
+  );
 }
 
