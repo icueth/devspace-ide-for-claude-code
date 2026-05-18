@@ -5,6 +5,41 @@ All notable changes to DevSpace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.24.1] — 2026-05-18
+
+### Fixed
+
+- **Setup → "Let Claude install" was unusable.** The spawned `claude` ran
+  with `--print --verbose --allowed-tools ...` so it executed in
+  non-interactive batch mode — printed a single response and exited
+  immediately, leaving the embedded xterm dead and giving the user no way
+  to watch the install, intervene, or see verification output. Now spawns
+  `claude --dangerously-skip-permissions "<prompt>"` (interactive + prefilled
+  first user message), so the session stays alive end-to-end. Users see
+  Claude install each tool, run verification commands, print actual stdout,
+  and can type follow-ups or `Ctrl+C` to abort. (`ClaudeSetupRunner.ts`)
+
+### Changed
+
+- **Setup tab promotes Claude as the primary install path.** Once Homebrew
+  and Claude Code CLI are detected as installed, **"Let Claude finish setup"**
+  becomes the gradient-styled primary CTA and **"Install All Missing"** drops
+  to secondary. The new flow matches the user mental model: install the two
+  bootstraps manually, then hand the rest to Claude. The deterministic brew
+  installer is still available as the secondary option.
+- **Setup install prompt expanded.** Claude is told it's running with
+  `--dangerously-skip-permissions` (so it won't ask for approval on every
+  Bash call), instructed to work step-by-step (install → verify → next),
+  and required to print real verification output before declaring success.
+  Settings file edits constrained to `hooks.PreToolUse` only (no
+  collateral damage to unrelated sections) and required to use `jq` for
+  safety. (`ClaudeSetupRunner.buildPrompt`)
+- **Tips card rewritten.** Replaced generic notes with a how-it-works
+  explanation of the two-prereq + Claude-finishes model, with clickable
+  links to brew.sh and claude.com/claude-code, an inline link to the
+  Memory tab for MemPalace, and an explicit note that the interactive
+  session lets users type follow-ups or `Ctrl+C` to abort. (`SetupSettings.tsx`)
+
 ## [0.24.0] — 2026-05-18
 
 ### Added

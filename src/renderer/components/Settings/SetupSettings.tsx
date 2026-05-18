@@ -246,49 +246,26 @@ function ActionsBar({
   const installAllDisabled =
     running || status.complete || status.platform !== 'darwin';
 
-  // "Let Claude install" enabled when:
-  //   - claude binary is detected (so we can actually spawn it)
-  //   - at least one non-mempalace tool is still missing
-  //   - no other install is currently in flight
+  // "Let Claude finish setup" is the recommended path once the two
+  // bootstraps (brew + claude) are installed. Until then, the deterministic
+  // installer still runs.
   const claudeCheck = status.checks.find((c) => c.id === 'claude');
+  const brewCheck = status.checks.find((c) => c.id === 'brew');
   const claudeReady = claudeCheck?.state === 'ok';
+  const brewReadyOrNA =
+    brewCheck?.state === 'ok' || brewCheck?.state === 'unsupported';
   const hasMissing = status.checks.some(
     (c) =>
       c.id !== 'mempalace' &&
       (c.state === 'missing' || c.state === 'blocked'),
   );
   const claudeDisabled = running || !claudeReady || !hasMissing;
+  // When brew + claude are in place, promote the Claude-driven path to the
+  // primary action style (gradient) and demote "Install All" to secondary.
+  const claudeIsPrimary = claudeReady && brewReadyOrNA && hasMissing;
 
   return (
     <div className="flex flex-wrap items-center gap-2">
-      <button
-        type="button"
-        onClick={() => void onInstallAll()}
-        disabled={installAllDisabled}
-        className={cn(
-          'inline-flex items-center gap-1.5 rounded-[7px] px-4 py-2 text-[12px] font-medium transition',
-          installAllDisabled
-            ? 'pointer-events-none border border-border bg-surface-3 text-text-muted opacity-60'
-            : 'text-white hover:brightness-110',
-        )}
-        style={
-          installAllDisabled
-            ? undefined
-            : {
-                background:
-                  'linear-gradient(135deg, var(--color-accent), #22d3ee)',
-                boxShadow: '0 4px 14px rgba(34,211,238,0.30)',
-              }
-        }
-      >
-        {busy === 'all' ? (
-          <Loader2 size={12} className="animate-spin" />
-        ) : (
-          <Sparkles size={12} />
-        )}
-        {status.complete ? 'Setup complete' : 'Install All Missing'}
-      </button>
-
       <button
         type="button"
         onClick={onRunClaude}
@@ -298,17 +275,65 @@ function ActionsBar({
             ? 'Install Claude Code first — then Claude can finish the rest.'
             : !hasMissing
               ? 'Everything is already installed.'
-              : 'Let Claude install the remaining tools and verify each one.'
+              : 'Open an interactive Claude session that installs and verifies the remaining tools.'
+        }
+        className={cn(
+          'inline-flex items-center gap-1.5 rounded-[7px] px-4 py-2 text-[12px] font-medium transition',
+          claudeDisabled
+            ? 'pointer-events-none border border-border bg-surface-3 text-text-muted opacity-60'
+            : claudeIsPrimary
+              ? 'text-white hover:brightness-110'
+              : 'border border-accent/40 bg-accent/10 text-accent hover:bg-accent/20',
+        )}
+        style={
+          !claudeDisabled && claudeIsPrimary
+            ? {
+                background:
+                  'linear-gradient(135deg, var(--color-accent), #22d3ee)',
+                boxShadow: '0 4px 14px rgba(34,211,238,0.30)',
+              }
+            : undefined
+        }
+      >
+        <Bot size={12} />
+        Let Claude finish setup
+      </button>
+
+      <button
+        type="button"
+        onClick={() => void onInstallAll()}
+        disabled={installAllDisabled}
+        title={
+          installAllDisabled
+            ? status.complete
+              ? 'Everything is already installed.'
+              : 'Install All is macOS-only — use Claude or install tools manually on this platform.'
+            : 'Run the deterministic installer (brew + curl) for the remaining tools.'
         }
         className={cn(
           'inline-flex items-center gap-1.5 rounded-[7px] px-3 py-2 text-[11.5px] font-medium transition',
-          claudeDisabled
+          installAllDisabled
             ? 'pointer-events-none border border-border bg-surface-3 text-text-muted opacity-60'
-            : 'border border-accent/40 bg-accent/10 text-accent hover:bg-accent/20',
+            : claudeIsPrimary
+              ? 'border border-border bg-surface-3 text-text-secondary hover:border-border-hi hover:bg-surface-4 hover:text-text'
+              : 'text-white hover:brightness-110',
         )}
+        style={
+          !installAllDisabled && !claudeIsPrimary
+            ? {
+                background:
+                  'linear-gradient(135deg, var(--color-accent), #22d3ee)',
+                boxShadow: '0 4px 14px rgba(34,211,238,0.30)',
+              }
+            : undefined
+        }
       >
-        <Bot size={12} />
-        Let Claude install
+        {busy === 'all' ? (
+          <Loader2 size={12} className="animate-spin" />
+        ) : (
+          <Sparkles size={12} />
+        )}
+        {status.complete ? 'Setup complete' : 'Install All Missing'}
       </button>
 
       <button
@@ -583,24 +608,70 @@ function LogCard({
 function TipsCard() {
   return (
     <div className="rounded-[10px] border border-border bg-surface-2/40 px-3 py-2.5 text-[10.5px] text-text-muted">
-      <div className="mb-1 font-semibold uppercase tracking-wide">Notes</div>
+      <div className="mb-1 font-semibold uppercase tracking-wide">How it works</div>
       <ul className="flex list-disc flex-col gap-0.5 pl-4">
         <li>
-          Run <code className="font-mono">claude</code> once in any terminal
-          after installing Claude Code to sign in to your Anthropic account.
+          <strong className="text-text-secondary">Two prerequisites you install yourself:</strong>{' '}
+          <a
+            href="#"
+            className="text-accent hover:underline"
+            onClick={(e) => {
+              e.preventDefault();
+              void api.app.openExternal('https://brew.sh');
+            }}
+          >
+            Homebrew
+          </a>{' '}
+          and the{' '}
+          <a
+            href="#"
+            className="text-accent hover:underline"
+            onClick={(e) => {
+              e.preventDefault();
+              void api.app.openExternal('https://claude.com/claude-code');
+            }}
+          >
+            Claude Code CLI
+          </a>
+          . Then run <code className="font-mono">claude</code> once to sign in.
         </li>
         <li>
-          Once Claude is signed-in, “Let Claude install” will run the AI
-          agent against the remaining tools and verify each one before
-          declaring success.
+          Once those two are detected, click{' '}
+          <strong className="text-text-secondary">“Let Claude finish setup”</strong>{' '}
+          — it spawns an interactive Claude session here with{' '}
+          <code className="font-mono">--dangerously-skip-permissions</code> so
+          Bash runs without per-command approvals. Claude installs tmux / rtk /
+          jq / the rtk hook and verifies each one.
+        </li>
+        <li>
+          The terminal stays interactive — you can type to nudge Claude if it
+          stalls, or press <code className="font-mono">Ctrl+C</code> to abort.
+          When Claude prints <code className="font-mono">SETUP-COMPLETE</code>{' '}
+          it’s done; re-check status with the Refresh button.
         </li>
         <li>
           The rtk hook rewrites your Bash commands inside Claude Code to save
-          60–90% tokens — no behavior change for you.
+          60–90% tokens — no behavior change for you. Restart Claude Code after
+          install so it reloads{' '}
+          <code className="font-mono">~/.claude/settings.json</code>.
         </li>
         <li>
-          Restart Claude Code after the rtk hook or MemPalace is installed so it
-          reloads <code className="font-mono">~/.claude/settings.json</code>.
+          MemPalace has its own dedicated installer — open the{' '}
+          <a
+            href="#"
+            className="text-accent hover:underline"
+            onClick={(e) => {
+              e.preventDefault();
+              window.dispatchEvent(
+                new CustomEvent('devspace:switch-settings-tab', {
+                  detail: { tab: 'memory' },
+                }),
+              );
+            }}
+          >
+            Memory tab
+          </a>
+          .
         </li>
       </ul>
     </div>

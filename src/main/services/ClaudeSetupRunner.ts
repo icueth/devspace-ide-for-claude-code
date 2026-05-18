@@ -24,14 +24,15 @@ function buildPrompt(missing: SetupCheck[]): string {
       case 'tmux':
         return '- **tmux** — `brew install tmux` (macOS) or `apt install tmux` / `dnf install tmux` (Linux). Verify `tmux -V`.';
       case 'rtk':
-        return '- **rtk** — `brew install rtk` on macOS (the Rust Token Killer; not the Rust Type Kit). Confirm with `rtk --version` and `rtk gain` (should not error).';
+        return '- **rtk** — `brew tap rtk-ai/rtk && brew install rtk` on macOS (the Rust Token Killer; not the Rust Type Kit). Confirm with `rtk --version` and `rtk gain` (should not error).';
       case 'jq':
         return '- **jq** — `brew install jq`. Verify `jq --version`.';
       case 'rtkHook':
         return [
           '- **rtk Claude hook** — install at `~/.claude/hooks/rtk-rewrite.sh` and register it as a `PreToolUse` matcher `"Bash"` hook in `~/.claude/settings.json`.',
-          '  Use the bundled script if devspace has placed one in `~/.claude/hooks/rtk-rewrite.sh`. Otherwise generate a minimal forwarder that re-invokes `rtk <command>`.',
-          '  Back up `~/.claude/settings.json` before editing.',
+          '  Back up `~/.claude/settings.json` before editing. Use `jq` to edit JSON safely — do not regex-replace.',
+          '  Generate a minimal forwarder script that calls `exec rtk "$@"` and re-emit the rewritten bash command.',
+          '  De-duplicate by `command` so re-runs do not multiply entries.',
         ].join('\n');
       case 'mempalace':
         return '- **MemPalace** — skip here; the user has a dedicated Settings → Memory tab for it.';
@@ -40,19 +41,21 @@ function buildPrompt(missing: SetupCheck[]): string {
 
   return [
     'You are running inside devspace as the user environment installer for Claude Code.',
+    'You are launched as an interactive session with `--dangerously-skip-permissions`, so the Bash tool will execute without per-command approval prompts.',
     '',
     'The deterministic installer left these tools still missing:',
     '',
     ...lines,
     '',
     'Rules:',
-    '- Use Bash. Do NOT ask for confirmation — proceed.',
-    '- On macOS prefer Homebrew (`brew install …`). On Linux use the distro package manager (`apt-get`, `dnf`, `pacman`). Detect the platform with `uname -s` and the package manager with `command -v`.',
-    "- After each install, run the verification command stated above and print its output. If it fails, retry or surface the actual error rather than declaring success.",
-    '- Never use `--no-verify`, never disable hooks, never rewrite an unrelated section of `~/.claude/settings.json`.',
-    '- When done, print exactly the line: `SETUP-COMPLETE` on its own line, followed by a one-line summary per tool (`tool: ok|failed reason`).',
+    '- Use the Bash tool. Work step-by-step: install one tool, run its verification command, print the output, then move on.',
+    '- On macOS prefer Homebrew (`brew install …`). On Linux detect the package manager via `command -v apt-get / dnf / pacman` and use the right one.',
+    '- After each install, run the verification command stated above and print its actual output. Never claim success without observed output.',
+    '- If a step fails, surface the real error (exit code + stderr) instead of declaring success. Retry once if it looks transient (network blip); otherwise stop and report.',
+    '- Never use `--no-verify`, never disable hooks, never rewrite an unrelated section of `~/.claude/settings.json` — only touch `hooks.PreToolUse`.',
+    '- When every listed tool is verified (or you cannot proceed), print exactly this on its own line: `SETUP-COMPLETE`, then one line per tool: `<tool>: ok` or `<tool>: failed <reason>`.',
     '',
-    'Start now.',
+    'Start now — install the first missing tool above.',
   ].join('\n');
 }
 
@@ -114,20 +117,20 @@ export async function runClaudeSetup(
 
   const missingIds = missing.map((c) => c.id).join(',');
 
+  // Interactive mode (no --print) — so the spawned claude stays alive long
+  // enough for the user to watch the install in xterm, type follow-ups if
+  // it stalls, and Ctrl+C to abort. `--dangerously-skip-permissions` lets
+  // Bash run brew/curl without per-command approval prompts.
+  //
+  // The prompt is passed as a positional argument: claude prefills it as the
+  // first user message and starts working immediately on launch.
   const session = await createPty({
     projectId: SETUP_PROJECT_ID,
     kind: 'setup-claude',
     tabId,
     cwd,
     command: claudeBin,
-    args: [
-      '--dangerously-skip-permissions',
-      '--print',
-      '--verbose',
-      '--allowed-tools',
-      'Bash,Read,Edit,Write',
-      prompt,
-    ],
+    args: ['--dangerously-skip-permissions', prompt],
     cols: opts.cols,
     rows: opts.rows,
   });
