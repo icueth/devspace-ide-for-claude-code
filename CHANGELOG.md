@@ -5,6 +5,24 @@ All notable changes to DevSpace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.25.1] — 2026-05-18
+
+### Fixed
+
+- **Dashboard MemPalace pane: `mempalace-data:list-drawers` crash on
+  packaged builds.** `better-sqlite3` opens its native `.node` binding via
+  the `bindings` package, which walks parent directories from
+  `module.parent.filename` searching for a `package.json`. In Electron
+  packaged apps on macOS Sequoia/Tahoe that filename is the virtual
+  `node:electron/js2c/browser_init` — there is no filesystem parent, so
+  resolution fails with *"Could not find module root given file…"* and
+  every dashboard query (`getOverview`, `listWings`, `listDrawers`, …)
+  throws. Now `MemPalaceDataService` resolves the binding path itself
+  (`<app>/Contents/Resources/app.asar.unpacked/node_modules/better-sqlite3/build/Release/better_sqlite3.node`)
+  and hands it to `new Database({ nativeBinding })`, which bypasses the
+  parent-dir search entirely. The path falls back to
+  `<repo>/node_modules/better-sqlite3/…` in `pnpm dev`.
+
 ## [0.25.0] — 2026-05-18
 
 ### Changed

@@ -1,8 +1,25 @@
 import Database from 'better-sqlite3';
+import { app } from 'electron';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
 import { resolvePalaceDir } from '@main/utils/mempalacePaths';
+
+/**
+ * Resolves the absolute path to better-sqlite3's `.node` binding. In
+ * packaged Electron apps the `bindings` package's parent-directory search
+ * fails (Electron's `module.parent.filename` is the virtual
+ * `node:electron/js2c/browser_init` on Sequoia/Tahoe), so we hand the
+ * resolved path to `new Database({ nativeBinding })` to bypass that search.
+ *
+ * Dev:        <repo>/node_modules/better-sqlite3/build/Release/better_sqlite3.node
+ * Packaged:   <app>/Contents/Resources/app.asar.unpacked/node_modules/better-sqlite3/build/Release/better_sqlite3.node
+ */
+function resolveBetterSqlite3Binding(): string {
+  const appPath = app.getAppPath();
+  const root = app.isPackaged ? appPath.replace(/\.asar$/, '.asar.unpacked') : appPath;
+  return path.join(root, 'node_modules', 'better-sqlite3', 'build', 'Release', 'better_sqlite3.node');
+}
 import type {
   MemPalaceDrawer,
   MemPalaceListDrawersInput,
@@ -95,16 +112,19 @@ class MemPalaceDataService {
       this.close();
       this.palaceDir = info.palaceDir;
     }
+    const nativeBinding = resolveBetterSqlite3Binding();
     if (this.kgDb === null) {
       this.kgDb = new Database(path.join(info.palaceDir, 'knowledge_graph.sqlite3'), {
         readonly: true,
         fileMustExist: true,
+        nativeBinding,
       });
     }
     if (this.chromaDb === null) {
       this.chromaDb = new Database(path.join(info.palaceDir, 'chroma.sqlite3'), {
         readonly: true,
         fileMustExist: true,
+        nativeBinding,
       });
       this.resolveCollectionIds(this.chromaDb);
     }
