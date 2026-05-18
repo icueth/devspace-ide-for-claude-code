@@ -14,6 +14,7 @@ import {
   Globe,
   ListChecks,
   Loader2,
+  MessageCircleQuestion,
   MessageSquarePlus,
   Paperclip,
   Pencil,
@@ -125,6 +126,18 @@ interface ChatPanelProps {
 // pins identity so consumers only re-render when there's actually queue
 // content.
 const EMPTY_QUEUE: QueuedMessage[] = [];
+
+// Module-level singleton used by deeply-nested ToolCard components to
+// append text into the active ChatPanel's input box without prop-drilling.
+// Only one ChatPanel is mounted at a time per project, and only the
+// active project's panel is visible — so a single global appender is safe.
+// AskUserQuestion's answer buttons use this to drop "Selected: ..." into
+// the textarea so the user can edit/send the response.
+let _chatInputAppender: ((text: string) => void) | null = null;
+
+function appendToActiveChatInput(text: string): void {
+  _chatInputAppender?.(text);
+}
 
 /**
  * Beta chat surface — claude --print stream-json output rendered as
@@ -333,6 +346,27 @@ export function ChatPanel({ projectPath }: ChatPanelProps) {
     const t = setTimeout(() => setNotice(null), 2000);
     return () => clearTimeout(t);
   }, [notice]);
+
+  // Register the module-level appender so AskUserQuestion's option
+  // buttons (deep in ToolCard) can drop text into THIS panel's input.
+  // Cleanup on unmount/swap so a panel from a previous project doesn't
+  // own the slot.
+  useEffect(() => {
+    const appender = (text: string) => {
+      setInput((prev) => {
+        const sep = prev && !prev.endsWith('\n') && !prev.endsWith(' ') ? '\n' : '';
+        return `${prev}${sep}${text}`;
+      });
+      requestAnimationFrame(() => {
+        inputRef.current?.focus();
+        inputRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      });
+    };
+    _chatInputAppender = appender;
+    return () => {
+      if (_chatInputAppender === appender) _chatInputAppender = null;
+    };
+  }, []);
 
   // Subscribe to Design → Chat prefill bridge events. When an event for
   // OUR project arrives: optionally spin up a fresh thread, drop the
@@ -1880,19 +1914,168 @@ function DiffPreviewBlock({ preview }: { preview: ToolDiffPreview }) {
 // input JSON (collapsed nested details). Matches the "per-tool family
 // card" pattern from opendesign while staying within DevSpace's
 // existing details/summary disclosure idiom.
+// Renders the structured payload of an AskUserQuestion tool call so the
+// user can read the question(s) and click an option to drop the
+// formatted answer into the chat input. AskUserQuestion is Claude
+// Code's interactive choice tool — in --print mode there's no native UI,
+// so DevSpace surfaces it inline here. Clicking an option does NOT auto-
+// send; the user can edit before pressing Enter.
+type AskUserQuestionPayload = {
+  questions?: Array<{
+    question?: string;
+    header?: string;
+    multiSelect?: boolean;
+    options?: Array<{ label?: string; description?: string }>;
+  }>;
+};
+
+function AskUserQuestionBlock({ input }: { input: Record<string, unknown> }) {
+  const payload = input as AskUserQuestionPayload;
+  const questions = Array.isArray(payload.questions) ? payload.questions : [];
+  if (questions.length === 0) {
+    return (
+      <div className="rounded bg-surface-3 px-2 py-1.5 text-[11px] text-text-muted">
+        No questions provided.
+      </div>
+    );
+  }
+  const [selected, setSelected] = useState<Record<number, Set<string>>>({});
+
+  const togglePick = (qIdx: number, label: string, multi: boolean) => {
+    setSelected((prev) => {
+      const next = { ...prev };
+      const cur = new Set(next[qIdx] ?? []);
+      if (multi) {
+        if (cur.has(label)) cur.delete(label);
+        else cur.add(label);
+      } else {
+        cur.clear();
+        cur.add(label);
+      }
+      next[qIdx] = cur;
+      return next;
+    });
+    if (!multi) {
+      // Single-select: drop the answer into input immediately.
+      const q = questions[qIdx];
+      const header = q?.header ? `[${q.header}] ` : '';
+      appendToActiveChatInput(`${header}Selected: ${label}`);
+    }
+  };
+
+  const sendMulti = (qIdx: number) => {
+    const picks = Array.from(selected[qIdx] ?? []);
+    if (picks.length === 0) return;
+    const q = questions[qIdx];
+    const header = q?.header ? `[${q.header}] ` : '';
+    appendToActiveChatInput(
+      `${header}Selected: ${picks.map((p) => `"${p}"`).join(', ')}`,
+    );
+  };
+
+  return (
+    <div className="space-y-2.5">
+      {questions.map((q, qIdx) => {
+        const multi = !!q.multiSelect;
+        const opts = Array.isArray(q.options) ? q.options : [];
+        const picks = selected[qIdx] ?? new Set<string>();
+        return (
+          <div
+            key={qIdx}
+            className="rounded border border-border-subtle bg-surface-3 p-2"
+          >
+            {q.header && (
+              <div className="mb-1 inline-block rounded-full bg-accent/15 px-1.5 py-[1px] text-[9.5px] font-medium uppercase tracking-wide text-accent">
+                {q.header}
+              </div>
+            )}
+            {q.question && (
+              <div className="mb-1.5 text-[11.5px] leading-snug text-text">
+                {q.question}
+              </div>
+            )}
+            <div className="space-y-1">
+              {opts.map((opt, oIdx) => {
+                const label = opt.label ?? `Option ${oIdx + 1}`;
+                const picked = picks.has(label);
+                return (
+                  <button
+                    key={oIdx}
+                    type="button"
+                    onClick={() => togglePick(qIdx, label, multi)}
+                    className={cn(
+                      'w-full rounded border px-2 py-1.5 text-left text-[11px] leading-snug transition-colors',
+                      picked
+                        ? 'border-accent/60 bg-accent/10 text-text'
+                        : 'border-border-subtle bg-surface-2 text-text-secondary hover:border-accent/40 hover:bg-surface-2/80',
+                    )}
+                  >
+                    <div className="flex items-start gap-1.5">
+                      {multi && (
+                        <span
+                          className={cn(
+                            'mt-[2px] inline-block h-[10px] w-[10px] shrink-0 rounded-sm border',
+                            picked
+                              ? 'border-accent bg-accent'
+                              : 'border-border-strong',
+                          )}
+                        />
+                      )}
+                      <div className="min-w-0 flex-1">
+                        <div className="font-medium text-text">{label}</div>
+                        {opt.description && (
+                          <div className="mt-0.5 text-[10.5px] text-text-muted">
+                            {opt.description}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+            {multi && (
+              <button
+                type="button"
+                onClick={() => sendMulti(qIdx)}
+                disabled={picks.size === 0}
+                className={cn(
+                  'mt-1.5 inline-flex items-center gap-1 rounded px-2 py-1 text-[10.5px] font-medium transition-colors',
+                  picks.size > 0
+                    ? 'bg-accent text-white hover:bg-accent/90'
+                    : 'cursor-not-allowed bg-surface-3 text-text-muted',
+                )}
+              >
+                Use selection ({picks.size})
+              </button>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function ToolCard({ call }: { call: ChatMessage['toolCalls'][number] }) {
   const meta = toolDisplay(call.name, call.input);
   const running = call.result === undefined;
-  const errored = !!call.isError;
+  // AskUserQuestion always "errors" in headless --print mode (no UI to
+  // collect a real answer), but the user still wants to see the question
+  // and pick an option. Treat it as a normal info card, not an error.
+  const isAsk = call.name === 'AskUserQuestion';
+  const errored = !isAsk && !!call.isError;
   return (
     <details
+      open={isAsk}
       className={cn(
         'rounded-[7px] border bg-surface-2',
         errored
           ? 'border-semantic-error/40'
-          : running
-            ? 'border-accent/30'
-            : 'border-border-subtle',
+          : isAsk
+            ? 'border-accent/40'
+            : running
+              ? 'border-accent/30'
+              : 'border-border-subtle',
       )}
     >
       <summary className="flex cursor-pointer items-center gap-1.5 px-2.5 py-1.5 text-[11px] text-text-secondary">
@@ -1923,7 +2106,7 @@ function ToolCard({ call }: { call: ChatMessage['toolCalls'][number] }) {
         {running && (
           <Loader2 size={10} className="ml-auto shrink-0 animate-spin text-accent" />
         )}
-        {!running && !errored && (
+        {!running && !errored && !isAsk && (
           <CheckCircle2
             size={10}
             className="ml-auto shrink-0 text-semantic-success/70"
@@ -1938,7 +2121,10 @@ function ToolCard({ call }: { call: ChatMessage['toolCalls'][number] }) {
       </summary>
       <div className="space-y-1.5 border-t border-border-subtle px-2.5 py-1.5">
         {call.diffPreview && <DiffPreviewBlock preview={call.diffPreview} />}
-        {call.result !== undefined && (
+        {call.name === 'AskUserQuestion' && (
+          <AskUserQuestionBlock input={call.input} />
+        )}
+        {call.result !== undefined && !isAsk && (
           <pre
             className={cn(
               'overflow-x-auto whitespace-pre-wrap break-words rounded px-2 py-1 font-mono text-[10.5px]',
@@ -2022,6 +2208,19 @@ function toolDisplay(
         Icon: Users,
         verb: 'Dispatch',
         summary: desc ? `${subagent} · ${truncate(desc, 50)}` : subagent,
+      };
+    }
+    case 'AskUserQuestion': {
+      const qs = Array.isArray(input.questions)
+        ? (input.questions as Array<{ question?: string; header?: string }>)
+        : [];
+      const first = qs[0];
+      const head = first?.header ? `${first.header} · ` : '';
+      const q = first?.question ?? '';
+      return {
+        Icon: MessageCircleQuestion,
+        verb: 'Ask',
+        summary: `${head}${truncate(q, 80)}${qs.length > 1 ? ` (+${qs.length - 1})` : ''}`,
       };
     }
     case 'WebFetch': {

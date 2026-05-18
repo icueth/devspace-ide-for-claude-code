@@ -5,6 +5,25 @@ All notable changes to DevSpace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.23.1] — 2026-05-18
+
+### Fixed
+
+- **`AskUserQuestion` tool now renders inline in chat.** When claude
+  uses its interactive `AskUserQuestion` tool inside DevSpace, the
+  headless `--print` runtime has no native UI to collect the answer, so
+  the tool would always return an error and the question itself stayed
+  buried under "Raw input" in red. ToolCard now special-cases the tool:
+  open-by-default, accent-coloured (not error red), suppresses the
+  noise tool-result text, and renders each question as a card showing
+  the header chip, prompt, and clickable option buttons. Single-select
+  drops `[Header] Selected: <label>` into the chat input on click.
+  Multi-select accumulates picks and a "Use selection" button drops a
+  comma-joined answer. The user can still edit the prefilled text
+  before sending. Wired via a module-level appender registered by the
+  active `ChatPanel` so deeply-nested `ToolCard` instances don't need
+  to prop-drill `projectPath`.
+
 ## [0.20.1] — 2026-05-15
 
 ### Added
