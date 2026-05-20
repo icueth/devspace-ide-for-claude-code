@@ -50,6 +50,13 @@ import {
   filterAtMentionFiles,
   findAtMentionToken,
 } from '@renderer/components/Dock/AtMentionPicker';
+import {
+  allAnswered as allQuestionsAnswered,
+  autoSubmitsOnPick,
+  buildAnswerText,
+  needsSubmitButton as questionsNeedSubmitButton,
+  parseQuestions,
+} from '@renderer/components/Dock/askUserQuestion';
 import { applyEvent } from '@renderer/components/Dock/chatEvents';
 import { ChatSettingsDrawer } from '@renderer/components/Dock/ChatSettingsDrawer';
 import {
@@ -2260,22 +2267,13 @@ function DiffPreviewBlock({ preview }: { preview: ToolDiffPreview }) {
 // existing details/summary disclosure idiom.
 // Renders the structured payload of an AskUserQuestion tool call so the
 // user can read the question(s) and click an option to drop the
-// formatted answer into the chat input. AskUserQuestion is Claude
-// Code's interactive choice tool — in --print mode there's no native UI,
-// so DevSpace surfaces it inline here. Clicking an option does NOT auto-
-// send; the user can edit before pressing Enter.
-type AskUserQuestionPayload = {
-  questions?: Array<{
-    question?: string;
-    header?: string;
-    multiSelect?: boolean;
-    options?: Array<{ label?: string; description?: string }>;
-  }>;
-};
-
+// formatted answer back to Claude. AskUserQuestion is Claude Code's
+// interactive choice tool — in --print mode there's no native UI, so
+// DevSpace surfaces it inline here. Clicking an option for a single
+// single-select question SENDS immediately (resumes the turn); multi-
+// select / multi-question payloads collect picks then submit via button.
 function AskUserQuestionBlock({ input }: { input: Record<string, unknown> }) {
-  const payload = input as AskUserQuestionPayload;
-  const questions = Array.isArray(payload.questions) ? payload.questions : [];
+  const questions = parseQuestions(input);
   // Hooks must run unconditionally — declare BEFORE any early return so the
   // hook order is stable even when `questions` flips empty/non-empty across
   // renders (Rules of Hooks; previously crashed on that transition).
@@ -2291,17 +2289,7 @@ function AskUserQuestionBlock({ input }: { input: Record<string, unknown> }) {
   }
 
   const multiQuestion = questions.length > 1;
-  // The aggregate Submit button is needed whenever a single click can't
-  // unambiguously finish answering: multi-select questions, or more than
-  // one question (must answer them all before sending).
-  const needsSubmitButton =
-    multiQuestion || questions.some((q) => !!q.multiSelect);
-
-  const formatQuestion = (qIdx: number, picks: string[]): string | null => {
-    if (picks.length === 0) return null;
-    const header = questions[qIdx]?.header ? `[${questions[qIdx]!.header}] ` : '';
-    return `${header}${picks.map((p) => `"${p}"`).join(', ')}`;
-  };
+  const needsSubmitButton = questionsNeedSubmitButton(questions);
 
   const send = (text: string) => {
     if (submitted || !text) return;
@@ -2325,27 +2313,17 @@ function AskUserQuestionBlock({ input }: { input: Record<string, unknown> }) {
       return next;
     });
     // Single question + single-select → the click is the complete answer:
-    // send immediately to resume the turn. (No state read — we have the
-    // pick right here, and state hasn't flushed yet.)
-    if (!multi && !multiQuestion) {
-      const header = questions[qIdx]?.header
-        ? `[${questions[qIdx]!.header}] `
-        : '';
-      send(`${header}"${label}"`);
+    // send immediately to resume the turn. Build the text via the shared
+    // helper (consistent `Selected: "x"` format) from a one-pick snapshot —
+    // we have the pick here and `selected` state hasn't flushed yet.
+    if (autoSubmitsOnPick(questions)) {
+      send(buildAnswerText(questions, { [qIdx]: new Set([label]) }));
     }
   };
 
-  const submitAll = () => {
-    const text = questions
-      .map((_, qIdx) => formatQuestion(qIdx, Array.from(selected[qIdx] ?? [])))
-      .filter((line): line is string => line !== null)
-      .join('\n');
-    send(text);
-  };
+  const submitAll = () => send(buildAnswerText(questions, selected));
 
-  const allAnswered = questions.every(
-    (_, qIdx) => (selected[qIdx]?.size ?? 0) > 0,
-  );
+  const allAnswered = allQuestionsAnswered(questions, selected);
 
   return (
     <div className="space-y-2.5">

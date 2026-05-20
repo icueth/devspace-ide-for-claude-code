@@ -3,7 +3,9 @@ import { describe, expect, it } from 'vitest';
 import {
   allAnswered,
   answeredCount,
+  autoSubmitsOnPick,
   buildAnswerText,
+  needsSubmitButton,
   parseQuestions,
   type AskQuestion,
 } from '../askUserQuestion';
@@ -84,5 +86,54 @@ describe('buildAnswerText', () => {
 
   it('returns empty string when nothing is selected', () => {
     expect(buildAnswerText([{ header: 'A' }], pick({}))).toBe('');
+  });
+});
+
+describe('autoSubmitsOnPick', () => {
+  it('is true for a single single-select question (click = answer)', () => {
+    expect(autoSubmitsOnPick([{ header: 'A', options: [{ label: 'a' }] }])).toBe(
+      true,
+    );
+  });
+
+  it('is false for a single multi-select question (needs Submit)', () => {
+    expect(autoSubmitsOnPick([{ header: 'A', multiSelect: true }])).toBe(false);
+  });
+
+  it('is false when there is more than one question', () => {
+    expect(autoSubmitsOnPick([{ header: 'A' }, { header: 'B' }])).toBe(false);
+  });
+
+  it('is false for an empty question list', () => {
+    expect(autoSubmitsOnPick([])).toBe(false);
+  });
+});
+
+describe('needsSubmitButton', () => {
+  it('is false for the auto-submit single single-select case', () => {
+    expect(needsSubmitButton([{ header: 'A' }])).toBe(false);
+  });
+
+  it('is true when any question is multi-select', () => {
+    expect(needsSubmitButton([{ header: 'A', multiSelect: true }])).toBe(true);
+  });
+
+  it('is true when there are multiple questions', () => {
+    expect(needsSubmitButton([{ header: 'A' }, { header: 'B' }])).toBe(true);
+  });
+});
+
+describe('auto-submit answer text (regression: click must send)', () => {
+  // The single-select click builds its send text from a one-pick snapshot,
+  // not from flushed component state. Pin that the format stays the canonical
+  // `[Header] Selected: "label"` so the resumed turn reads cleanly.
+  it('formats a single clicked option as the resume message', () => {
+    const questions: AskQuestion[] = [
+      { header: 'Bandwidth fix', options: [{ label: 'Resize at proxy' }] },
+    ];
+    const snapshot = { 0: new Set(['Resize at proxy']) };
+    expect(buildAnswerText(questions, snapshot)).toBe(
+      '[Bandwidth fix] Selected: "Resize at proxy"',
+    );
   });
 });

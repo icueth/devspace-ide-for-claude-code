@@ -5,6 +5,37 @@ All notable changes to DevSpace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.26.2] — 2026-05-20
+
+Fix for a report that answering an AskUserQuestion prompt in chat did nothing —
+"clicked all the answers but nothing happened next." Root cause: the answer
+card only **appended** the chosen text into the composer (`appendToActiveChatInput`)
+and never sent it, so the turn — already finalized on the AskUserQuestion call —
+just sat waiting for a manual Send the user didn't know to press.
+
+### Fixed
+
+- **Clicking an answer now sends it and resumes the turn.** For the common
+  single-question single-select prompt, a click submits immediately
+  (`submitChatAnswer` → `submitText`) — matching native AskUserQuestion's
+  "click = answer". Multi-select / multi-question prompts collect picks behind
+  an explicit **Submit answer(s)** button (enabled once every question has a
+  pick), then send as one message. A "✓ Answer sent" confirmation + disabled
+  options prevent double-submits; if a send isn't possible the text falls back
+  into the composer so the answer is never lost.
+- **Rules-of-Hooks crash fixed.** `AskUserQuestionBlock` called `useState`
+  *after* an early return for empty payloads, so a payload flipping
+  empty↔non-empty across renders could crash. Hooks now run unconditionally
+  before any return.
+
+### Changed
+
+- Answer-format + readiness logic now flows through the shared, unit-tested
+  `askUserQuestion.ts` helper (the component had drifted to its own inline
+  copy). Added `autoSubmitsOnPick` / `needsSubmitButton` there with regression
+  tests pinning that a single single-select question auto-sends and everything
+  else routes through the Submit button.
+
 ## [0.26.1] — 2026-05-20
 
 Fix for a report of the app hanging ("can't do anything") on large projects,

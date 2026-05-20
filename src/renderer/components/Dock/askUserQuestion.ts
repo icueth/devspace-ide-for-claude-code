@@ -43,6 +43,25 @@ export function allAnswered(
 }
 
 /**
+ * True when a single click fully answers the prompt, so the card should
+ * SEND the answer immediately on pick — the common 1-question single-select
+ * case (matches native AskUserQuestion "click = answer"). v0.26.x fix: the
+ * card previously only appended text, so clicking never resumed the turn.
+ */
+export function autoSubmitsOnPick(questions: AskQuestion[]): boolean {
+  return questions.length === 1 && !questions[0]?.multiSelect;
+}
+
+/**
+ * True when picks must be gathered behind an explicit Submit button —
+ * multi-select questions (any number of picks) or multiple questions that
+ * must all be answered before a single send.
+ */
+export function needsSubmitButton(questions: AskQuestion[]): boolean {
+  return questions.length > 1 || questions.some((q) => !!q.multiSelect);
+}
+
+/**
  * Build the resume message from the user's picks — one line per answered
  * question: `[Header] Selected: "A", "B"`. Questions with no pick are
  * skipped; the header prefix is omitted when absent. Returns '' when
