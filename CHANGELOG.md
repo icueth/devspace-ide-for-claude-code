@@ -5,6 +5,38 @@ All notable changes to DevSpace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.28.0] — 2026-05-20
+
+Bundle-size pass. The packaged app was shipping renderer libraries **twice** —
+once bundled+minified into `out/assets/*.js` by vite, and again as raw
+`node_modules` source packed into `app.asar` by electron-builder (because they
+sat in `dependencies`). This release moves every vite-bundled library to
+`devDependencies`, leaving only the two native modules (`node-pty`,
+`better-sqlite3`) in `dependencies`. No code or behavior change — purely a
+smaller download.
+
+### Changed
+
+- **`dependencies` slimmed to native modules only.** `lucide-react`,
+  `highlight.js`, all `@codemirror/*`, `@xterm/*`, `@radix-ui/*`, `@fontsource/*`
+  (548 unused font files no longer packed), `d3`, `react`/`react-dom`,
+  `react-markdown` + remark/rehype, `zustand`, `clsx`, `tailwind-merge`,
+  `diff`, `chokidar`, `simple-git`, `node-html-parser` moved to
+  `devDependencies`. vite still bundles them into the renderer/main builds
+  exactly as before (the existing `@babel/parser` devDep already proved this
+  pattern); electron-builder no longer copies their raw source into the asar.
+- **`app.asar` drops from ~52 MB to ~12 MB** (~40 MB of double-packed source
+  removed). `node-pty` + `better-sqlite3` stay in `dependencies` and remain
+  `asarUnpack`'d so the PTY/chat and MemPalace-data paths are untouched.
+
+### Notes
+
+- The mempalace-uv "−30 MB" item flagged in the 0.27.0 audit was a false
+  premise: the afterPack hook already prunes the wrong-arch (x64) `uv` from the
+  shipped arm64 dmg (verified against the packaged `.app`), and the remaining
+  30 MB arm64 `uv` is required by the in-app MemPalace installer. The real win
+  was the node_modules double-pack above.
+
 ## [0.27.0] — 2026-05-20
 
 Performance pass clearing the deferred items from the 0.26.0 audit. Four
