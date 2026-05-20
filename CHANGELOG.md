@@ -5,6 +5,40 @@ All notable changes to DevSpace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.26.1] — 2026-05-20
+
+Fix for a report of the app hanging ("can't do anything") on large projects,
+attributed by the user to "watching node_modules". Investigation found
+`node_modules` has been excluded from the file watcher since v0.3.14 — so the
+literal cause was a red herring. The confirmed root cause is the **sidebar
+tree itself**: it renders entries with a plain `.map()` (no virtualization),
+and `FS_READ_DIR` had no entry cap — so expanding a directory with tens of
+thousands of children (classically `node_modules/.pnpm`, browsable because the
+tree only hides `.git`/`.DS_Store`) mounts that many DOM rows at once and
+freezes the renderer.
+
+### Fixed
+
+- **Directory listings are now capped at 1000 entries** (`FS_READ_DIR` →
+  `capDirEntries`). Past the cap, a single non-interactive "… N more (Reveal in
+  Finder to see all)" sentinel row is appended instead of thousands of rows.
+  Folders stay browsable — nothing is hidden, the listing is just bounded.
+  Prevents the renderer freeze regardless of which huge directory is expanded.
+
+### Changed
+
+- **Watcher ignore list extended with heavy native/framework build trees**
+  (`Pods/`, `.gradle/`, `.expo/`, `DerivedData/`, `Carthage/`, `__pycache__/`,
+  `.pytest_cache/`, `.mypy_cache/`, `.tox/`, `.dart_tool/`, `.svelte-kit/`,
+  `.parcel-cache/`, `.angular/`, `venv/`). These sit outside `node_modules`, so
+  watching a broad project root could open thousands of `fs.watch` handles and
+  stall the app. Per the "sidebar must be realtime" rule, user-navigable dirs
+  (`.claude/`, `.devspace/`, `.vscode/`, source) are still watched — only
+  never-hand-edited dependency/build output is excluded, and even those remain
+  browsable in the tree.
+- Ignore policy + listing cap extracted to pure modules
+  (`utils/watchIgnore.ts`, `utils/dirEntries.ts`) with unit tests.
+
 ## [0.26.0] — 2026-05-20
 
 System-wide performance pass driven by a 5-surface audit (main I/O, memory

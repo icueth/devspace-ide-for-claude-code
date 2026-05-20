@@ -156,16 +156,24 @@ interface ChatPanelProps {
 // content.
 const EMPTY_QUEUE: QueuedMessage[] = [];
 
-// Module-level singleton used by deeply-nested ToolCard components to
-// append text into the active ChatPanel's input box without prop-drilling.
-// Only one ChatPanel is mounted at a time per project, and only the
-// active project's panel is visible — so a single global appender is safe.
-// AskUserQuestion's answer buttons use this to drop "Selected: ..." into
-// the textarea so the user can edit/send the response.
+// Module-level singletons used by deeply-nested ToolCard components to
+// reach the active ChatPanel without prop-drilling. Only one ChatPanel is
+// mounted per project and only the active project's panel is visible — so
+// a single global slot is safe.
+//
+// `_chatInputAppender` drops text into the textarea (edit-then-send).
+// `_chatAnswerSubmitter` SENDS text directly (resume the turn) — this is
+// what AskUserQuestion's option buttons use so clicking an answer actually
+// continues the conversation instead of silently parking text in the box.
 let _chatInputAppender: ((text: string) => void) | null = null;
+let _chatAnswerSubmitter: ((text: string) => void) | null = null;
 
 function appendToActiveChatInput(text: string): void {
   _chatInputAppender?.(text);
+}
+
+function submitChatAnswer(text: string): void {
+  _chatAnswerSubmitter?.(text);
 }
 
 /**
@@ -713,6 +721,30 @@ export function ChatPanel({ projectPath }: ChatPanelProps) {
     },
     [activeId, projectPath, selectedTeamId, runInNewThread, teams],
   );
+
+  // Register the module-level answer-submitter so AskUserQuestion's option
+  // buttons (deep in ToolCard) can SEND the chosen answer directly and
+  // resume the turn — not merely drop text into the composer. Re-runs when
+  // submitText / activeId / sending change so the registered closure is
+  // always fresh. Falls back to appending if a send isn't possible so the
+  // answer is never lost.
+  useEffect(() => {
+    const submitter = (text: string) => {
+      if (!activeId || sending) {
+        appendToActiveChatInput(text);
+        return;
+      }
+      void submitText(text).catch((err) => {
+        console.error('[chat] answer submit failed', err);
+        appendToActiveChatInput(text);
+        setNotice('Failed to send answer — press Send to retry.');
+      });
+    };
+    _chatAnswerSubmitter = submitter;
+    return () => {
+      if (_chatAnswerSubmitter === submitter) _chatAnswerSubmitter = null;
+    };
+  }, [activeId, sending, submitText]);
 
   // executeSlash is defined later in this component (it needs to see
   // setSettingsOpen, projectPath, etc.). We stash it in a ref so onSend
@@ -2244,6 +2276,12 @@ type AskUserQuestionPayload = {
 function AskUserQuestionBlock({ input }: { input: Record<string, unknown> }) {
   const payload = input as AskUserQuestionPayload;
   const questions = Array.isArray(payload.questions) ? payload.questions : [];
+  // Hooks must run unconditionally — declare BEFORE any early return so the
+  // hook order is stable even when `questions` flips empty/non-empty across
+  // renders (Rules of Hooks; previously crashed on that transition).
+  const [selected, setSelected] = useState<Record<number, Set<string>>>({});
+  const [submitted, setSubmitted] = useState(false);
+
   if (questions.length === 0) {
     return (
       <div className="rounded bg-surface-3 px-2 py-1.5 text-[11px] text-text-muted">
@@ -2251,9 +2289,28 @@ function AskUserQuestionBlock({ input }: { input: Record<string, unknown> }) {
       </div>
     );
   }
-  const [selected, setSelected] = useState<Record<number, Set<string>>>({});
+
+  const multiQuestion = questions.length > 1;
+  // The aggregate Submit button is needed whenever a single click can't
+  // unambiguously finish answering: multi-select questions, or more than
+  // one question (must answer them all before sending).
+  const needsSubmitButton =
+    multiQuestion || questions.some((q) => !!q.multiSelect);
+
+  const formatQuestion = (qIdx: number, picks: string[]): string | null => {
+    if (picks.length === 0) return null;
+    const header = questions[qIdx]?.header ? `[${questions[qIdx]!.header}] ` : '';
+    return `${header}${picks.map((p) => `"${p}"`).join(', ')}`;
+  };
+
+  const send = (text: string) => {
+    if (submitted || !text) return;
+    setSubmitted(true);
+    submitChatAnswer(text);
+  };
 
   const togglePick = (qIdx: number, label: string, multi: boolean) => {
+    if (submitted) return;
     setSelected((prev) => {
       const next = { ...prev };
       const cur = new Set(next[qIdx] ?? []);
@@ -2267,23 +2324,28 @@ function AskUserQuestionBlock({ input }: { input: Record<string, unknown> }) {
       next[qIdx] = cur;
       return next;
     });
-    if (!multi) {
-      // Single-select: drop the answer into input immediately.
-      const q = questions[qIdx];
-      const header = q?.header ? `[${q.header}] ` : '';
-      appendToActiveChatInput(`${header}Selected: ${label}`);
+    // Single question + single-select → the click is the complete answer:
+    // send immediately to resume the turn. (No state read — we have the
+    // pick right here, and state hasn't flushed yet.)
+    if (!multi && !multiQuestion) {
+      const header = questions[qIdx]?.header
+        ? `[${questions[qIdx]!.header}] `
+        : '';
+      send(`${header}"${label}"`);
     }
   };
 
-  const sendMulti = (qIdx: number) => {
-    const picks = Array.from(selected[qIdx] ?? []);
-    if (picks.length === 0) return;
-    const q = questions[qIdx];
-    const header = q?.header ? `[${q.header}] ` : '';
-    appendToActiveChatInput(
-      `${header}Selected: ${picks.map((p) => `"${p}"`).join(', ')}`,
-    );
+  const submitAll = () => {
+    const text = questions
+      .map((_, qIdx) => formatQuestion(qIdx, Array.from(selected[qIdx] ?? [])))
+      .filter((line): line is string => line !== null)
+      .join('\n');
+    send(text);
   };
+
+  const allAnswered = questions.every(
+    (_, qIdx) => (selected[qIdx]?.size ?? 0) > 0,
+  );
 
   return (
     <div className="space-y-2.5">
@@ -2314,9 +2376,11 @@ function AskUserQuestionBlock({ input }: { input: Record<string, unknown> }) {
                   <button
                     key={oIdx}
                     type="button"
+                    disabled={submitted}
                     onClick={() => togglePick(qIdx, label, multi)}
                     className={cn(
                       'w-full rounded border px-2 py-1.5 text-left text-[11px] leading-snug transition-colors',
+                      submitted && 'opacity-60',
                       picked
                         ? 'border-accent/60 bg-accent/10 text-text'
                         : 'border-border-subtle bg-surface-2 text-text-secondary hover:border-accent/40 hover:bg-surface-2/80',
@@ -2346,24 +2410,30 @@ function AskUserQuestionBlock({ input }: { input: Record<string, unknown> }) {
                 );
               })}
             </div>
-            {multi && (
-              <button
-                type="button"
-                onClick={() => sendMulti(qIdx)}
-                disabled={picks.size === 0}
-                className={cn(
-                  'mt-1.5 inline-flex items-center gap-1 rounded px-2 py-1 text-[10.5px] font-medium transition-colors',
-                  picks.size > 0
-                    ? 'bg-accent text-white hover:bg-accent/90'
-                    : 'cursor-not-allowed bg-surface-3 text-text-muted',
-                )}
-              >
-                Use selection ({picks.size})
-              </button>
-            )}
           </div>
         );
       })}
+      {submitted ? (
+        <div className="inline-flex items-center gap-1 text-[10.5px] font-medium text-accent">
+          ✓ Answer sent
+        </div>
+      ) : (
+        needsSubmitButton && (
+          <button
+            type="button"
+            onClick={submitAll}
+            disabled={!allAnswered}
+            className={cn(
+              'inline-flex items-center gap-1 rounded px-2.5 py-1 text-[10.5px] font-medium transition-colors',
+              allAnswered
+                ? 'bg-accent text-white hover:bg-accent/90'
+                : 'cursor-not-allowed bg-surface-3 text-text-muted',
+            )}
+          >
+            Submit {multiQuestion ? 'answers' : 'answer'}
+          </button>
+        )
+      )}
     </div>
   );
 }

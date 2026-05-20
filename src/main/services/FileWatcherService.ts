@@ -3,30 +3,16 @@ import type { WebContents } from 'electron';
 import * as path from 'node:path';
 
 import { markStale as markCodeflowStale } from '@main/services/CodeflowService';
+import { WATCH_IGNORED } from '@main/utils/watchIgnore';
 import { IPC } from '@shared/ipc-channels';
 import { createLogger } from '@shared/logger';
 
 const logger = createLogger('FileWatcher');
 
-const IGNORED = [
-  /(^|[\\/])\.git([\\/]|$)/,
-  /(^|[\\/])node_modules([\\/]|$)/,
-  /(^|[\\/])\.DS_Store$/,
-  /(^|[\\/])dist([\\/]|$)/,
-  /(^|[\\/])dist-electron([\\/]|$)/,
-  /(^|[\\/])out([\\/]|$)/,
-  /(^|[\\/])build([\\/]|$)/,
-  /(^|[\\/])target([\\/]|$)/,
-  /(^|[\\/])\.next([\\/]|$)/,
-  /(^|[\\/])\.turbo([\\/]|$)/,
-  /(^|[\\/])\.cache([\\/]|$)/,
-  // We deliberately do NOT ignore `.claude/` or `.devspace/` here. Codeflow
-  // writes ~10 files per run and chokidar already debounces at 150ms, so
-  // it's a single flush — not a storm. Watching them means the file-tree
-  // sidebar refreshes when codeflow drops new docs, which is the right UX.
-  /(^|[\\/])coverage([\\/]|$)/,
-  /(^|[\\/])\.venv([\\/]|$)/,
-];
+// Ignore policy lives in a pure module (testable without electron) and is shared
+// with the tree-listing skip logic. We deliberately do NOT ignore `.claude/` or
+// `.devspace/` — watching them refreshes the sidebar when codeflow drops docs.
+const IGNORED = WATCH_IGNORED;
 
 interface Entry {
   watcher: FSWatcher;

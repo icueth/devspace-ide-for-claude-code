@@ -286,6 +286,21 @@ export function FileTree({ rootPath, onOpenFile }: FileTreeProps) {
   );
 
   const renderEntry = (entry: DirEntry, depth: number) => {
+    // Synthetic "… N more" row appended by the listing cap. Non-interactive —
+    // the folder has too many children to render; use Reveal in Finder instead.
+    if (entry.truncated) {
+      return (
+        <div
+          key={entry.path}
+          className="truncate py-[3px] pr-2 text-[11px] italic text-text-dim"
+          style={{ paddingLeft: depth * 12 + 22 }}
+          title="This folder has too many items to list in the sidebar. Right-click the folder → Reveal in Finder to browse all of them."
+        >
+          {entry.name}
+        </div>
+      );
+    }
+
     const node = tree[entry.path];
     const expanded = node?.expanded ?? false;
     const gitType = !entry.isDirectory ? gitByPath.get(entry.path) : undefined;

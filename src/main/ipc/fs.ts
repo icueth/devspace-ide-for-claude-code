@@ -7,6 +7,7 @@ import {
   unsubscribeWatch,
 } from '@main/services/FileWatcherService';
 import { atomicWriteAsync } from '@main/utils/atomicWrite';
+import { capDirEntries } from '@main/utils/dirEntries';
 import {
   assertInWorkspace,
   assertRegularFile,
@@ -52,7 +53,7 @@ export function registerFsIpc(): void {
   ipcMain.handle(IPC.FS_READ_DIR, async (_e, absPath: string): Promise<DirEntry[]> => {
     const safe = await assertInWorkspace(absPath);
     const entries = await fs.promises.readdir(safe, { withFileTypes: true });
-    return entries
+    const mapped = entries
       .filter((e) => !isIgnored(e.name))
       .map((e) => ({
         name: e.name,
@@ -64,6 +65,9 @@ export function registerFsIpc(): void {
         if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1;
         return a.name.localeCompare(b.name);
       });
+    // Bound the listing — a non-virtualized tree freezes the renderer past a few
+    // thousand rows (e.g. expanding node_modules/.pnpm). Browsable, not hidden.
+    return capDirEntries(mapped, safe);
   });
 
   ipcMain.handle(IPC.FS_READ_FILE, async (_e, absPath: string): Promise<string> => {

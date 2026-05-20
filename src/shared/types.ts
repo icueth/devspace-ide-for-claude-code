@@ -666,6 +666,9 @@ export interface DirEntry {
   path: string;
   isDirectory: boolean;
   isSymlink?: boolean;
+  /** Synthetic sentinel row: the directory had more entries than the listing
+   *  cap. Rendered as a non-interactive "… N more" hint, not a real file. */
+  truncated?: boolean;
 }
 
 export type PtySessionKind =
