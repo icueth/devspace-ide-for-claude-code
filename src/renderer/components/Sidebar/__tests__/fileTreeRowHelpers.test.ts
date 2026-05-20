@@ -1,10 +1,14 @@
 import { describe, expect, it } from 'vitest';
 
 import type { FolderChangeStats } from '@renderer/utils/gitFolderAggregate';
+import type { DirEntry } from '@shared/types';
 
 import {
+  areRowPropsEqual,
   folderChangeTitle,
   folderStatEqual,
+  shouldShowLoadingRow,
+  type RowComparableProps,
 } from '../fileTreeRowHelpers';
 
 function stat(partial: Partial<FolderChangeStats>): FolderChangeStats {
@@ -75,5 +79,80 @@ describe('folderStatEqual', () => {
     expect(folderStatEqual(undefined, undefined)).toBe(true);
     expect(folderStatEqual(stat({ total: 1 }), undefined)).toBe(false);
     expect(folderStatEqual(undefined, stat({ total: 1 }))).toBe(false);
+  });
+});
+
+describe('shouldShowLoadingRow', () => {
+  it('shows while an expanded folder has no entries yet and no error', () => {
+    expect(shouldShowLoadingRow(true, true, false, false)).toBe(true);
+  });
+
+  it('hides once entries have arrived', () => {
+    expect(shouldShowLoadingRow(true, true, true, false)).toBe(false);
+  });
+
+  it('hides on error (the error row takes over)', () => {
+    expect(shouldShowLoadingRow(true, true, false, true)).toBe(false);
+  });
+
+  it('never shows for collapsed folders or files', () => {
+    expect(shouldShowLoadingRow(true, false, false, false)).toBe(false);
+    expect(shouldShowLoadingRow(false, true, false, false)).toBe(false);
+  });
+});
+
+describe('areRowPropsEqual', () => {
+  const dir: DirEntry = { name: 'src', path: '/p/src', isDirectory: true };
+  const file: DirEntry = { name: 'a.ts', path: '/p/a.ts', isDirectory: false };
+  const GIT = {};
+  const STRUCT = {};
+  // Stable reference — matches real usage (the parent hands the SAME filtered
+  // array per node). A fresh [] per call would defeat the identity check and
+  // mask what each assertion is actually testing.
+  const CHILDREN: DirEntry[] = [];
+
+  function props(over: Partial<RowComparableProps> = {}): RowComparableProps {
+    return {
+      entry: dir,
+      depth: 1,
+      expanded: false,
+      hasEntries: false,
+      loading: false,
+      loadError: undefined,
+      gitType: undefined,
+      gitToken: GIT,
+      structureToken: STRUCT,
+      folderStat: undefined,
+      isActiveFile: false,
+      isIgnored: false,
+      childEntries: CHILDREN,
+      ...over,
+    };
+  }
+
+  it('skips re-render when nothing changed', () => {
+    expect(areRowPropsEqual(props(), props())).toBe(true);
+  });
+
+  // Regression: nested folder expand mutates tree state (new structureToken)
+  // without touching ancestor props. Before the structure check, ancestors
+  // skipped re-render and children never mounted until a git tick.
+  it('FORCES a folder re-render when only the structureToken flips', () => {
+    expect(areRowPropsEqual(props(), props({ structureToken: {} }))).toBe(false);
+  });
+
+  it('still forces a folder re-render when only the gitToken flips', () => {
+    expect(areRowPropsEqual(props(), props({ gitToken: {} }))).toBe(false);
+  });
+
+  it('does NOT re-render a leaf file when only a token flips (perf preserved)', () => {
+    const base = props({ entry: file });
+    expect(areRowPropsEqual(base, props({ entry: file, structureToken: {} }))).toBe(true);
+    expect(areRowPropsEqual(base, props({ entry: file, gitToken: {} }))).toBe(true);
+  });
+
+  it('re-renders any row when its own loading flag changes', () => {
+    const a = props({ entry: file });
+    expect(areRowPropsEqual(a, props({ entry: file, loading: true }))).toBe(false);
   });
 });

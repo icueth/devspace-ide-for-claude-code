@@ -5,6 +5,40 @@ All notable changes to DevSpace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.28.1] — 2026-05-20
+
+Sidebar folder-expand fix. Clicking a **nested** folder appeared to hang for
+seconds — the chevron flipped but the contents didn't show until something
+unrelated (a git poll) happened to refresh the tree.
+
+Root cause was a regression from the 0.27.0 perf pass, which wrapped file-tree
+rows in `React.memo`. The comparator only force-re-rendered a folder when the
+**git** snapshot changed; it had no signal for **tree-structure** changes. So
+expanding a nested folder mutated tree state without changing any ancestor row's
+props → memoized ancestors skipped re-render → the freshly loaded children never
+mounted until a git tick cascaded through. Top-level folders were unaffected
+(the tree container itself re-renders them), which is why it only bit nested
+expansion.
+
+### Fixed
+
+- **Nested folder expansion is instant again.** Added a `structureToken` that
+  flips on every tree change; folder rows compare it (mirroring the existing
+  `gitToken`) so a nested expand re-renders the ancestor chain immediately. Leaf
+  (file) rows still ignore both tokens, so the bulk of rows keep the 0.27.0
+  memoization win — only folders re-render on tree changes.
+- **Loading / error feedback for nested folders.** A folder being fetched now
+  shows an inline "Loading…" row, and a load error shows inline too. Previously
+  only the tree *root* surfaced these — nested folders rendered blank during the
+  fetch, which read as a freeze.
+
+### Changed
+
+- Extracted the row memo comparator (`areRowPropsEqual`) and a
+  `shouldShowLoadingRow` predicate into the pure `fileTreeRowHelpers` module so
+  the regression is unit-tested (9 new tests pinning: structureToken forces a
+  folder re-render, leaf rows skip token flips, loading-row visibility).
+
 ## [0.28.0] — 2026-05-20
 
 Bundle-size pass. The packaged app was shipping renderer libraries **twice** —

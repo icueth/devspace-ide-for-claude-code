@@ -78,6 +78,13 @@ export function FileTree({ rootPath, onOpenFile }: FileTreeProps) {
   // precise signal — so a git tick still only re-renders rows that changed.
   const gitToken = useMemo(() => ({}), [gitSnapshot]);
 
+  // Identity token that flips on every file-tree state change (expand / collapse
+  // / load). Folder rows compare it so a NESTED expand actually re-renders the
+  // memoized ancestor chain — otherwise the new children never mount until an
+  // unrelated git tick cascades through (a multi-second "stuck" expand). Leaf
+  // rows ignore it, so the bulk file rows still skip re-render on tree changes.
+  const structureToken = useMemo(() => ({}), [tree]);
+
   // Build absolute paths for everything git's `ls-files --ignored --directory`
   // reported. We split into two lists: exact-match files and directory
   // prefixes. A child of an ignored directory inherits the gray styling
@@ -364,6 +371,8 @@ export function FileTree({ rootPath, onOpenFile }: FileTreeProps) {
       onCopyPath: (absPath) => handleCopyPath(absPath),
       isExpanded: (path) => treeRef.current[path]?.expanded ?? false,
       hasLoadedEntries: (path) => !!treeRef.current[path]?.entries,
+      isLoading: (path) => !!treeRef.current[path]?.loading,
+      getLoadError: (path) => treeRef.current[path]?.error,
       getGitType: (entry) =>
         entry.isDirectory ? undefined : gitByPathRef.current.get(entry.path),
       getFolderStat: (entry) =>
@@ -444,8 +453,11 @@ export function FileTree({ rootPath, onOpenFile }: FileTreeProps) {
                 depth={0}
                 expanded={callbacks.isExpanded(entry.path)}
                 hasEntries={callbacks.hasLoadedEntries(entry.path)}
+                loading={callbacks.isLoading(entry.path)}
+                loadError={callbacks.getLoadError(entry.path)}
                 gitType={gitType}
                 gitToken={gitToken}
+                structureToken={structureToken}
                 folderStat={callbacks.getFolderStat(entry)}
                 isActiveFile={callbacks.isActiveFile(entry)}
                 isIgnored={callbacks.isIgnored(entry, gitType)}

@@ -8,10 +8,11 @@ import type { FolderChangeStats } from '@renderer/utils/gitFolderAggregate';
 import type { DirEntry, GitChangeType } from '@shared/types';
 
 import {
+  areRowPropsEqual,
   folderChangeTitle,
-  folderStatEqual,
   GIT_BADGE,
   GIT_CLASS,
+  shouldShowLoadingRow,
 } from './fileTreeRowHelpers';
 
 /**
@@ -41,6 +42,8 @@ export interface FileTreeRowCallbacks {
   // Per-row derived data accessors (stable identity, fresh values via refs).
   isExpanded: (path: string) => boolean;
   hasLoadedEntries: (path: string) => boolean;
+  isLoading: (path: string) => boolean;
+  getLoadError: (path: string) => string | undefined;
   getGitType: (entry: DirEntry) => GitChangeType | undefined;
   getFolderStat: (entry: DirEntry) => FolderChangeStats | undefined;
   isActiveFile: (entry: DirEntry) => boolean;
@@ -55,11 +58,21 @@ interface FileTreeRowProps {
    *  change to one file's git status never re-renders unrelated rows. */
   expanded: boolean;
   hasEntries: boolean;
+  /** True while this folder's children are being fetched (first expand /
+   *  refresh). Drives the inline "Loading…" affordance. */
+  loading: boolean;
+  /** Per-folder load error, shown inline (nested folders previously swallowed
+   *  both their loading and error state — only the tree root surfaced them). */
+  loadError: string | undefined;
   gitType: GitChangeType | undefined;
   /** Identity token that flips on any git-snapshot change. Folder rows
    *  compare it so they re-render (and re-derive child gitType) on every git
    *  change; leaf rows ignore it. See areRowPropsEqual. */
   gitToken: object;
+  /** Identity token that flips on any file-tree state change (expand / collapse
+   *  / load). Folder rows compare it so a nested expand actually propagates
+   *  through memoized ancestors; leaf rows ignore it. See areRowPropsEqual. */
+  structureToken: object;
   folderStat: FolderChangeStats | undefined;
   isActiveFile: boolean;
   isIgnored: boolean;
@@ -74,8 +87,11 @@ function FileTreeRowImpl({
   depth,
   expanded,
   hasEntries,
+  loading,
+  loadError,
   gitType,
   gitToken,
+  structureToken,
   folderStat,
   isActiveFile,
   isIgnored,
@@ -255,6 +271,24 @@ function FileTreeRowImpl({
           </ContextMenu.Content>
         </ContextMenu.Portal>
       </ContextMenu.Root>
+      {shouldShowLoadingRow(entry.isDirectory, expanded, hasEntries, !!loadError) &&
+        loading && (
+          <div
+            className="truncate py-[3px] pr-2 text-[11px] italic text-text-dim"
+            style={{ paddingLeft: (depth + 1) * 12 + 22 }}
+          >
+            Loading…
+          </div>
+        )}
+      {entry.isDirectory && expanded && loadError && (
+        <div
+          className="truncate py-[3px] pr-2 text-[11px] text-semantic-error"
+          style={{ paddingLeft: (depth + 1) * 12 + 22 }}
+          title={loadError}
+        >
+          {loadError}
+        </div>
+      )}
       {entry.isDirectory && expanded && hasEntries && (
         <div>
           {childEntries.map((child) => {
@@ -269,8 +303,11 @@ function FileTreeRowImpl({
                 depth={depth + 1}
                 expanded={callbacks.isExpanded(child.path)}
                 hasEntries={callbacks.hasLoadedEntries(child.path)}
+                loading={callbacks.isLoading(child.path)}
+                loadError={callbacks.getLoadError(child.path)}
                 gitType={childGitType}
                 gitToken={gitToken}
+                structureToken={structureToken}
                 folderStat={callbacks.getFolderStat(child)}
                 isActiveFile={callbacks.isActiveFile(child)}
                 isIgnored={callbacks.isIgnored(child, childGitType)}
@@ -282,30 +319,6 @@ function FileTreeRowImpl({
         </div>
       )}
     </div>
-  );
-}
-
-function areRowPropsEqual(prev: FileTreeRowProps, next: FileTreeRowProps): boolean {
-  // callbacks is stable for the tree lifetime, so we never compare it.
-  // childEntries identity is stable when the underlying NodeState.entries is
-  // unchanged (parent returns the same filtered array reference per node).
-  //
-  // Folder rows must re-render on ANY git change so they re-derive their
-  // children's gitType — otherwise an intra-folder status swap that nets to
-  // the same folderStat aggregate leaves child badges stale. Leaf rows skip
-  // this: their own gitType prop (recomputed by the re-rendering parent) is
-  // the precise signal, so a git tick still only re-renders changed leaves.
-  if (next.entry.isDirectory && prev.gitToken !== next.gitToken) return false;
-  return (
-    prev.entry === next.entry &&
-    prev.depth === next.depth &&
-    prev.expanded === next.expanded &&
-    prev.hasEntries === next.hasEntries &&
-    prev.gitType === next.gitType &&
-    prev.isActiveFile === next.isActiveFile &&
-    prev.isIgnored === next.isIgnored &&
-    prev.childEntries === next.childEntries &&
-    folderStatEqual(prev.folderStat, next.folderStat)
   );
 }
 
