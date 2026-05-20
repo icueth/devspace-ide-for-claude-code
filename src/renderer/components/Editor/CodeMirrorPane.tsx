@@ -282,17 +282,20 @@ export function CodeMirrorPane({
     viewRef.current = view;
     useEditorViewStore.getState().setView(view);
 
-    // Async fallback for rarer languages (TOML, Clojure, etc.) via language-data.
+    // Async fallback for rarer languages (TOML, Clojure, etc.). The
+    // language-data registry is now dynamically imported, so this resolves a
+    // promise first, then loads the grammar. Guard against the view being
+    // destroyed (tab closed) while either async step is in flight.
     if (!syncLang) {
-      const desc = getAsyncLanguageDesc(path);
-      if (desc) {
-        desc
-          .load()
-          .then((support) => {
+      void getAsyncLanguageDesc(path)
+        .then((desc) => {
+          if (!desc || viewRef.current !== view) return undefined;
+          return desc.load().then((support) => {
+            if (viewRef.current !== view) return;
             view.dispatch({ effects: languageCompartment.reconfigure(support) });
-          })
-          .catch(() => undefined);
-      }
+          });
+        })
+        .catch(() => undefined);
     }
 
     return () => {

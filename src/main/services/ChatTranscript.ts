@@ -74,6 +74,29 @@ export function lookupState(projectPath: string): ProjectState | undefined {
   return states.get(path.resolve(projectPath));
 }
 
+/**
+ * Tear down a project's in-memory chat state on workspace close/eviction.
+ * Kills any in-flight run (so its tmux tail loop + broadcasts actually stop)
+ * and drops the loaded-thread Map so it stops accumulating across a session
+ * where the user cycles through many projects. Re-opening re-hydrates from
+ * disk, so nothing is lost.
+ */
+export async function disposeProject(projectPath: string): Promise<void> {
+  const key = path.resolve(projectPath);
+  const state = states.get(key);
+  if (!state) return;
+  states.delete(key);
+  state.subscribers.clear();
+  if (state.activeRunHandle) {
+    try {
+      await state.activeRunHandle.kill();
+    } catch {
+      /* best-effort: the project is going away */
+    }
+    state.activeRunHandle = null;
+  }
+}
+
 const MAX_SEGMENTS_PER_MESSAGE = 5000;
 const MAX_TEXT_SEGMENT_CHARS = 500_000;
 

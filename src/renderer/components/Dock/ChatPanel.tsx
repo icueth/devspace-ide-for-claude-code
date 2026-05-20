@@ -50,6 +50,7 @@ import {
   filterAtMentionFiles,
   findAtMentionToken,
 } from '@renderer/components/Dock/AtMentionPicker';
+import { applyEvent } from '@renderer/components/Dock/chatEvents';
 import { ChatSettingsDrawer } from '@renderer/components/Dock/ChatSettingsDrawer';
 import {
   parseSlashInput,
@@ -900,6 +901,18 @@ export function ChatPanel({ projectPath }: ChatPanelProps) {
     [],
   );
 
+  // Stable handler passed to every (memoized) MessageBubble. Keeping its
+  // identity constant is what allows `memo(MessageBubble)` to skip finalized
+  // bubbles — an inline `(e) => …` arrow per message would change identity
+  // each render and defeat the memo entirely.
+  const handleBubbleContextMenu = useCallback(
+    (message: ChatMessage, e: ReactMouseEvent<HTMLDivElement>) => {
+      e.preventDefault();
+      openBubbleMenu(e.clientX, e.clientY, message);
+    },
+    [openBubbleMenu],
+  );
+
   // Resolve "what brief should we send to Design?" from a right-click
   // target. Selection wins when the user highlighted text inside the
   // bubble; otherwise we fall back to message.content, then to the
@@ -1239,10 +1252,7 @@ export function ChatPanel({ projectPath }: ChatPanelProps) {
                 <MessageBubble
                   key={m.id}
                   message={m}
-                  onBubbleContextMenu={(e) => {
-                    e.preventDefault();
-                    openBubbleMenu(e.clientX, e.clientY, m);
-                  }}
+                  onContextMenu={handleBubbleContextMenu}
                 />
               ))}
             </div>
@@ -1590,21 +1600,24 @@ function basename(p: string): string {
   return idx === -1 ? trimmed : trimmed.slice(idx + 1);
 }
 
-function MessageBubble({
+const MessageBubble = memo(function MessageBubble({
   message,
-  onBubbleContextMenu,
+  onContextMenu,
 }: {
   message: ChatMessage;
   // Right-click handler attached to both user AND assistant bubbles
   // (v0.19+: "Save to memory" surfaces on user feedback too). ChatPanel
-  // owns menu state; the bubble stays dumb and just forwards the event
-  // (with x/y + the message identity) up. Menu entries are filtered
-  // per-role in ChatPanel.buildMenuItems.
-  onBubbleContextMenu?: (e: ReactMouseEvent<HTMLDivElement>) => void;
+  // owns menu state; the bubble stays dumb and forwards (message, event)
+  // to a STABLE parent callback so this component can be memoized. Menu
+  // entries are filtered per-role in ChatPanel.buildMenuItems.
+  onContextMenu?: (message: ChatMessage, e: ReactMouseEvent<HTMLDivElement>) => void;
 }) {
+  const handleContextMenu = onContextMenu
+    ? (e: ReactMouseEvent<HTMLDivElement>) => onContextMenu(message, e)
+    : undefined;
   if (message.role === 'user') {
     return (
-      <div className="flex gap-2.5" onContextMenu={onBubbleContextMenu}>
+      <div className="flex gap-2.5" onContextMenu={handleContextMenu}>
         <div className="flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-full bg-surface-4">
           <User size={12} className="text-text-muted" />
         </div>
@@ -1620,13 +1633,13 @@ function MessageBubble({
   // teamRun.steps[].
   if (message.teamRun) {
     return (
-      <div onContextMenu={onBubbleContextMenu}>
+      <div onContextMenu={handleContextMenu}>
         <TeamRunBubble message={message} />
       </div>
     );
   }
   return (
-    <div className="flex gap-2.5" onContextMenu={onBubbleContextMenu}>
+    <div className="flex gap-2.5" onContextMenu={handleContextMenu}>
       <div
         className="flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-full text-[10px] font-semibold text-white"
         style={{
@@ -1682,7 +1695,7 @@ function MessageBubble({
       </div>
     </div>
   );
-}
+});
 
 // Renders ChatMessage.segments in order. Text segments become Markdown
 // cards; tool_group segments resolve their ids back to the message's
@@ -2726,156 +2739,6 @@ function truncate(s: string, max: number): string {
   return s.length <= max ? s : `${s.slice(0, max - 1)}…`;
 }
 
-/**
- * Fold a streaming ChatEvent into a thread's last assistant message.
- * Keeps the renderer state shape identical to what the backend persists,
- * so re-fetching on send (which we do after every turn) is a no-op when
- * events have already arrived.
- *
- * Team mode: when an event carries `stepIndex` AND the last message has
- * a `teamRun`, the event is routed into teamRun.steps[stepIndex] rather
- * than the message itself. Lets sequential pipelines render per-step
- * text and tool blocks without polluting the parent message's content.
- */
-// Stable-ish identifier for a freshly-created segment. crypto.randomUUID
-// is available in modern Electron's renderer context (Chromium 90+), but
-// fall back to a timestamp+random combo to keep this defensive — the id
-// only needs to be unique within one assistant turn for React keying.
-function newSegmentId(): string {
-  const c = (globalThis as { crypto?: { randomUUID?: () => string } }).crypto;
-  if (c?.randomUUID) return c.randomUUID();
-  return `seg-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-}
-
-function applyEvent(
-  thread: ChatThread,
-  threadId: string,
-  event: ChatEvent,
-): ChatThread {
-  if (thread.id !== threadId) return thread;
-  const messages = [...thread.messages];
-  const last = messages[messages.length - 1];
-  if (!last || last.role !== 'assistant') return thread;
-
-  // Team-step lifecycle events update the step's status only.
-  if (event.kind === 'team_step_start' && last.teamRun && event.stepIndex !== undefined) {
-    const step = last.teamRun.steps[event.stepIndex];
-    if (step) {
-      step.status = 'running';
-      step.startedAt = event.ts;
-    }
-    return { ...thread, messages };
-  }
-  if (event.kind === 'team_step_end' && last.teamRun && event.stepIndex !== undefined) {
-    const step = last.teamRun.steps[event.stepIndex];
-    if (step) {
-      step.finishedAt = event.ts;
-      if (event.message) {
-        step.status = 'error';
-        step.error = event.message;
-      } else if (step.status === 'running') {
-        step.status = 'done';
-      }
-    }
-    return { ...thread, messages };
-  }
-
-  // Pick the target — either a team step or the message itself.
-  const target: TeamStep | ChatMessage =
-    last.teamRun && event.stepIndex !== undefined
-      ? (last.teamRun.steps[event.stepIndex] ?? last)
-      : last;
-
-  if (event.kind === 'text_delta' && event.text) {
-    target.content += event.text;
-    // Mirror onto segments[] so the renderer can paint each text /
-    // tool_group chunk as its own card in chronological order. If the
-    // last segment is already text, extend it; otherwise push a new one.
-    //
-    // Important: when extending an existing segment we REPLACE it with a
-    // new object (not mutate `lastSeg.text += ...`). That gives each
-    // event a fresh segment identity so any downstream `memo` on
-    // segment-keyed children can safely fast-path. Same goes for
-    // `target.segments = [...]` — we rebuild the array reference per
-    // event rather than `.push()` so memoized children re-render.
-    const prev = target.segments ?? [];
-    const lastSeg = prev[prev.length - 1];
-    if (lastSeg && lastSeg.kind === 'text') {
-      const updated: ChatMessageSegment = {
-        kind: 'text',
-        id: lastSeg.id,
-        text: lastSeg.text + event.text,
-      };
-      target.segments = [...prev.slice(0, -1), updated];
-    } else {
-      target.segments = [
-        ...prev,
-        { kind: 'text', id: newSegmentId(), text: event.text },
-      ];
-    }
-  } else if (event.kind === 'thinking_delta' && event.text) {
-    target.thinking = (target.thinking ?? '') + event.text;
-  } else if (event.kind === 'tool_use') {
-    const toolUseId = event.toolUseId ?? `tu-${Date.now()}`;
-    target.toolCalls = [
-      ...target.toolCalls,
-      {
-        id: toolUseId,
-        name: event.toolName ?? 'tool',
-        input: event.toolInput ?? {},
-        diffStats: event.diffStats,
-        diffPreview: event.diffPreview,
-      },
-    ];
-    // Same immutable replace-not-mutate pattern as text_delta.
-    const prev = target.segments ?? [];
-    const lastSeg = prev[prev.length - 1];
-    if (lastSeg && lastSeg.kind === 'tool_group') {
-      const updated: ChatMessageSegment = {
-        kind: 'tool_group',
-        id: lastSeg.id,
-        toolUseIds: [...lastSeg.toolUseIds, toolUseId],
-      };
-      target.segments = [...prev.slice(0, -1), updated];
-    } else {
-      target.segments = [
-        ...prev,
-        { kind: 'tool_group', id: newSegmentId(), toolUseIds: [toolUseId] },
-      ];
-    }
-  } else if (event.kind === 'tool_result') {
-    target.toolCalls = target.toolCalls.map((c) =>
-      c.id === event.toolUseId
-        ? { ...c, result: event.toolResult ?? '', isError: event.toolIsError }
-        : c,
-    );
-  } else if (event.kind === 'usage') {
-    target.usage = {
-      input: event.inputTokens ?? 0,
-      output: event.outputTokens ?? 0,
-    };
-  } else if (event.kind === 'error') {
-    last.status = 'error';
-    last.error = event.message;
-  } else if (event.kind === 'done') {
-    // Backend already persisted the terminal state to disk. We mirror it
-    // here so the renderer's Stop / Send button reflects reality without
-    // waiting for the next listThreads refresh. If an earlier `error`
-    // event already flipped status to 'error', leave it; otherwise the
-    // turn ended cleanly.
-    if (last.status === 'streaming') {
-      last.status = 'done';
-    }
-  } else if (event.kind === 'awaiting_user_answer') {
-    // Claude called AskUserQuestion — backend will early-finalize the
-    // run and emit `done` next, but we set the flag now so the footer
-    // shows "Waiting for your answer" instead of "Working…" the moment
-    // the question UI appears.
-    last.awaitingUserAnswer = true;
-  }
-
-  return { ...thread, messages };
-}
 
 // v0.16 — queued-message pill strip rendered just above the textarea.
 // Each pill represents a message the user typed while a prior turn was
@@ -3063,6 +2926,20 @@ function QueuePillStrip({
   );
 }
 
+// Prototype-safe label lookup hoisted to module scope (static data — no
+// reason to rebuild it per render). `Object.create(null)` makes
+// `__proto__`/`constructor` keys return undefined → fallback applies.
+const FORGE_REASON_LABELS: Record<string, string> = Object.assign(
+  Object.create(null),
+  {
+    'repeated-question': 'Asked similar questions',
+    'repeated-agent-dispatch': 'Dispatched same agent',
+    'repeated-files': 'Edits the same files together',
+    'repeated-boilerplate': 'Pasted similar boilerplate',
+    'project-stack-match': 'Curated for your stack',
+  },
+);
+
 // v0.25: inline card for a single forge suggestion shown above the
 // transcript. Click Generate → write brief to forgePrefillStore + open
 // Settings on Skills/Agents tab; the matching settings panel consumes
@@ -3077,16 +2954,7 @@ function ForgeSuggestionCard({
   onGenerate: (s: import('@shared/types').ForgeSuggestion) => void;
   onDismiss: (s: import('@shared/types').ForgeSuggestion) => void;
 }) {
-  // Prototype-safe label lookup — `Object.create(null)` makes
-  // `__proto__`/`constructor` keys return undefined → fallback applies.
-  const reasonLabel: Record<string, string> = Object.assign(Object.create(null), {
-    'repeated-question': 'Asked similar questions',
-    'repeated-agent-dispatch': 'Dispatched same agent',
-    'repeated-files': 'Edits the same files together',
-    'repeated-boilerplate': 'Pasted similar boilerplate',
-    'project-stack-match': 'Curated for your stack',
-  });
-  const reasonText = reasonLabel[suggestion.reason] ?? 'Suggestion';
+  const reasonText = FORGE_REASON_LABELS[suggestion.reason] ?? 'Suggestion';
   return (
     <div className="mx-4 mt-3 rounded-[8px] border border-amber-500/40 bg-amber-500/5 p-2.5 text-[11px]">
       <div className="mb-1 flex items-center justify-between gap-2">

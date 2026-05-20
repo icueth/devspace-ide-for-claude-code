@@ -5,6 +5,52 @@ All notable changes to DevSpace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.26.0] — 2026-05-20
+
+System-wide performance pass driven by a 5-surface audit (main I/O, memory
+leaks, renderer re-renders, IPC payloads, startup/bundle). No behavior
+changes — every fix is identity/lifecycle/packaging only, guarded by tests
+and two review passes.
+
+### Performance
+
+- **Chat streaming no longer re-renders the whole transcript per token.**
+  `applyEvent` now clones the last (streaming) message so its identity
+  changes per event while finalized messages keep theirs, and `MessageBubble`
+  is wrapped in `React.memo` with a stable context-menu callback. Result:
+  during streaming only the active bubble repaints (not every prior message,
+  tool card, and diff hunk), and typing in the chat input no longer
+  re-renders the transcript. `applyEvent`/`newSegmentId` were extracted into
+  `chatEvents.ts` and pinned by identity-invariant unit tests.
+- **Editor git-diff gutter no longer runs an LCS on every keystroke.** The
+  O(m·n) `computeLineDiff` (up to 16M cells on a 4000-line file) is now
+  debounced to a 200ms trailing recompute via a CodeMirror `ViewPlugin`;
+  baseline resets (mount / git refresh) still compute immediately.
+- **Faster cold start.** `@codemirror/language-data` (the ~110-grammar
+  registry) is now dynamically imported only when a file with no built-in
+  grammar opens, and `CodeMirrorPane` (cm-core + 16 grammar packs, the
+  heaviest renderer dependency) is lazy-loaded out of the synchronous boot
+  graph. The pure `getLanguageFromFileName` label map moved to a cm-free
+  `languageLabels.ts` so the status bar doesn't drag CodeMirror into boot.
+
+### Fixed
+
+- **Workspace close/eviction now releases per-project resources.** Closing a
+  project — or the silent MAX_OPEN=8 eviction, which previously ran no
+  main-side teardown at all — now kills in-flight chat/design runs and the
+  codeflow `claude` child, stops the dev-server **and** any in-flight
+  `pnpm install` PTY, closes file watchers, and drops the per-project
+  in-memory state Maps (chat threads, design screens). Re-opening
+  re-hydrates from disk. Fixes unbounded memory growth and orphaned
+  processes/tmux runs when cycling through many projects in one session.
+
+### Changed
+
+- **dmg shrinks ~44MB.** An `afterPack` hook prunes the wrong-architecture
+  bundled `uv` binary (the arm64 dmg was shipping the 34MB darwin-x64 `uv`),
+  and the better-sqlite3 C source (`deps/`, `src/`, ~10MB) plus wrong-arch
+  node-pty prebuilds and `*.test.js` files are excluded from the asar.
+
 ## [0.25.2] — 2026-05-18
 
 ### Removed

@@ -226,6 +226,20 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       } catch {
         /* store may be uninitialised in some test harnesses */
       }
+      // v0.26.0 perf: eviction must run the SAME main-side teardown as an
+      // explicit closeProject. Previously the silent MAX_OPEN=8 eviction only
+      // killed PTYs — leaving the evicted project's file watcher, dev-server,
+      // and per-project main-process state (loaded threads/screens, active
+      // runs, codeflow child) leaked until app quit. workspace.close is
+      // idempotent; re-opening just re-hydrates.
+      for (const evictedId of evicted) {
+        const evictedPath = projectsById.get(evictedId)?.path;
+        if (evictedPath) {
+          void window.devspace?.workspace
+            ?.close?.(evictedId, evictedPath)
+            .catch(() => undefined);
+        }
+      }
     }
     persistSnapshot(get());
   },

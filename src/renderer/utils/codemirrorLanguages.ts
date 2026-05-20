@@ -21,7 +21,6 @@ import { sql } from '@codemirror/lang-sql';
 import { xml } from '@codemirror/lang-xml';
 import { yaml } from '@codemirror/lang-yaml';
 import { LanguageDescription } from '@codemirror/language';
-import { languages } from '@codemirror/language-data';
 
 import type { Extension } from '@codemirror/state';
 
@@ -86,53 +85,18 @@ export function getSyncLanguageExtension(fileName: string): Extension | null {
   }
 }
 
-export function getAsyncLanguageDesc(fileName: string): LanguageDescription | null {
+// The @codemirror/language-data registry pulls ~110 grammar `import()` refs
+// into whatever chunk references it. Loading it lazily (only when a file with
+// no sync grammar opens) keeps it out of the eager boot graph, shaving the
+// largest single renderer cost off cold start.
+export async function getAsyncLanguageDesc(
+  fileName: string,
+): Promise<LanguageDescription | null> {
+  const { languages } = await import('@codemirror/language-data');
   return LanguageDescription.matchFilename(languages, fileName);
 }
 
-export function getLanguageFromFileName(fileName: string): string {
-  const ext = fileName.split('.').pop()?.toLowerCase();
-  const map: Record<string, string> = {
-    ts: 'TypeScript',
-    tsx: 'TypeScript (JSX)',
-    js: 'JavaScript',
-    jsx: 'JavaScript (JSX)',
-    mjs: 'JavaScript',
-    cjs: 'JavaScript',
-    py: 'Python',
-    json: 'JSON',
-    jsonl: 'JSON Lines',
-    css: 'CSS',
-    scss: 'SCSS',
-    sass: 'Sass',
-    less: 'Less',
-    html: 'HTML',
-    htm: 'HTML',
-    xml: 'XML',
-    svg: 'SVG',
-    md: 'Markdown',
-    mdx: 'MDX',
-    markdown: 'Markdown',
-    yaml: 'YAML',
-    yml: 'YAML',
-    rs: 'Rust',
-    go: 'Go',
-    java: 'Java',
-    c: 'C',
-    h: 'C/C++ Header',
-    cpp: 'C++',
-    cxx: 'C++',
-    cc: 'C++',
-    hpp: 'C++ Header',
-    php: 'PHP',
-    sql: 'SQL',
-    sh: 'Shell',
-    bash: 'Bash',
-    zsh: 'Zsh',
-    toml: 'TOML',
-    ini: 'INI',
-    conf: 'Config',
-    txt: 'Plain Text',
-  };
-  return map[ext ?? ''] ?? 'Plain Text';
-}
+// Pure label map moved to `languageLabels.ts` (no cm imports) so the status
+// bar can use it without pulling CodeMirror into the boot bundle. Re-exported
+// here for any existing cm-side callers.
+export { getLanguageFromFileName } from '@renderer/utils/languageLabels';

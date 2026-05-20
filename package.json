@@ -1,7 +1,7 @@
 {
   "name": "devspace",
   "type": "module",
-  "version": "0.25.2",
+  "version": "0.26.0",
   "description": "One-window MacBook dev workspace with Claude Code CLI at the core",
   "license": "MIT",
   "author": {
@@ -147,9 +147,16 @@
       "!**/node_modules/node-pty/src/**",
       "!**/node_modules/node-pty/scripts/**",
       "!**/node_modules/node-pty/tools/**",
+      "!**/node_modules/node-pty/prebuilds/darwin-x64/**",
+      "!**/node_modules/node-pty/bin/darwin-x64-*/**",
+      "!**/node_modules/better-sqlite3/deps/**",
+      "!**/node_modules/better-sqlite3/src/**",
+      "!**/node_modules/better-sqlite3/build/Release/obj.target/**",
+      "!**/node_modules/**/*.test.js",
       "!**/*.d.ts",
       "!**/*.md"
     ],
+    "afterPack": "scripts/after-pack.cjs",
     "asar": true,
     "asarUnpack": [
       "**/node_modules/node-pty/**",

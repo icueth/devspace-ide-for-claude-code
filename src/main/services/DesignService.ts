@@ -1026,6 +1026,35 @@ function runKey(projectPath: string, screenId: string): string {
   return `${path.resolve(projectPath)}::${screenId}`;
 }
 
+/**
+ * Workspace close/eviction teardown: kill any in-flight generation for this
+ * project (so its run handle + broadcasts stop) and drop the loaded-screen
+ * state. Re-opening re-hydrates from the on-disk registry.
+ */
+export async function disposeProject(projectPath: string): Promise<void> {
+  const key = path.resolve(projectPath);
+  const prefix = `${key}::`;
+  for (const [k, entry] of activeRuns) {
+    if (!k.startsWith(prefix)) continue;
+    if (entry.kill) {
+      await entry.kill().catch(() => undefined);
+      activeRuns.delete(k);
+    } else {
+      // Run is still spawning (no kill handle yet) — leave a
+      // cancel-on-arrival tombstone so runGeneration kills the freshly
+      // spawned handle and skips the disk write the moment generateDesign
+      // resolves (same contract cancelDesign relies on). The run removes its
+      // own activeRuns entry on exit. Deleting it here would orphan the run.
+      entry.cancelRequested = true;
+    }
+  }
+  const state = states.get(key);
+  if (state) {
+    state.subscribers.clear();
+    states.delete(key);
+  }
+}
+
 export async function cancelDesign(
   projectPath: string,
   screenId: string,

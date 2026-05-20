@@ -22,7 +22,9 @@ import {
   EditorView,
   gutter,
   GutterMarker,
+  ViewPlugin,
   WidgetType,
+  type ViewUpdate,
 } from '@codemirror/view';
 
 import {
@@ -32,6 +34,17 @@ import {
 } from '@renderer/utils/gitLineDiff';
 
 export const setGitBaseline = StateEffect.define<string | null>();
+
+// Fired by the debounce plugin a short while after the user stops typing.
+// Recomputes the diff against the current doc. Kept separate from
+// `setGitBaseline` so a baseline reset (mount / git refresh) still computes
+// immediately, while live edits only pay the O(m·n) LCS on a trailing tick.
+const recomputeDiff = StateEffect.define<null>();
+
+// How long to wait after the last keystroke before recomputing the diff.
+// Markers/decorations stay (harmlessly) stale during the burst — same UX as
+// VS Code's gutter — instead of running a 4000×4000 LCS on every character.
+const DIFF_DEBOUNCE_MS = 200;
 
 interface BaselineState {
   baseline: string | null;
@@ -55,9 +68,10 @@ const baselineField = StateField.define<BaselineState>({
   },
   update(value, tr) {
     let next = value;
-    // Cheapest path first — baseline reset.
     for (const effect of tr.effects) {
       if (effect.is(setGitBaseline)) {
+        // Baseline reset (mount / git refresh) — compute immediately, this
+        // is not on the typing hot path.
         const baseline = effect.value;
         if (baseline === null) {
           next = initialBaseline;
@@ -68,17 +82,19 @@ const baselineField = StateField.define<BaselineState>({
           );
           next = { baseline, markers, deletions, truncated };
         }
+      } else if (effect.is(recomputeDiff) && next.baseline !== null) {
+        // Debounced trailing recompute after a burst of edits.
+        const { markers, deletions, truncated } = computeLineDiff(
+          next.baseline,
+          tr.state.doc.toString(),
+        );
+        next = { baseline: next.baseline, markers, deletions, truncated };
       }
     }
-    // If doc changed and we already have a baseline, recompute. Cheap
-    // enough at 400-line cap; the LCS is also O(m·n) bounded.
-    if (tr.docChanged && next.baseline !== null) {
-      const { markers, deletions, truncated } = computeLineDiff(
-        next.baseline,
-        tr.state.doc.toString(),
-      );
-      next = { baseline: next.baseline, markers, deletions, truncated };
-    }
+    // NOTE: deliberately NOT recomputing on every `tr.docChanged` — that ran
+    // the O(m·n) LCS synchronously on each keystroke (up to 16M cells on a
+    // 4000-line file → input lag). The debounce plugin below dispatches
+    // `recomputeDiff` ~200ms after typing stops instead.
     return next;
   },
 });
@@ -300,10 +316,35 @@ const gitDiffGutterTheme = EditorView.baseTheme({
   },
 });
 
+// Debounces the LCS recompute. On a burst of edits it (re)arms a timer and
+// only dispatches `recomputeDiff` once the user pauses, keeping the heavy
+// diff off the keystroke path. The timer is cleared on destroy so a closing
+// editor never dispatches into a torn-down view.
+const diffDebouncePlugin = ViewPlugin.fromClass(
+  class {
+    private timer: ReturnType<typeof setTimeout> | null = null;
+    constructor(private readonly view: EditorView) {}
+    update(update: ViewUpdate) {
+      if (!update.docChanged) return;
+      const field = update.state.field(baselineField, false);
+      if (!field || field.baseline === null) return;
+      if (this.timer) clearTimeout(this.timer);
+      this.timer = setTimeout(() => {
+        this.timer = null;
+        this.view.dispatch({ effects: recomputeDiff.of(null) });
+      }, DIFF_DEBOUNCE_MS);
+    }
+    destroy() {
+      if (this.timer) clearTimeout(this.timer);
+    }
+  },
+);
+
 export function gitDiffGutter() {
   return [
     baselineField,
     decorationsField,
+    diffDebouncePlugin,
     gutter({
       class: 'cm-git-diff-gutter',
       lineMarker(view, line) {

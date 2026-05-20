@@ -1,8 +1,11 @@
 import { dialog, ipcMain } from 'electron';
 
 import { closeWatchersForRoot } from '@main/services/FileWatcherService';
-import { stopDevServer } from '@main/services/DevServerService';
+import { shutdownProject as shutdownDevServerProject } from '@main/services/DevServerService';
 import { killProjectSessions } from '@main/services/PtyPool';
+import { disposeProject as disposeChatProject } from '@main/services/ChatTranscript';
+import { disposeProject as disposeCodeflowProject } from '@main/services/CodeflowService';
+import { disposeProject as disposeDesignProject } from '@main/services/DesignService';
 import {
   addWorkspace,
   listWorkspaces,
@@ -58,9 +61,11 @@ export function registerWorkspaceIpc(): void {
         throw new Error('WORKSPACE_CLOSE requires projectId and projectPath');
       }
       try {
-        await stopDevServer(projectPath).catch(() => undefined);
+        // shutdownProject (not stopDevServer) so an in-flight `pnpm install`
+        // PTY is killed too, not just the dev-server.
+        await shutdownDevServerProject(projectPath).catch(() => undefined);
       } catch (err) {
-        logger.warn(`stopDevServer failed: ${(err as Error).message}`);
+        logger.warn(`shutdownProject failed: ${(err as Error).message}`);
       }
       try {
         await killProjectSessions(projectId);
@@ -71,6 +76,25 @@ export function registerWorkspaceIpc(): void {
         closeWatchersForRoot(projectPath);
       } catch (err) {
         logger.warn(`closeWatchersForRoot failed: ${(err as Error).message}`);
+      }
+      // Evict per-project in-memory service state (kills active chat/design
+      // runs + codeflow child, drops loaded threads/screens). Without this the
+      // state Maps grow unbounded across a session and runs keep streaming
+      // into a closed project. Re-opening re-hydrates from disk.
+      try {
+        await disposeChatProject(projectPath);
+      } catch (err) {
+        logger.warn(`disposeChatProject failed: ${(err as Error).message}`);
+      }
+      try {
+        await disposeDesignProject(projectPath);
+      } catch (err) {
+        logger.warn(`disposeDesignProject failed: ${(err as Error).message}`);
+      }
+      try {
+        disposeCodeflowProject(projectPath);
+      } catch (err) {
+        logger.warn(`disposeCodeflowProject failed: ${(err as Error).message}`);
       }
       logger.info(`closed workspace ${projectId} (${projectPath})`);
     },

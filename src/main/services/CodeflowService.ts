@@ -532,6 +532,27 @@ export async function cancelAnalyze(projectPath: string): Promise<void> {
   // 'cancelled' when the process actually dies.
 }
 
+/**
+ * Workspace close/eviction teardown: kill the spawned `claude` analysis child
+ * (was previously orphaned until it exited on its own — and its token spend)
+ * and drop the per-project state entry.
+ */
+export function disposeProject(projectPath: string): void {
+  const key = path.resolve(projectPath);
+  const state = states.get(key);
+  if (!state) return;
+  states.delete(key);
+  state.subscribers.clear();
+  if (state.child) {
+    try {
+      state.child.kill('SIGTERM');
+    } catch {
+      /* best-effort */
+    }
+    state.child = null;
+  }
+}
+
 export async function analyzeProject(
   projectPath: string,
   opts: CodeflowAnalyzeOptions = {},

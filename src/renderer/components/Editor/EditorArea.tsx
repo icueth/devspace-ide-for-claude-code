@@ -1,7 +1,6 @@
 import { Code, Columns2, Eye } from 'lucide-react';
 import { lazy, Suspense, useEffect, useState } from 'react';
 
-import { CodeMirrorPane } from '@renderer/components/Editor/CodeMirrorPane';
 import { EditorTabs } from '@renderer/components/Editor/EditorTabs';
 import { ImagePreview } from '@renderer/components/Editor/ImagePreview';
 import { Resizer } from '@renderer/components/Layout/Resizer';
@@ -42,12 +41,21 @@ const DevlogView = lazy(() =>
     default: m.DevlogView,
   })),
 );
+// CodeMirror engine (cm-core 1.9MB + 16 grammar packs) is the heaviest single
+// renderer dependency. Lazy-loading it keeps it out of the synchronous boot
+// graph — no file is open at startup anyway, and Vite preloads the chunk so
+// the first file open stays instant.
+const CodeMirrorPane = lazy(() =>
+  import('@renderer/components/Editor/CodeMirrorPane').then((m) => ({
+    default: m.CodeMirrorPane,
+  })),
+);
 import { api } from '@renderer/lib/api';
 import { cn } from '@renderer/lib/utils';
 import { useEditorStore, type PaneId } from '@renderer/state/editor';
 import { useEditorViewStore } from '@renderer/state/editorView';
 import { useLayoutStore } from '@renderer/state/layout';
-import { getLanguageFromFileName } from '@renderer/utils/codemirrorLanguages';
+import { getLanguageFromFileName } from '@renderer/utils/languageLabels';
 
 export function EditorArea() {
   const splitTabs = useEditorStore((s) => s.splitTabs);
@@ -284,15 +292,17 @@ function EditorBody({ tab, onChange, onSave, onNavDone, mdMode }: EditorBodyProp
                 mdMode === 'split' ? 'flex-1 border-r border-border-subtle' : 'flex-1',
               )}
             >
-              <CodeMirrorPane
-                key={tab.path}
-                path={tab.path}
-                value={tab.content}
-                onChange={onChange}
-                onSave={onSave}
-                pendingNav={tab.pendingNav}
-                onNavDone={onNavDone}
-              />
+              <Suspense fallback={<LazyFallback label="Loading editor…" />}>
+                <CodeMirrorPane
+                  key={tab.path}
+                  path={tab.path}
+                  value={tab.content}
+                  onChange={onChange}
+                  onSave={onSave}
+                  pendingNav={tab.pendingNav}
+                  onNavDone={onNavDone}
+                />
+              </Suspense>
             </div>
           )}
           {mdMode !== 'code' && (
@@ -306,15 +316,17 @@ function EditorBody({ tab, onChange, onSave, onNavDone, mdMode }: EditorBodyProp
           )}
         </div>
       ) : (
-        <CodeMirrorPane
-          key={tab.path}
-          path={tab.path}
-          value={tab.content}
-          onChange={onChange}
-          onSave={onSave}
-          pendingNav={tab.pendingNav}
-          onNavDone={onNavDone}
-        />
+        <Suspense fallback={<LazyFallback label="Loading editor…" />}>
+          <CodeMirrorPane
+            key={tab.path}
+            path={tab.path}
+            value={tab.content}
+            onChange={onChange}
+            onSave={onSave}
+            pendingNav={tab.pendingNav}
+            onNavDone={onNavDone}
+          />
+        </Suspense>
       )}
     </div>
   );
