@@ -52,10 +52,12 @@ import {
 } from '@renderer/components/Dock/AtMentionPicker';
 import {
   allAnswered as allQuestionsAnswered,
+  type AnswerOutcome,
   autoSubmitsOnPick,
   buildAnswerText,
   needsSubmitButton as questionsNeedSubmitButton,
   parseQuestions,
+  resolveAnswerOutcome,
 } from '@renderer/components/Dock/askUserQuestion';
 import { applyEvent, capLoaded } from '@renderer/components/Dock/chatEvents';
 import { ChatSettingsDrawer } from '@renderer/components/Dock/ChatSettingsDrawer';
@@ -239,15 +241,29 @@ function bumpMetaFromEvent(meta: ChatThreadMeta, event: ChatEvent): ChatThreadMe
 // `_chatAnswerSubmitter` SENDS text directly (resume the turn) — this is
 // what AskUserQuestion's option buttons use so clicking an answer actually
 // continues the conversation instead of silently parking text in the box.
+//
+// v0.28.2: submitter returns the runtime AnswerOutcome so the card's UI
+// can't lie ("✓ Answer sent") when the answer was actually parked or lost.
 let _chatInputAppender: ((text: string) => void) | null = null;
-let _chatAnswerSubmitter: ((text: string) => void) | null = null;
+let _chatAnswerSubmitter: ((text: string) => Promise<AnswerOutcome>) | null =
+  null;
 
 function appendToActiveChatInput(text: string): void {
   _chatInputAppender?.(text);
 }
 
-function submitChatAnswer(text: string): void {
-  _chatAnswerSubmitter?.(text);
+async function submitChatAnswer(text: string): Promise<AnswerOutcome> {
+  const submitter = _chatAnswerSubmitter;
+  if (submitter) return submitter(text);
+  // Submitter unregistered (shouldn't normally happen when an
+  // AskUserQuestion card is on screen). Fall back to the appender so the
+  // text isn't lost — surface that as 'parked' so the card prompts the
+  // user to press Send. If even the appender is gone, it's a real bug.
+  if (_chatInputAppender) {
+    _chatInputAppender(text);
+    return 'parked';
+  }
+  return 'failed';
 }
 
 /**
@@ -903,19 +919,47 @@ export function ChatPanel({ projectPath }: ChatPanelProps) {
   // buttons (deep in ToolCard) can SEND the chosen answer directly and
   // resume the turn — not merely drop text into the composer. Re-runs when
   // submitText / activeId / sending change so the registered closure is
-  // always fresh. Falls back to appending if a send isn't possible so the
-  // answer is never lost.
+  // always fresh.
+  //
+  // v0.28.2: returns the AnswerOutcome so the card UI reflects reality —
+  // previously the card lied with "✓ Answer sent" even when the submitter
+  // ran the silent-fallback branch (no activeId, sending=true, or send
+  // threw), leaving the user staring at a footer "Waiting for your
+  // answer · 3m 15s" with no idea the turn never resumed. resolveAnswerOutcome
+  // centralizes the decision so the rendered status row can't drift from
+  // what actually happened.
   useEffect(() => {
-    const submitter = (text: string) => {
-      if (!activeId || sending) {
-        appendToActiveChatInput(text);
-        return;
+    const submitter = async (text: string): Promise<AnswerOutcome> => {
+      let sendThrew = false;
+      const hasActiveThread = !!activeId;
+      const isSending = sending;
+      // Try the real send when we can; otherwise fall through to the
+      // append fallback. submitText itself early-returns when activeId is
+      // null, so we gate first to avoid a no-op pretending it succeeded.
+      if (hasActiveThread && !isSending) {
+        try {
+          await submitText(text);
+        } catch (err) {
+          console.error('[chat] answer submit failed', err);
+          sendThrew = true;
+        }
       }
-      void submitText(text).catch((err) => {
-        console.error('[chat] answer submit failed', err);
-        appendToActiveChatInput(text);
-        setNotice('Failed to send answer — press Send to retry.');
+      const outcome = resolveAnswerOutcome({
+        hasActiveThread,
+        isSending,
+        hasAppender: !!_chatInputAppender,
+        sendThrew,
       });
+      if (outcome !== 'sent') {
+        // Park the text so the user has a recovery path: press Send (or
+        // edit + Send). 'parked' is non-destructive; 'failed' surfaces an
+        // inline error in the card itself.
+        appendToActiveChatInput(text);
+        if (outcome === 'parked') {
+          setNotice('Answer parked in input — press Send to submit.');
+        }
+      }
+      return outcome;
     };
     _chatAnswerSubmitter = submitter;
     return () => {
@@ -2489,6 +2533,13 @@ function AskUserQuestionBlock({ input }: { input: Record<string, unknown> }) {
   // renders (Rules of Hooks; previously crashed on that transition).
   const [selected, setSelected] = useState<Record<number, Set<string>>>({});
   const [submitted, setSubmitted] = useState(false);
+  // v0.28.2: track the real outcome of the last submit attempt so the
+  // status row stops lying. `pending` covers the await window so spamming
+  // the Submit button can't fire a second send mid-flight, and `outcome`
+  // lets the card show "parked / failed" with a retry path instead of a
+  // permanent green "✓ Answer sent" even when nothing was sent.
+  const [pending, setPending] = useState(false);
+  const [outcome, setOutcome] = useState<AnswerOutcome | null>(null);
 
   if (questions.length === 0) {
     return (
@@ -2501,14 +2552,21 @@ function AskUserQuestionBlock({ input }: { input: Record<string, unknown> }) {
   const multiQuestion = questions.length > 1;
   const needsSubmitButton = questionsNeedSubmitButton(questions);
 
-  const send = (text: string) => {
-    if (submitted || !text) return;
-    setSubmitted(true);
-    submitChatAnswer(text);
+  const send = async (text: string) => {
+    if (submitted || pending || !text) return;
+    setPending(true);
+    setOutcome(null);
+    try {
+      const result = await submitChatAnswer(text);
+      setOutcome(result);
+      if (result === 'sent') setSubmitted(true);
+    } finally {
+      setPending(false);
+    }
   };
 
   const togglePick = (qIdx: number, label: string, multi: boolean) => {
-    if (submitted) return;
+    if (submitted || pending) return;
     setSelected((prev) => {
       const next = { ...prev };
       const cur = new Set(next[qIdx] ?? []);
@@ -2527,11 +2585,11 @@ function AskUserQuestionBlock({ input }: { input: Record<string, unknown> }) {
     // helper (consistent `Selected: "x"` format) from a one-pick snapshot —
     // we have the pick here and `selected` state hasn't flushed yet.
     if (autoSubmitsOnPick(questions)) {
-      send(buildAnswerText(questions, { [qIdx]: new Set([label]) }));
+      void send(buildAnswerText(questions, { [qIdx]: new Set([label]) }));
     }
   };
 
-  const submitAll = () => send(buildAnswerText(questions, selected));
+  const submitAll = () => void send(buildAnswerText(questions, selected));
 
   const allAnswered = allQuestionsAnswered(questions, selected);
 
@@ -2564,11 +2622,11 @@ function AskUserQuestionBlock({ input }: { input: Record<string, unknown> }) {
                   <button
                     key={oIdx}
                     type="button"
-                    disabled={submitted}
+                    disabled={submitted || pending}
                     onClick={() => togglePick(qIdx, label, multi)}
                     className={cn(
                       'w-full rounded border px-2 py-1.5 text-left text-[11px] leading-snug transition-colors',
-                      submitted && 'opacity-60',
+                      (submitted || pending) && 'opacity-60',
                       picked
                         ? 'border-accent/60 bg-accent/10 text-text'
                         : 'border-border-subtle bg-surface-2 text-text-secondary hover:border-accent/40 hover:bg-surface-2/80',
@@ -2601,9 +2659,59 @@ function AskUserQuestionBlock({ input }: { input: Record<string, unknown> }) {
           </div>
         );
       })}
+      {/* v0.28.2: status row never optimistic — only shows "✓ Answer sent"
+          when the submitter actually reached api.chat.send. 'parked'/'failed'
+          surface the truth + a retry path so the user isn't stranded staring
+          at a green checkmark while the turn never resumed. */}
       {submitted ? (
         <div className="inline-flex items-center gap-1 text-[10.5px] font-medium text-accent">
           ✓ Answer sent
+        </div>
+      ) : pending ? (
+        <div className="inline-flex items-center gap-1 text-[10.5px] font-medium text-text-muted">
+          Sending…
+        </div>
+      ) : outcome === 'parked' ? (
+        <div className="space-y-1">
+          <div className="inline-flex items-center gap-1 text-[10.5px] font-medium text-semantic-warning">
+            ⚠ Parked in input — press Send to submit
+          </div>
+          {needsSubmitButton && (
+            <button
+              type="button"
+              onClick={submitAll}
+              disabled={!allAnswered}
+              className={cn(
+                'inline-flex items-center gap-1 rounded px-2.5 py-1 text-[10.5px] font-medium transition-colors',
+                allAnswered
+                  ? 'bg-accent text-white hover:bg-accent/90'
+                  : 'cursor-not-allowed bg-surface-3 text-text-muted',
+              )}
+            >
+              Retry submit
+            </button>
+          )}
+        </div>
+      ) : outcome === 'failed' ? (
+        <div className="space-y-1">
+          <div className="inline-flex items-center gap-1 text-[10.5px] font-medium text-semantic-error">
+            ⚠ Couldn&apos;t send — try again
+          </div>
+          {needsSubmitButton && (
+            <button
+              type="button"
+              onClick={submitAll}
+              disabled={!allAnswered}
+              className={cn(
+                'inline-flex items-center gap-1 rounded px-2.5 py-1 text-[10.5px] font-medium transition-colors',
+                allAnswered
+                  ? 'bg-accent text-white hover:bg-accent/90'
+                  : 'cursor-not-allowed bg-surface-3 text-text-muted',
+              )}
+            >
+              Retry
+            </button>
+          )}
         </div>
       ) : (
         needsSubmitButton && (

@@ -5,6 +5,39 @@ All notable changes to DevSpace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.28.2] — 2026-05-20
+
+AskUserQuestion submit fix. After answering a multi-question card the UI
+showed "✓ Answer sent" but the turn never resumed — the chat footer kept
+showing "Waiting for your answer · 3m 15s" while nothing happened. The
+green checkmark was a **lie**: the card set `submitted=true` optimistically
+before knowing whether the answer actually reached `api.chat.send`, and the
+submitter had three silent-failure paths that all looked identical to the
+user — submitter null (singleton race), `!activeId` early-return in
+`submitText`, and the `sending`-true fallback that dropped text into the
+textarea instead of sending.
+
+Fix: `_chatAnswerSubmitter` and `submitChatAnswer` now return an
+`AnswerOutcome` of `'sent' | 'parked' | 'failed'`, and a pure
+`resolveAnswerOutcome` helper centralizes the decision so the card's
+status row can't drift from reality.
+
+- `'sent'` shows the green ✓ as before — only when chat.send actually fired.
+- `'parked'` shows an amber "⚠ Parked in input — press Send to submit" line
+  with a **Retry submit** button, so the user has a clear recovery path
+  instead of being stranded. Triggered when `submitText` threw, no thread
+  was active, or a previous send was still in flight.
+- `'failed'` shows a red "⚠ Couldn't send — try again" with a Retry button.
+  Only reached when even the appender fallback isn't available (a real bug).
+
+Picks and the Submit button are disabled while `pending`, so spamming the
+button can't double-fire mid-await. The `setNotice` banner also surfaces
+"Answer parked in input — press Send to submit." for matching feedback in
+the global notice slot.
+
+**Tests:** 732 pass (+6: every branch of `resolveAnswerOutcome` plus a
+regression that pins "guard reject never returns 'sent'"). Typecheck clean.
+
 ## [0.28.1] — 2026-05-20
 
 Sidebar folder-expand fix. Clicking a **nested** folder appeared to hang for

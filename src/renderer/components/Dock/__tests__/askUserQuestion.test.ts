@@ -7,6 +7,7 @@ import {
   buildAnswerText,
   needsSubmitButton,
   parseQuestions,
+  resolveAnswerOutcome,
   type AskQuestion,
 } from '../askUserQuestion';
 
@@ -120,6 +121,67 @@ describe('needsSubmitButton', () => {
 
   it('is true when there are multiple questions', () => {
     expect(needsSubmitButton([{ header: 'A' }, { header: 'B' }])).toBe(true);
+  });
+});
+
+describe('resolveAnswerOutcome (regression: card status must match reality)', () => {
+  // v0.28.2 root cause: card showed "✓ Answer sent" while the submitter
+  // silently parked text in the textarea (or did nothing at all because
+  // submitter was null). These cases pin the truth table so the card never
+  // lies again.
+  const base = {
+    hasActiveThread: true,
+    isSending: false,
+    hasAppender: true,
+    sendThrew: false,
+  };
+
+  it('returns sent on the happy path', () => {
+    expect(resolveAnswerOutcome(base)).toBe('sent');
+  });
+
+  it('returns parked when send threw but appender is available', () => {
+    expect(resolveAnswerOutcome({ ...base, sendThrew: true })).toBe('parked');
+  });
+
+  it('returns parked when no active thread (card visible but threadId missing)', () => {
+    expect(resolveAnswerOutcome({ ...base, hasActiveThread: false })).toBe(
+      'parked',
+    );
+  });
+
+  it('returns parked when a previous send is still in flight', () => {
+    expect(resolveAnswerOutcome({ ...base, isSending: true })).toBe('parked');
+  });
+
+  it('returns failed when neither send nor appender is possible', () => {
+    expect(
+      resolveAnswerOutcome({
+        ...base,
+        sendThrew: true,
+        hasAppender: false,
+      }),
+    ).toBe('failed');
+    expect(
+      resolveAnswerOutcome({
+        ...base,
+        hasActiveThread: false,
+        hasAppender: false,
+      }),
+    ).toBe('failed');
+  });
+
+  it('never returns sent when any guard rejects, even with appender', () => {
+    // The bug was the opposite: optimistic "sent" while in fact parked.
+    // Make sure no guard-rejection branch can leak through as 'sent'.
+    const guards = [
+      { sendThrew: true },
+      { hasActiveThread: false },
+      { isSending: true },
+    ];
+    for (const g of guards) {
+      expect(resolveAnswerOutcome({ ...base, ...g })).not.toBe('sent');
+    }
   });
 });
 

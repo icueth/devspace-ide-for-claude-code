@@ -2,6 +2,39 @@
 // React component so the answer-building + readiness logic is unit
 // testable (mirrors the chatEvents.ts / atMention.ts split).
 
+/**
+ * What happened when the card tried to resume the turn with the user's
+ * answer. v0.28.2 fix: replaces the prior fire-and-forget void path that
+ * lied "✓ Answer sent" even when the answer was silently parked in the
+ * textarea or swallowed by a null submitter.
+ *   - 'sent'   → reached api.chat.send; backend is resuming
+ *   - 'parked' → text dropped in textarea; user must press Send to submit
+ *   - 'failed' → couldn't even park (real bug; surface inline error)
+ */
+export type AnswerOutcome = 'sent' | 'parked' | 'failed';
+
+/**
+ * Decide which AnswerOutcome to surface given the runtime state. Pure
+ * decision (no side effects) so the card's status row stays in sync with
+ * what actually happened in the submitter. Caller runs the matching side
+ * effect (chat.send / append / nothing).
+ */
+export function resolveAnswerOutcome(opts: {
+  /** A thread is selected — required for api.chat.send to have a target. */
+  hasActiveThread: boolean;
+  /** A previous send is still in flight; safer to park than race. */
+  isSending: boolean;
+  /** Textarea appender is wired — fallback target when send isn't possible. */
+  hasAppender: boolean;
+  /** True iff the actual submit call threw (network/IPC failure). */
+  sendThrew: boolean;
+}): AnswerOutcome {
+  if (opts.sendThrew || !opts.hasActiveThread || opts.isSending) {
+    return opts.hasAppender ? 'parked' : 'failed';
+  }
+  return 'sent';
+}
+
 export type AskQuestion = {
   question?: string;
   header?: string;
