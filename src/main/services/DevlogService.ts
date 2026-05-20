@@ -588,6 +588,7 @@ export function __resetForTests(home?: string): void {
   state.defaults = buildBaselineDefaults();
   state.defaultsLoaded = false;
   state.subscribers.clear();
+  listCache.clear();
 }
 
 // ─── settings ──────────────────────────────────────────────────────────────
@@ -912,6 +913,169 @@ async function regenerateIndex(projectPath: string): Promise<void> {
   await atomicWrite(projectPath, file, lines.join('\n'));
 }
 
+// ─── listEntries cache ──────────────────────────────────────────────────────
+//
+// PERF: listEntries() used to re-readdir + re-read + re-parse every markdown
+// file in all 4 type dirs on EVERY call (tab open, refresh, inject preamble).
+// For projects with many devlog entries that's O(files) reads/parses per call.
+//
+// This per-project cache stores the parsed `walkTypeDir` result for each type
+// alongside a cheap directory snapshot taken at walk time. On the next call we
+// `fs.stat` only the relevant type dir(s) (a handful of stats, not N file
+// reads) and compare the snapshot:
+//   - dir mtimeMs unchanged AND .md file count unchanged → cache HIT, reuse
+//     the cached per-type array (deep-cloned so callers can't mutate cache).
+//   - dir mtimeMs OR file count changed → MISS, re-walk that type dir and
+//     refresh the cache slot.
+//   - dir missing (ENOENT) → snapshot {mtimeMs:-1, fileCount:0}; an empty walk
+//     result is cached so a project that never wrote a devlog stays a fast hit.
+//
+// Correctness vs EXTERNAL edits:
+//   File ADD / REMOVE / RENAME inside a type dir bumps that dir's mtimeMs (and
+//   usually the .md count) → detected. In-place CONTENT edits to an existing
+//   file do NOT bump the dir mtime — that's the documented tradeoff of the
+//   dir-mtime strategy. Such edits are rare for devlog (the app owns these
+//   files) and the dir mtime granularity caveat is the same one the task
+//   accepted. Any change DevlogService itself makes is covered exactly by the
+//   write-through `invalidateProjectCache` calls below (createEntry,
+//   updateEntry, deleteEntry, appendDailyLog, pruneByRetention), so a freshly
+//   created entry always shows up on the next listEntries even if the dir
+//   mtime resolution is coarse.
+//
+// Eviction: DevlogService has no per-project teardown hook (workspace close
+// does not call into it), so we bound the cache with a simple LRU capped at
+// MAX_CACHED_PROJECTS to stop unbounded growth across a long session.
+
+const MAX_CACHED_PROJECTS = 64;
+
+interface TypeDirSnapshot {
+  mtimeMs: number;
+  fileCount: number;
+}
+
+interface CachedTypeWalk {
+  snapshot: TypeDirSnapshot;
+  entries: DevlogEntry[];
+}
+
+type ProjectWalkCache = Partial<Record<DevlogEntryType, CachedTypeWalk>>;
+
+// Insertion-ordered Map → front-of-iteration is the least-recently-used key.
+const listCache = new Map<string, ProjectWalkCache>();
+
+function cacheGetProject(projectPath: string): ProjectWalkCache {
+  // Normalize the key internally so a read (listEntries) and a write-through
+  // invalidation can't diverge if a caller passes a non-resolved path —
+  // matches ChatTranscript.getState's defensive resolve.
+  const key = path.resolve(projectPath);
+  let bucket = listCache.get(key);
+  if (bucket) {
+    // LRU bump: re-insert so this project becomes most-recently-used.
+    listCache.delete(key);
+    listCache.set(key, bucket);
+    return bucket;
+  }
+  bucket = {};
+  listCache.set(key, bucket);
+  // Evict the oldest project(s) if we're over budget.
+  while (listCache.size > MAX_CACHED_PROJECTS) {
+    const oldest = listCache.keys().next().value;
+    if (oldest === undefined) break;
+    listCache.delete(oldest);
+  }
+  return bucket;
+}
+
+// Drop a project's whole cache (write-through on internal mutations) or a
+// single type slot. Cheaper than re-stating: the next listEntries re-walks.
+function invalidateProjectCache(
+  projectPath: string,
+  type?: DevlogEntryType,
+): void {
+  const key = path.resolve(projectPath);
+  if (type === undefined) {
+    listCache.delete(key);
+    return;
+  }
+  const bucket = listCache.get(key);
+  if (bucket) delete bucket[type];
+}
+
+// Cheap directory snapshot used for cache validation: dir mtime + count of
+// `.md` files (matching walkTypeDir's filter so add/remove of a real entry
+// changes the count). One readdir is unavoidable to count, but it skips the
+// N file reads + frontmatter parses that the full walk does on a hit.
+async function snapshotTypeDir(
+  projectPath: string,
+  type: DevlogEntryType,
+): Promise<TypeDirSnapshot> {
+  const dir = typeDir(projectPath, type);
+  assertInDevlogDir(projectPath, dir);
+  let st: fs.Stats;
+  try {
+    st = await fs.promises.stat(dir);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+      return { mtimeMs: -1, fileCount: 0 };
+    }
+    throw err;
+  }
+  let fileCount = 0;
+  try {
+    const names = await fs.promises.readdir(dir);
+    for (const name of names) {
+      if (!name.endsWith('.md')) continue;
+      if (name.startsWith('.')) continue;
+      fileCount += 1;
+    }
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+  }
+  return { mtimeMs: st.mtimeMs, fileCount };
+}
+
+function snapshotsMatch(a: TypeDirSnapshot, b: TypeDirSnapshot): boolean {
+  return a.mtimeMs === b.mtimeMs && a.fileCount === b.fileCount;
+}
+
+// Deep-clone a cached entry so the caller gets a fresh, fully-owned object —
+// byte-identical in shape to the non-cached walk path, and immune to caller
+// mutation of nested arrays (filesTouched / links).
+function cloneEntry(e: DevlogEntry): DevlogEntry {
+  return {
+    ...e,
+    filesTouched: e.filesTouched ? [...e.filesTouched] : e.filesTouched,
+    links: [...e.links],
+    diffStats: e.diffStats ? { ...e.diffStats } : e.diffStats,
+    linkedPlanIds: e.linkedPlanIds ? [...e.linkedPlanIds] : e.linkedPlanIds,
+    linkedAgentIds: e.linkedAgentIds ? [...e.linkedAgentIds] : e.linkedAgentIds,
+    linkedResultIds: e.linkedResultIds ? [...e.linkedResultIds] : e.linkedResultIds,
+  };
+}
+
+// Cache-aware replacement for the per-type walk used by listEntries. Returns
+// the SAME ordering walkTypeDir would (readdir order) so the downstream
+// stable sort in listEntries yields byte-identical output.
+async function cachedWalkTypeDir(
+  projectPath: string,
+  type: DevlogEntryType,
+): Promise<DevlogEntry[]> {
+  const bucket = cacheGetProject(projectPath);
+  const snapshot = await snapshotTypeDir(projectPath, type);
+  const cached = bucket[type];
+  if (cached && snapshotsMatch(cached.snapshot, snapshot)) {
+    // HIT — hand back clones, never the cached array/objects themselves.
+    return cached.entries.map(cloneEntry);
+  }
+  // MISS — re-walk and refresh. Re-snapshot AFTER the walk so a concurrent
+  // write that lands mid-walk is caught on the next call (its dir mtime will
+  // differ from this post-walk snapshot).
+  const entries = await walkTypeDir(projectPath, type);
+  const postSnapshot = await snapshotTypeDir(projectPath, type);
+  bucket[type] = { snapshot: postSnapshot, entries };
+  return entries.map(cloneEntry);
+}
+
 // ─── public: listEntries ───────────────────────────────────────────────────
 
 export async function listEntries(input: {
@@ -925,7 +1089,7 @@ export async function listEntries(input: {
     : ['plan', 'agent', 'result', 'log'];
   const all: DevlogEntry[] = [];
   for (const t of types) {
-    const entries = await walkTypeDir(input.projectPath, t);
+    const entries = await cachedWalkTypeDir(input.projectPath, t);
     all.push(...entries);
   }
   all.sort((a, b) => b.createdAt - a.createdAt);
@@ -1116,6 +1280,10 @@ export async function createEntry(input: {
   };
   await atomicWrite(input.projectPath, file, serializeFile(fm, body));
 
+  // Write-through: drop this type's cache slot so the fresh entry shows up on
+  // the next listEntries even if the dir mtime resolution is coarse.
+  invalidateProjectCache(input.projectPath, input.type);
+
   const stem = filename.slice(0, -3);
   const entry: DevlogEntry = {
     id: `${input.type}/${stem}`,
@@ -1238,6 +1406,10 @@ export async function updateEntry(input: {
   assertInDevlogDir(input.projectPath, file);
   await atomicWrite(input.projectPath, file, serializeFile(fm, next.body ?? ''));
 
+  // Write-through: in-place content edits don't move the dir mtime, so the
+  // snapshot wouldn't catch this — invalidate the slot explicitly.
+  invalidateProjectCache(input.projectPath, next.type);
+
   void regenerateIndex(input.projectPath).catch((err) => {
     logger.warn(`index regen failed: ${(err as Error).message}`);
   });
@@ -1272,6 +1444,7 @@ export async function deleteEntry(input: {
   const st = await assertRegularFile(file);
   if (!st) return; // already gone — idempotent
   await fs.promises.rm(file, { force: true });
+  invalidateProjectCache(input.projectPath, type);
   void regenerateIndex(input.projectPath).catch((err) => {
     logger.warn(`index regen failed: ${(err as Error).message}`);
   });
@@ -1318,6 +1491,9 @@ export async function appendDailyLog(input: {
   const block = `\n${stamp}\n${text.trim()}\n`;
   const next = (existing.endsWith('\n') ? existing : existing + '\n') + block;
   await atomicWrite(input.projectPath, file, next);
+  // Write-through: appending to an existing daily log is an in-place content
+  // edit (dir mtime may not move), so invalidate the log slot explicitly.
+  invalidateProjectCache(input.projectPath, 'log');
   void regenerateIndex(input.projectPath).catch((err) => {
     logger.warn(`index regen failed: ${(err as Error).message}`);
   });
@@ -1447,6 +1623,9 @@ export async function pruneByRetention(
 
   await runFor('log', settings.logRetentionDays, 'logsRemoved');
   await runFor('agent', settings.agentRetentionDays, 'agentsRemoved');
+  // Write-through: drop cache slots for any type we actually pruned.
+  if (out.logsRemoved > 0) invalidateProjectCache(projectPath, 'log');
+  if (out.agentsRemoved > 0) invalidateProjectCache(projectPath, 'agent');
   if (out.logsRemoved > 0 || out.agentsRemoved > 0) {
     void regenerateIndex(projectPath).catch((err) => {
       logger.warn(`index regen failed: ${(err as Error).message}`);

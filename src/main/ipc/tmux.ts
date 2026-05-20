@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 
 import { ipcMain } from 'electron';
 
@@ -95,6 +96,39 @@ async function runTmux(args: string[]): Promise<string> {
 const LIST_FMT =
   '#{pane_id}\t#{pane_index}\t#{pane_title}\t#{pane_current_command}\t#{pane_pid}\t#{pane_activity}\t#{pane_current_path}';
 
+// Batch pane capture (v0.27): one tmux subprocess captures EVERY pane,
+// with a per-call delimiter printed between panes. The agents rail polls
+// previews every 2.5s; capturing each pane in its own IPC/subprocess made
+// that O(N) tmux spawns per tick. This collapses it to a single spawn.
+export function buildCapturePanesArgs(
+  paneIds: string[],
+  lines: number,
+  delim: string,
+): string[] {
+  const args: string[] = [];
+  paneIds.forEach((id, i) => {
+    if (i > 0) args.push(';');
+    args.push('capture-pane', '-p', '-t', id, '-S', `-${lines}`);
+    args.push(';', 'display-message', '-p', delim);
+  });
+  return args;
+}
+
+export function parseCapturedPanes(
+  raw: string,
+  paneIds: string[],
+  delim: string,
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  const parts = raw.split(delim);
+  paneIds.forEach((id, i) => {
+    // Each segment is the pane's content; strip the boundary newlines that
+    // capture-pane / display-message add around it.
+    out[id] = (parts[i] ?? '').replace(/^\n+/, '').replace(/\n+$/, '');
+  });
+  return out;
+}
+
 function parsePanes(raw: string): TmuxPane[] {
   const panes: TmuxPane[] = [];
   for (const line of raw.split('\n')) {
@@ -155,6 +189,43 @@ export function registerTmuxIpc(): void {
       } catch (err) {
         logger.warn(`capture-pane ${paneId} failed:`, (err as Error).message);
         return '';
+      }
+    },
+  );
+
+  ipcMain.handle(
+    IPC.TMUX_CAPTURE_PANES,
+    async (_e, paneIds: string[], lines = 3): Promise<Record<string, string>> => {
+      if (!Array.isArray(paneIds) || paneIds.length === 0) return {};
+      let ids: string[];
+      try {
+        ids = paneIds.slice(0, 64).map(assertPaneId);
+      } catch (err) {
+        logger.warn('capture-panes: invalid pane id:', (err as Error).message);
+        return {};
+      }
+      const n = Math.max(1, Math.min(10_000, Math.floor(Number(lines) || 3)));
+      const delim = `__DEVSPACE_CAP_${randomUUID()}__`;
+      try {
+        const raw = await runTmux(buildCapturePanesArgs(ids, n, delim));
+        return parseCapturedPanes(raw, ids, delim);
+      } catch (err) {
+        // A pane that exited mid-chain aborts the whole tmux invocation, so
+        // fall back to per-pane best-effort — one dead tab must not blank
+        // every preview.
+        logger.warn(`capture-panes batch failed, falling back: ${(err as Error).message}`);
+        const out: Record<string, string> = {};
+        await Promise.all(
+          ids.map(async (id) => {
+            try {
+              const raw = await runTmux(['capture-pane', '-p', '-t', id, '-S', `-${n}`]);
+              out[id] = raw.trimEnd();
+            } catch {
+              out[id] = '';
+            }
+          }),
+        );
+        return out;
       }
     },
   );

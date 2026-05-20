@@ -40,9 +40,16 @@ export const useTmuxStore = create<TmuxState>((set, get) => ({
       const { sessionName } = get();
       const panes = await api.tmux.listPanes(sessionName ?? undefined);
       set({ panes, lastRefresh: Date.now(), error: null });
-      // Refresh previews for all panes in parallel (throttled externally by
-      // polling interval — so this doesn't hammer tmux every tick).
-      await Promise.all(panes.map((p) => get().refreshPreview(p.paneId)));
+      // Capture every pane's preview in ONE tmux subprocess (v0.27). The old
+      // path fanned out one capturePane IPC — i.e. one tmux spawn — per pane
+      // every poll tick; with several CLI tabs that was N spawns / 2.5s.
+      if (panes.length > 0) {
+        const previews = await api.tmux.capturePanes(
+          panes.map((p) => p.paneId),
+          3,
+        );
+        set((s) => ({ previews: { ...s.previews, ...previews } }));
+      }
     } catch (err) {
       set({ error: (err as Error).message });
     }

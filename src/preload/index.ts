@@ -130,6 +130,8 @@ const api = {
       ipcRenderer.invoke(IPC.TMUX_LIST_PANES, sessionName),
     capturePane: (paneId: string, lines?: number) =>
       ipcRenderer.invoke(IPC.TMUX_CAPTURE_PANE, paneId, lines),
+    capturePanes: (paneIds: string[], lines?: number) =>
+      ipcRenderer.invoke(IPC.TMUX_CAPTURE_PANES, paneIds, lines),
     selectPane: (paneId: string) => ipcRenderer.invoke(IPC.TMUX_SELECT_PANE, paneId),
     sendKeys: (paneId: string, text: string, submit?: boolean) =>
       ipcRenderer.invoke(IPC.TMUX_SEND_KEYS, paneId, text, submit),
@@ -164,6 +166,8 @@ const api = {
   chat: {
     listThreads: (projectPath: string) =>
       ipcRenderer.invoke(IPC.CHAT_LIST_THREADS, projectPath),
+    getThread: (projectPath: string, threadId: string) =>
+      ipcRenderer.invoke(IPC.CHAT_GET_THREAD, projectPath, threadId),
     createThread: (projectPath: string, title?: string) =>
       ipcRenderer.invoke(IPC.CHAT_CREATE_THREAD, projectPath, title),
     deleteThread: (projectPath: string, threadId: string) =>

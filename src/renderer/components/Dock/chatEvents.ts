@@ -168,3 +168,26 @@ export function applyEvent(
 
   return { ...thread, messages };
 }
+
+// v0.27: bound the renderer's lazily-loaded full-transcript cache so opening
+// many threads in one long session doesn't accumulate every transcript in
+// memory (the whole point of the metadata/lazy split). Object key order is
+// insertion order, so we evict oldest-first and never the active thread.
+// Evicted threads are recoverable — the backend persists them and getThread
+// re-fetches on next open.
+export const MAX_LOADED_THREADS = 16;
+
+export function capLoaded(
+  map: Record<string, ChatThread>,
+  keepId: string | null,
+): Record<string, ChatThread> {
+  const ids = Object.keys(map);
+  if (ids.length <= MAX_LOADED_THREADS) return map;
+  const next = { ...map };
+  for (const id of ids) {
+    if (Object.keys(next).length <= MAX_LOADED_THREADS) break;
+    if (id === keepId) continue;
+    delete next[id];
+  }
+  return next;
+}

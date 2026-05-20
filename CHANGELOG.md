@@ -5,6 +5,49 @@ All notable changes to DevSpace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.27.0] — 2026-05-20
+
+Performance pass clearing the deferred items from the 0.26.0 audit. Four
+independent optimizations, built by a parallel team and reviewed for security,
+architecture, and correctness before merge. No user-facing behavior change —
+the app should feel lighter, especially on big projects and long sessions.
+
+### Changed
+
+- **Chat threads load lazily.** `listThreads` now ships lightweight metadata
+  (`ChatThreadMeta`) instead of every thread's full transcript; the active
+  thread's messages are fetched on demand via a new `getThread` IPC. Opening a
+  project with many/long chat threads no longer serializes every transcript
+  over IPC or holds them all in renderer memory. The renderer full-thread
+  cache is bounded (LRU, keeps the active thread) so a long session of opening
+  threads stays flat.
+- **FileTree rows are memoized.** Sidebar rows are now `React.memo` components
+  with stable callbacks and per-row git/folder data, so a git refresh, folder
+  toggle, or selection change only re-renders the rows that actually changed
+  instead of the whole visible tree.
+- **Devlog list is cached.** `DevlogService.listEntries` caches the per-type
+  directory walk (invalidated by dir mtime + file count, write-through on every
+  internal mutation), so reopening the Devlog tab no longer re-reads and
+  re-parses every entry.
+- **tmux preview capture is batched.** The agents rail captured each pane in
+  its own tmux subprocess every 2.5s (O(N) spawns/tick); it now captures all
+  panes in a single chained invocation with a per-call delimiter, falling back
+  to per-pane on error.
+
+### Fixed
+
+- **FileTree git badges no longer go stale on intra-folder status swaps.** When
+  two files in one folder changed such that the folder's aggregate count stayed
+  identical (e.g. one file modified→clean while another clean→modified), the
+  memoized folder row could skip re-rendering and leave child badges stale —
+  fixed with a git-snapshot identity token that re-renders folders on any git
+  change while leaf rows still skip unless their own status changed.
+- **Security: hostile `thread.activeRun.runDir` is sanitized on hydrate.** The
+  top-level run-handle path (the field resume-on-boot consumes, now also shipped
+  by `getThread`) is confined to the threads dir on load, symmetric with the
+  existing per-message guard — closing an arbitrary-file-read-on-resume vector
+  from a tampered chat JSON.
+
 ## [0.26.2] — 2026-05-20
 
 Fix for a report that answering an AskUserQuestion prompt in chat did nothing —

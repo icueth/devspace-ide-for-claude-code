@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   __resetForTests,
@@ -544,6 +544,116 @@ describe('DevlogService.frontmatter parser edge cases', () => {
     const list = await listEntries({ projectPath: projectAbs, type: 'plan' });
     expect(list).toHaveLength(1);
     expect(list[0]!.status).toBeUndefined();
+  });
+});
+
+describe('DevlogService.listEntries cache', () => {
+  it('serves a cache hit without re-reading entry files', async () => {
+    await createEntry({
+      projectPath: projectAbs,
+      type: 'plan',
+      title: 'Cached Plan',
+      body: 'a'.repeat(500),
+      now: new Date('2026-05-18T10:00:00Z'),
+    });
+    await createEntry({
+      projectPath: projectAbs,
+      type: 'result',
+      title: 'Cached Result',
+      body: 'b'.repeat(500),
+      version: '0.24.0',
+      now: new Date('2026-05-17T10:00:00Z'),
+    });
+
+    // Let the fire-and-forget INDEX.md regen from createEntry settle so its
+    // async file reads don't bleed into the spy window below.
+    await new Promise((r) => setTimeout(r, 50));
+
+    // First call primes the cache (full walk + parse).
+    const first = await listEntries({ projectPath: projectAbs });
+    expect(first).toHaveLength(2);
+
+    // Spy on the per-file read. A cache HIT must NOT touch any entry .md
+    // file — only cheap dir stats/readdirs are allowed.
+    const readSpy = vi.spyOn(fs.promises, 'readFile');
+    try {
+      const second = await listEntries({ projectPath: projectAbs });
+      // No markdown ENTRY file was read on the hit path.
+      const mdReads = readSpy.mock.calls.filter(([p]) =>
+        typeof p === 'string' &&
+        p.endsWith('.md') &&
+        !p.endsWith('INDEX.md'),
+      );
+      expect(mdReads).toHaveLength(0);
+
+      // Data is byte-identical in shape + order to the first (uncached) call.
+      expect(second).toEqual(first);
+      // ...but a distinct object graph (deep clone), not the same references.
+      expect(second[0]).not.toBe(first[0]);
+      expect(second[0]!.links).not.toBe(first[0]!.links);
+    } finally {
+      readSpy.mockRestore();
+    }
+  });
+
+  it('shows a freshly createEntry-d entry on the next listEntries (write-through)', async () => {
+    const before = await listEntries({ projectPath: projectAbs, type: 'plan' });
+    expect(before).toHaveLength(0); // primes the (empty) cache slot
+
+    const created = await createEntry({
+      projectPath: projectAbs,
+      type: 'plan',
+      title: 'Brand New Plan',
+      body: '',
+    });
+
+    // Even though the empty slot was cached above, the write-through
+    // invalidation must surface the new entry immediately.
+    const after = await listEntries({ projectPath: projectAbs, type: 'plan' });
+    expect(after).toHaveLength(1);
+    expect(after[0]!.id).toBe(created.id);
+
+    // And it shows up in the all-types listing too.
+    const all = await listEntries({ projectPath: projectAbs });
+    expect(all.some((e) => e.id === created.id)).toBe(true);
+  });
+
+  it('invalidates the cache when a type dir changes out-of-band', async () => {
+    await createEntry({
+      projectPath: projectAbs,
+      type: 'plan',
+      title: 'First Plan',
+      body: '',
+      now: new Date('2026-05-18T10:00:00Z'),
+    });
+    const first = await listEntries({ projectPath: projectAbs, type: 'plan' });
+    expect(first).toHaveLength(1);
+
+    // Drop a valid plan file directly onto disk (simulating an external
+    // process / git checkout). This bumps the plans/ dir mtime + file count,
+    // which the snapshot must detect on the next call.
+    const dir = devlogPath('plans');
+    const raw = [
+      '---',
+      'type: plan',
+      'title: External Plan',
+      'createdAt: 2026-05-19T10:00:00Z',
+      'updatedAt: 2026-05-19T10:00:00Z',
+      'status: in_progress',
+      '---',
+      '',
+      'Added out of band.',
+      '',
+    ].join('\n');
+    // Force a distinct mtime even on coarse-granularity filesystems so the
+    // snapshot comparison is unambiguous (file count also changes 1 → 2).
+    fs.writeFileSync(path.join(dir, '2026-05-19-external-plan.md'), raw, 'utf8');
+    const future = new Date(Date.now() + 5000);
+    fs.utimesSync(dir, future, future);
+
+    const second = await listEntries({ projectPath: projectAbs, type: 'plan' });
+    expect(second).toHaveLength(2);
+    expect(second.some((e) => e.title === 'External Plan')).toBe(true);
   });
 });
 

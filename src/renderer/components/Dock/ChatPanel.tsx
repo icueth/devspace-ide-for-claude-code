@@ -57,7 +57,7 @@ import {
   needsSubmitButton as questionsNeedSubmitButton,
   parseQuestions,
 } from '@renderer/components/Dock/askUserQuestion';
-import { applyEvent } from '@renderer/components/Dock/chatEvents';
+import { applyEvent, capLoaded } from '@renderer/components/Dock/chatEvents';
 import { ChatSettingsDrawer } from '@renderer/components/Dock/ChatSettingsDrawer';
 import {
   parseSlashInput,
@@ -84,6 +84,7 @@ import type {
   ChatMessage,
   ChatMessageSegment,
   ChatThread,
+  ChatThreadMeta,
   TeamDef,
   TeamStep,
   ToolDiffHunk,
@@ -163,6 +164,72 @@ interface ChatPanelProps {
 // content.
 const EMPTY_QUEUE: QueuedMessage[] = [];
 
+// v0.27: derive lightweight list metadata from a full thread. Used when a
+// freshly-created / freshly-loaded full thread needs to seed (or refresh)
+// the meta-driven thread switcher without shipping its messages back.
+function metaFromThread(t: ChatThread): ChatThreadMeta {
+  return {
+    id: t.id,
+    projectId: t.projectId,
+    title: t.title,
+    createdAt: t.createdAt,
+    updatedAt: t.updatedAt,
+    messageCount: t.messages.length,
+    hasActiveRun:
+      !!t.activeRun ||
+      t.messages.some((m) => !!(m as { activeRun?: unknown }).activeRun),
+    ...(t.config ? { config: t.config } : {}),
+  };
+}
+
+// True while a thread has an assistant turn mid-stream — drives the meta
+// list's running affordance. Derived from message status rather than
+// `activeRun` so it flips off the instant `done`/`error` arrives, matching
+// the transcript's own streaming indicator.
+function threadIsStreaming(t: ChatThread): boolean {
+  return t.messages.some((m) => m.status === 'streaming');
+}
+
+// v0.27: refresh a meta entry from the post-apply full thread. Used when a
+// streaming event lands on a thread we have cached — gives exact title /
+// messageCount / updatedAt without a server round-trip. Returns the same
+// reference when nothing changed so React can bail the list re-render.
+function mergeMetaFromThread(
+  meta: ChatThreadMeta,
+  t: ChatThread,
+  event: ChatEvent,
+): ChatThreadMeta {
+  const messageCount = t.messages.length;
+  const title = t.title;
+  const hasActiveRun = threadIsStreaming(t);
+  const updatedAt = Math.max(meta.updatedAt, event.ts);
+  if (
+    meta.messageCount === messageCount &&
+    meta.title === title &&
+    meta.hasActiveRun === hasActiveRun &&
+    meta.updatedAt === updatedAt
+  ) {
+    return meta;
+  }
+  return { ...meta, messageCount, title, hasActiveRun, updatedAt };
+}
+
+// v0.27: best-effort meta bump for events targeting a thread we DON'T have
+// cached. We can't recompute title / messageCount without the messages, so
+// we only move updatedAt forward and clear the running flag on terminal
+// events. The authoritative values land on the next listThreads refresh or
+// when the user opens the thread (lazy load).
+function bumpMetaFromEvent(meta: ChatThreadMeta, event: ChatEvent): ChatThreadMeta {
+  const updatedAt = Math.max(meta.updatedAt, event.ts);
+  let hasActiveRun = meta.hasActiveRun;
+  if (event.kind === 'status') hasActiveRun = true;
+  else if (event.kind === 'done' || event.kind === 'error') hasActiveRun = false;
+  if (meta.updatedAt === updatedAt && meta.hasActiveRun === hasActiveRun) {
+    return meta;
+  }
+  return { ...meta, updatedAt, hasActiveRun };
+}
+
 // Module-level singletons used by deeply-nested ToolCard components to
 // reach the active ChatPanel without prop-drilling. Only one ChatPanel is
 // mounted per project and only the active project's panel is visible — so
@@ -191,7 +258,14 @@ function submitChatAnswer(text: string): void {
  * persist threads as JSON on disk.
  */
 export function ChatPanel({ projectPath }: ChatPanelProps) {
-  const [threads, setThreads] = useState<ChatThread[]>([]);
+  // v0.27: split the old "array of full threads" into a lightweight meta
+  // list (drives the thread switcher) + a lazily-populated cache of full
+  // threads (drives the transcript). Opening a project ships only metadata
+  // over IPC; the full transcript for a thread is fetched on demand the
+  // first time it becomes active. `activeThread` is derived from
+  // `loaded[activeId]`, never from `threads`.
+  const [threads, setThreads] = useState<ChatThreadMeta[]>([]);
+  const [loaded, setLoaded] = useState<Record<string, ChatThread>>({});
   const [activeId, setActiveId] = useState<string | null>(null);
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
@@ -416,15 +490,24 @@ export function ChatPanel({ projectPath }: ChatPanelProps) {
   // Initial load + subscribe for streaming events. The hook also creates
   // a first thread automatically so the panel never opens to an empty
   // "pick a thread" placeholder.
+  //
+  // v0.27: listThreads now returns metadata only. We seed the meta list +
+  // active id here; the full transcript for the active thread is fetched
+  // by the lazy-load effect below. The one exception is an empty project:
+  // createThread returns the full (empty) thread, so we cache it directly
+  // to skip the round-trip. Resets the loaded cache on project switch so
+  // a previous workspace's transcripts don't bleed through.
   useEffect(() => {
     let cancelled = false;
+    setLoaded({});
     void (async () => {
       const initial = await api.chat.listThreads(projectPath);
       if (cancelled) return;
       if (initial.length === 0) {
         const t = await api.chat.createThread(projectPath, 'New chat');
         if (!cancelled) {
-          setThreads([t]);
+          setThreads([metaFromThread(t)]);
+          setLoaded({ [t.id]: t });
           setActiveId(t.id);
         }
       } else {
@@ -437,12 +520,69 @@ export function ChatPanel({ projectPath }: ChatPanelProps) {
     };
   }, [projectPath]);
 
+  // v0.27: lazily fetch the full transcript when the active thread changes
+  // and we don't have it cached yet. Guards against a stale write when the
+  // user switches threads faster than the fetch resolves: we check both
+  // the cancelled flag (project/effect teardown) AND that activeId still
+  // matches the id we fetched before committing it to the cache.
+  useEffect(() => {
+    if (!activeId) return undefined;
+    if (loaded[activeId]) return undefined;
+    let cancelled = false;
+    const wantId = activeId;
+    void (async () => {
+      try {
+        const full = await api.chat.getThread(projectPath, wantId);
+        if (cancelled || !full) return;
+        setLoaded((prev) =>
+          // Don't clobber a copy that streaming events already populated
+          // (or a fresher fetch); only fill when still missing. Cap the
+          // cache so switching through many threads doesn't grow unbounded.
+          prev[wantId] ? prev : capLoaded({ ...prev, [wantId]: full }, wantId),
+        );
+      } catch (err) {
+        console.error('[chat] getThread failed', err);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeId, projectPath, loaded]);
+
   // Apply streaming events into the matching thread / message. The
   // backend already persists to disk; we mirror in renderer state so the
   // UI updates immediately rather than waiting for a re-fetch.
+  //
+  // v0.27: events apply to the LOADED full thread (so the transcript
+  // updates live) and ALSO bump the matching meta entry (so the switcher
+  // reflects activity — title rename on first message, updatedAt,
+  // messageCount, hasActiveRun). If the target thread isn't loaded, we
+  // skip the full-thread cache (nothing to mutate, and we don't want to
+  // synthesize a partial transcript) but still bump the meta so the list
+  // is accurate; the transcript fills in correctly when the user opens it.
   useEffect(() => {
     return api.chat.onEvent(projectPath, (threadId, event) => {
-      setThreads((prev) => prev.map((t) => applyEvent(t, threadId, event)));
+      // Apply to the loaded full thread; capture the post-apply thread so
+      // we can derive an exact meta from it (accurate title/messageCount).
+      let applied: ChatThread | null = null;
+      setLoaded((prev) => {
+        const current = prev[threadId];
+        if (!current) return prev;
+        const next = applyEvent(current, threadId, event);
+        applied = next;
+        if (next === current) return prev;
+        return { ...prev, [threadId]: next };
+      });
+      setThreads((prev) =>
+        prev.map((m) => {
+          if (m.id !== threadId) return m;
+          // Loaded → derive an exact meta. Not loaded → best-effort bump
+          // (the next listThreads refresh / lazy load corrects details).
+          return applied
+            ? mergeMetaFromThread(m, applied, event)
+            : bumpMetaFromEvent(m, event);
+        }),
+      );
     });
   }, [projectPath]);
 
@@ -566,7 +706,8 @@ export function ChatPanel({ projectPath }: ChatPanelProps) {
           // the new thread's panel state.
           try {
             const t = await api.chat.createThread(projectPath, 'New chat');
-            setThreads((prev) => [t, ...prev]);
+            setThreads((prev) => [metaFromThread(t), ...prev]);
+            setLoaded((prev) => ({ ...prev, [t.id]: t }));
             setActiveId(t.id);
           } catch (err) {
             console.error('[chat] failed to create thread for prefill', err);
@@ -596,10 +737,24 @@ export function ChatPanel({ projectPath }: ChatPanelProps) {
     });
   }, [projectPath, insertAttachment]);
 
+  // v0.27: the active transcript comes from the lazily-loaded full-thread
+  // cache, NOT the meta list. Null while the fetch for a freshly-selected
+  // thread is in flight — the transcript area shows its empty/loading
+  // state until the messages arrive.
   const activeThread = useMemo(
-    () => threads.find((t) => t.id === activeId) ?? null,
-    [threads, activeId],
+    () => (activeId ? loaded[activeId] ?? null : null),
+    [loaded, activeId],
   );
+
+  // True when a thread is selected, NOT yet in the loaded cache, and its
+  // metadata indicates it has messages — i.e. the lazy getThread fetch is
+  // in flight for a populated thread. Drives the transcript loading state
+  // so a non-empty thread never momentarily renders as "Empty thread".
+  const activeThreadLoading = useMemo(() => {
+    if (!activeId || activeThread) return false;
+    const meta = threads.find((t) => t.id === activeId);
+    return !!meta && meta.messageCount > 0;
+  }, [activeId, activeThread, threads]);
 
   // True while the active thread has at least one assistant message in
   // 'streaming' state. Drives the Send→Stop button swap AND the v0.16 queue
@@ -707,7 +862,10 @@ export function ChatPanel({ projectPath }: ChatPanelProps) {
             ? `[${team.name}] ${text.split('\n')[0]!.slice(0, 50)}`
             : text.split('\n')[0]!.slice(0, 60);
           const t = await api.chat.createThread(projectPath, title);
-          setThreads((prev) => [t, ...prev]);
+          // Seed meta + cache the (empty) full thread so the switcher and
+          // transcript both show it immediately, then make it active.
+          setThreads((prev) => [metaFromThread(t), ...prev]);
+          setLoaded((prev) => ({ ...prev, [t.id]: t }));
           setActiveId(t.id);
           targetThreadId = t.id;
           setRunInNewThread(false);
@@ -718,10 +876,22 @@ export function ChatPanel({ projectPath }: ChatPanelProps) {
           text,
           ...(selectedTeamId ? { teamId: selectedTeamId } : {}),
         });
-        // Refresh thread list once after submit so the new user+assistant
-        // pair shows even before the first stream event arrives.
-        const next = await api.chat.listThreads(projectPath);
-        setThreads(next);
+        // v0.27: refresh ONLY the target thread's full transcript so the
+        // new user + streaming-assistant pair appears before the first
+        // stream event lands. Streaming events mutate the last (assistant)
+        // message but never add the user message, so without this re-fetch
+        // the optimistic pair would be invisible until the next full load.
+        // We refresh the meta list too (titles / counts), but must NOT
+        // clobber the loaded cache for OTHER threads.
+        const [full, metas] = await Promise.all([
+          api.chat.getThread(projectPath, targetThreadId),
+          api.chat.listThreads(projectPath),
+        ]);
+        setThreads(metas);
+        if (full) {
+          const ft = full;
+          setLoaded((prev) => ({ ...prev, [ft.id]: ft }));
+        }
       } finally {
         setSending(false);
       }
@@ -913,7 +1083,8 @@ export function ChatPanel({ projectPath }: ChatPanelProps) {
 
   const onNewThread = useCallback(async () => {
     const t = await api.chat.createThread(projectPath, 'New chat');
-    setThreads((prev) => [t, ...prev]);
+    setThreads((prev) => [metaFromThread(t), ...prev]);
+    setLoaded((prev) => ({ ...prev, [t.id]: t }));
     setActiveId(t.id);
   }, [projectPath]);
 
@@ -921,6 +1092,14 @@ export function ChatPanel({ projectPath }: ChatPanelProps) {
     async (id: string) => {
       await api.chat.deleteThread(projectPath, id);
       setThreads((prev) => prev.filter((t) => t.id !== id));
+      // Drop the deleted thread's cached transcript so it can't linger /
+      // be re-shown if a same-id thread is ever recreated.
+      setLoaded((prev) => {
+        if (!prev[id]) return prev;
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
       if (activeId === id) {
         const next = threads.find((t) => t.id !== id);
         setActiveId(next?.id ?? null);
@@ -1068,15 +1247,25 @@ export function ChatPanel({ projectPath }: ChatPanelProps) {
       switch (trigger) {
         case 'new': {
           const t = await api.chat.createThread(projectPath, 'New chat');
-          setThreads((prev) => [t, ...prev]);
+          setThreads((prev) => [metaFromThread(t), ...prev]);
+          setLoaded((prev) => ({ ...prev, [t.id]: t }));
           setActiveId(t.id);
           return true;
         }
         case 'clear': {
           if (!activeId) return true;
-          await api.chat.deleteThread(projectPath, activeId);
+          const cleared = activeId;
+          await api.chat.deleteThread(projectPath, cleared);
           const t = await api.chat.createThread(projectPath, 'New chat');
-          setThreads((prev) => [t, ...prev.filter((x) => x.id !== activeId)]);
+          setThreads((prev) => [
+            metaFromThread(t),
+            ...prev.filter((x) => x.id !== cleared),
+          ]);
+          setLoaded((prev) => {
+            const next = { ...prev, [t.id]: t };
+            delete next[cleared];
+            return next;
+          });
           setActiveId(t.id);
           return true;
         }
@@ -1188,8 +1377,18 @@ export function ChatPanel({ projectPath }: ChatPanelProps) {
           onThreadConfigChanged={(updated) => {
             // Mirror the saved override into renderer state so badges /
             // future sends see the new config without a full refetch.
+            // Update both the meta list (config + updatedAt) and the loaded
+            // full-thread cache (so the active transcript carries the new
+            // config too).
             setThreads((prev) =>
-              prev.map((t) => (t.id === updated.id ? updated : t)),
+              prev.map((t) =>
+                t.id === updated.id ? metaFromThread(updated) : t,
+              ),
+            );
+            setLoaded((prev) =>
+              prev[updated.id]
+                ? { ...prev, [updated.id]: updated }
+                : prev,
             );
           }}
         />
@@ -1294,6 +1493,17 @@ export function ChatPanel({ projectPath }: ChatPanelProps) {
                   onContextMenu={handleBubbleContextMenu}
                 />
               ))}
+            </div>
+          ) : activeThreadLoading ? (
+            // v0.27: the meta list says this thread has messages but its
+            // full transcript hasn't arrived from getThread yet. Show a
+            // spinner instead of the "Empty thread" copy so a populated
+            // thread never flashes as empty during the lazy load.
+            <div className="flex h-full items-center justify-center text-center text-[12px] text-text-muted">
+              <div className="inline-flex items-center gap-2">
+                <Loader2 size={13} className="animate-spin" />
+                <span>Loading conversation…</span>
+              </div>
             </div>
           ) : (
             <div className="flex h-full items-center justify-center text-center text-[12px] text-text-muted">

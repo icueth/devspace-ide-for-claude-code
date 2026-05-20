@@ -5,6 +5,7 @@ import {
   createThread,
   deleteThread,
   getProjectConfig,
+  getThread,
   listThreads,
   sendMessage,
   setProjectConfig,
@@ -21,6 +22,17 @@ export function registerChatIpc(): void {
     subscribe(projectPath, event.sender);
     return listThreads(projectPath);
   });
+
+  ipcMain.handle(
+    IPC.CHAT_GET_THREAD,
+    (event, projectPath: string, threadId: string) => {
+      // Lazy full-thread fetch. Subscribe too (symmetric with
+      // list-threads) so opening a thread the renderer reached without a
+      // prior list call still wires up the streaming event stream.
+      subscribe(projectPath, event.sender);
+      return getThread(projectPath, threadId);
+    },
+  );
 
   ipcMain.handle(
     IPC.CHAT_CREATE_THREAD,

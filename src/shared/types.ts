@@ -365,6 +365,24 @@ export interface ChatThread {
   memoryInjected?: boolean;
 }
 
+// v0.27: lightweight thread descriptor for the thread LIST. `listThreads`
+// returns these instead of full `ChatThread[]` so opening a project no
+// longer ships every thread's entire transcript over IPC + holds it all
+// in renderer memory. The full thread (with `messages`) is fetched lazily
+// per-thread via `getThread` when the user actually opens it.
+export interface ChatThreadMeta {
+  id: string;
+  projectId: string;
+  title: string;
+  createdAt: number;
+  updatedAt: number;
+  messageCount: number;
+  config?: ChatConfig;
+  // True when this thread has a persisted in-flight run (activeRun on any
+  // message) so the list can show a "running" affordance without messages.
+  hasActiveRun?: boolean;
+}
+
 // Metadata describing an in-flight chat run that was spawned inside a
 // detached tmux session. Persisted on disk so the watcher can resume
 // after an app restart — without this, closing the app would orphan the

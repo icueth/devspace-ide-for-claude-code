@@ -10,7 +10,12 @@ import type { WebContents } from 'electron';
 
 import { type ChatRunHandle } from '@main/services/TmuxChatRunner';
 import { createLogger } from '@shared/logger';
-import type { ChatConfig, ChatEvent, ChatThread } from '@shared/types';
+import type {
+  ChatConfig,
+  ChatEvent,
+  ChatThread,
+  ChatThreadMeta,
+} from '@shared/types';
 
 const logger = createLogger('ChatTranscript');
 
@@ -157,6 +162,15 @@ async function hydrateFromDisk(state: ProjectState): Promise<void> {
         await quarantine(filePath, 'invalid-shape');
         continue;
       }
+      // Strip an unsafe top-level run handle. `thread.activeRun` is the
+      // canonical field resume-on-boot consumes (and getThread now ships to
+      // the renderer), so a hostile chat JSON pointing runDir outside the
+      // threads dir must be neutralized here — symmetric with the per-message
+      // guard below.
+      const tar = (thread as { activeRun?: { runDir?: unknown } }).activeRun;
+      if (tar?.runDir && !isRunDirSafe(tar.runDir, state.projectPath)) {
+        delete (thread as { activeRun?: unknown }).activeRun;
+      }
       // Strip unsafe run handles before they reach orchestration code.
       for (const m of thread.messages) {
         const ar = (m as { activeRun?: { runDir?: unknown } }).activeRun;
@@ -245,10 +259,70 @@ export function subscribe(projectPath: string, wc: WebContents): void {
   });
 }
 
-export async function listThreads(projectPath: string): Promise<ChatThread[]> {
+/**
+ * Does this thread have a persisted in-flight run? The canonical record
+ * is `thread.activeRun` (set by ChatService while a tmux run is live), but
+ * older / partially-migrated thread JSON could also carry an `activeRun`
+ * on a message — so we check both. Used to drive the list's "running"
+ * affordance without shipping the messages themselves.
+ */
+function threadHasActiveRun(t: ChatThread): boolean {
+  if (t.activeRun) return true;
+  return t.messages.some(
+    (m) => !!(m as { activeRun?: unknown }).activeRun,
+  );
+}
+
+/**
+ * v0.27: return lightweight metadata for every thread instead of the full
+ * `ChatThread[]`. Opening a project no longer ships every thread's entire
+ * transcript over IPC + holds it all in renderer memory — the renderer
+ * fetches the full thread lazily via `getThread` when the user opens it.
+ *
+ * `messageCount` and `hasActiveRun` are derived from the in-memory thread
+ * so the list UI can show "running" affordances + message counts without
+ * the messages themselves. `config` is carried so the settings badge can
+ * render without a per-thread round-trip. Sort matches the old behavior
+ * (updatedAt desc).
+ */
+export async function listThreads(
+  projectPath: string,
+): Promise<ChatThreadMeta[]> {
   const s = getState(projectPath);
   await s.hydrationPromise;
-  return [...s.threads.values()].sort((a, b) => b.updatedAt - a.updatedAt);
+  return [...s.threads.values()]
+    .sort((a, b) => b.updatedAt - a.updatedAt)
+    .map(
+      (t): ChatThreadMeta => ({
+        id: t.id,
+        projectId: t.projectId,
+        title: t.title,
+        createdAt: t.createdAt,
+        updatedAt: t.updatedAt,
+        messageCount: t.messages.length,
+        hasActiveRun: threadHasActiveRun(t),
+        ...(t.config ? { config: t.config } : {}),
+      }),
+    );
+}
+
+/**
+ * Fetch the FULL hydrated thread (with `messages`) for the renderer's
+ * lazy-load. Mirrors the security pattern of deleteThread /
+ * updateThreadConfig — a non-UUID threadId is hostile (path-traversal
+ * vector if it ever reached the disk layer) so we throw rather than try
+ * to look it up. Returns null when the id is well-formed but unknown.
+ */
+export async function getThread(
+  projectPath: string,
+  threadId: string,
+): Promise<ChatThread | null> {
+  if (!isUuid(threadId)) {
+    throw new Error(`getThread: invalid threadId: ${threadId}`);
+  }
+  const s = getState(projectPath);
+  await s.hydrationPromise;
+  return s.threads.get(threadId) ?? null;
 }
 
 export async function createThread(

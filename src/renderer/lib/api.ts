@@ -5,6 +5,7 @@ import type {
   ChatEvent,
   ChatSendRequest,
   ChatThread,
+  ChatThreadMeta,
   CodeflowDoc,
   CodeflowFunctionEdge,
   CodeflowFunctionGraph,
@@ -192,6 +193,10 @@ export interface DevspaceApi {
   tmux: {
     listPanes: (sessionName?: string) => Promise<TmuxPane[]>;
     capturePane: (paneId: string, lines?: number) => Promise<string>;
+    capturePanes: (
+      paneIds: string[],
+      lines?: number,
+    ) => Promise<Record<string, string>>;
     selectPane: (paneId: string) => Promise<boolean>;
     sendKeys: (paneId: string, text: string, submit?: boolean) => Promise<boolean>;
     listSessions: () => Promise<TmuxSession[]>;
@@ -218,7 +223,11 @@ export interface DevspaceApi {
     edit: (req: LlmEditRequest) => Promise<LlmEditResponse>;
   };
   chat: {
-    listThreads: (projectPath: string) => Promise<ChatThread[]>;
+    listThreads: (projectPath: string) => Promise<ChatThreadMeta[]>;
+    getThread: (
+      projectPath: string,
+      threadId: string,
+    ) => Promise<ChatThread | null>;
     createThread: (projectPath: string, title?: string) => Promise<ChatThread>;
     deleteThread: (projectPath: string, threadId: string) => Promise<void>;
     send: (req: ChatSendRequest) => Promise<{ messageId: string }>;
@@ -706,6 +715,7 @@ function makeStubApi(): DevspaceApi {
     tmux: {
       listPanes: () => Promise.resolve([]),
       capturePane: () => Promise.resolve(''),
+      capturePanes: () => Promise.resolve({}),
       selectPane: () => Promise.resolve(false),
       sendKeys: () => Promise.resolve(false),
       listSessions: () => Promise.resolve([]),
@@ -733,6 +743,7 @@ function makeStubApi(): DevspaceApi {
     },
     chat: {
       listThreads: () => Promise.resolve([]),
+      getThread: () => Promise.resolve(null),
       createThread: notWired('chat.createThread'),
       deleteThread: notWired('chat.deleteThread'),
       send: notWired('chat.send'),

@@ -7,11 +7,13 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   createThread,
   deleteThread,
+  getThread,
   listThreads,
   persistThread,
   threadFile,
   updateThreadConfig,
 } from '@main/services/ChatTranscript';
+import type { ChatMessage } from '@shared/types';
 
 let tmpRoot: string;
 
@@ -215,5 +217,103 @@ describe('ChatTranscript thread CRUD', () => {
     const dir = path.dirname(threadFile(tmpRoot, thread.id));
     const stragglers = fs.readdirSync(dir).filter((f) => f.endsWith('.tmp'));
     expect(stragglers).toEqual([]);
+  });
+});
+
+// v0.27 performance split: listThreads ships lightweight metadata only, and
+// the full transcript is fetched lazily per-thread via getThread. These
+// tests pin that contract — the list must NOT carry `messages`, and the
+// derived counts / flags must be correct.
+describe('ChatTranscript metadata + lazy getThread (v0.27)', () => {
+  function makeMessage(overrides: Partial<ChatMessage> = {}): ChatMessage {
+    return {
+      id: '00000000-0000-0000-0000-00000000000a',
+      role: 'user',
+      content: 'hi',
+      toolCalls: [],
+      createdAt: 1,
+      status: 'done',
+      ...overrides,
+    };
+  }
+
+  it('listThreads returns metadata with NO messages field and an accurate messageCount', async () => {
+    const thread = await createThread(tmpRoot, 'meta thread');
+    thread.messages.push(makeMessage());
+    thread.messages.push(
+      makeMessage({
+        id: '00000000-0000-0000-0000-00000000000b',
+        role: 'assistant',
+        content: 'hello',
+      }),
+    );
+    await persistThread(tmpRoot, thread);
+
+    const metas = await listThreads(tmpRoot);
+    const meta = metas.find((m) => m.id === thread.id);
+    expect(meta).toBeDefined();
+    // The whole point of the split: no transcript shipped in the list.
+    expect((meta as unknown as Record<string, unknown>).messages).toBeUndefined();
+    expect(meta!.messageCount).toBe(2);
+    expect(meta!.title).toBe('meta thread');
+    expect(meta!.hasActiveRun).toBe(false);
+  });
+
+  it('listThreads sets hasActiveRun true when the thread carries an in-flight run', async () => {
+    const thread = await createThread(tmpRoot, 'running');
+    // Mirror the on-disk shape ChatService persists for a live tmux run.
+    thread.activeRun = {
+      runId: 'run-1',
+      sessionName: 'devspace-chatrun-1',
+      runDir: threadFile(tmpRoot, thread.id),
+      startedAt: Date.now(),
+      assistantMessageId: '00000000-0000-0000-0000-00000000000b',
+      kind: 'solo',
+    };
+    await persistThread(tmpRoot, thread);
+
+    const metas = await listThreads(tmpRoot);
+    const meta = metas.find((m) => m.id === thread.id);
+    expect(meta!.hasActiveRun).toBe(true);
+  });
+
+  it('listThreads carries the per-thread config when present', async () => {
+    const thread = await createThread(tmpRoot, 'cfg meta');
+    await updateThreadConfig(tmpRoot, thread.id, { model: 'opus' });
+
+    const metas = await listThreads(tmpRoot);
+    const meta = metas.find((m) => m.id === thread.id);
+    expect(meta!.config).toEqual({ model: 'opus' });
+  });
+
+  it('getThread returns the full thread WITH messages', async () => {
+    const thread = await createThread(tmpRoot, 'full');
+    thread.messages.push(makeMessage({ content: 'first' }));
+    await persistThread(tmpRoot, thread);
+
+    const full = await getThread(tmpRoot, thread.id);
+    expect(full).not.toBeNull();
+    expect(full!.id).toBe(thread.id);
+    expect(full!.messages).toHaveLength(1);
+    expect(full!.messages[0]!.content).toBe('first');
+  });
+
+  it('getThread throws on a non-UUID threadId (path-traversal guard)', async () => {
+    await expect(getThread(tmpRoot, '../../etc/passwd')).rejects.toThrow(
+      /invalid threadId/,
+    );
+    await expect(getThread(tmpRoot, 'not-a-uuid')).rejects.toThrow(
+      /invalid threadId/,
+    );
+  });
+
+  it('getThread returns null for a well-formed but unknown threadId', async () => {
+    // Touch the project so it hydrates, then ask for an id that isn't there.
+    await createThread(tmpRoot, 'present');
+    const missing = await getThread(
+      tmpRoot,
+      '99999999-9999-9999-9999-999999999999',
+    );
+    expect(missing).toBeNull();
   });
 });

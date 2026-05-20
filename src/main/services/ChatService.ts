@@ -72,6 +72,7 @@ const logger = createLogger('Chat');
 // thread before its JSON file is unlinked.
 export {
   createThread,
+  getThread,
   listThreads,
   subscribe,
   updateThreadConfig,

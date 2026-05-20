@@ -61,6 +61,7 @@ export const IPC = {
   // tmux inspection + interaction (for native Claude CLI agent teams)
   TMUX_LIST_PANES: 'tmux:list-panes',
   TMUX_CAPTURE_PANE: 'tmux:capture-pane',
+  TMUX_CAPTURE_PANES: 'tmux:capture-panes',
   TMUX_SELECT_PANE: 'tmux:select-pane',
   TMUX_SEND_KEYS: 'tmux:send-keys',
   TMUX_LIST_SESSIONS: 'tmux:list-sessions',
@@ -89,6 +90,7 @@ export const IPC = {
 
   // Chat (CLI-agent rendered as conversation, alternative to PTY dock)
   CHAT_LIST_THREADS: 'chat:list-threads',
+  CHAT_GET_THREAD: 'chat:get-thread',
   CHAT_CREATE_THREAD: 'chat:create-thread',
   CHAT_DELETE_THREAD: 'chat:delete-thread',
   CHAT_SEND: 'chat:send',

@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import { applyEvent } from '@renderer/components/Dock/chatEvents';
+import {
+  applyEvent,
+  capLoaded,
+  MAX_LOADED_THREADS,
+} from '@renderer/components/Dock/chatEvents';
 import type { ChatEvent, ChatMessage, ChatThread } from '@shared/types';
 
 // These tests pin the identity contract that makes `memo(MessageBubble)`
@@ -112,5 +116,37 @@ describe('applyEvent identity invariants', () => {
     expect(after.messages[0].status).toBe('done');
     expect(after.messages[0]).not.toBe(streaming);
     expect(streaming.status).toBe('streaming'); // original untouched
+  });
+});
+
+// v0.27: the lazily-loaded full-transcript cache must stay bounded so opening
+// many threads in one session doesn't reaccumulate every transcript in memory.
+describe('capLoaded — bounds the renderer full-thread cache', () => {
+  function loadedMap(n: number): Record<string, ChatThread> {
+    const m: Record<string, ChatThread> = {};
+    for (let i = 0; i < n; i++) m[`t${i}`] = thread([]);
+    return m;
+  }
+
+  it('returns the map unchanged when at or under the cap', () => {
+    const m = loadedMap(MAX_LOADED_THREADS);
+    expect(capLoaded(m, 't0')).toBe(m);
+  });
+
+  it('evicts oldest-inserted entries down to the cap', () => {
+    const m = loadedMap(MAX_LOADED_THREADS + 3);
+    const out = capLoaded(m, `t${MAX_LOADED_THREADS + 2}`);
+    expect(Object.keys(out)).toHaveLength(MAX_LOADED_THREADS);
+    // The three oldest (t0, t1, t2) are gone.
+    expect(out['t0']).toBeUndefined();
+    expect(out['t1']).toBeUndefined();
+    expect(out['t2']).toBeUndefined();
+  });
+
+  it('never evicts the active thread even when it is the oldest', () => {
+    const m = loadedMap(MAX_LOADED_THREADS + 2);
+    const out = capLoaded(m, 't0'); // t0 is the oldest but is active
+    expect(Object.keys(out)).toHaveLength(MAX_LOADED_THREADS);
+    expect(out['t0']).toBeDefined();
   });
 });
