@@ -266,3 +266,111 @@ describe('openCodeAdapter — parseStreamLine', () => {
     expect(openCodeAdapter.parseStreamLine!('{"type":"text"}')).toBeNull();
   });
 });
+
+describe('openCodeAdapter — parseStreamLine (opencode v1.2.27 real shapes)', () => {
+  // v0.30 bug: opencode emits text inside obj.part.text, NOT obj.text directly.
+  // The first ship of the parser missed this and every text event returned
+  // null → user saw "Done" with no response visible. v0.30.1 pins all four
+  // production shapes (text/reasoning/error/session.error) against regression.
+
+  it('parses text event with nested part.text (the v0.30 regression)', () => {
+    const event = openCodeAdapter.parseStreamLine!(
+      JSON.stringify({
+        type: 'text',
+        timestamp: 1000,
+        sessionID: 'ses_abc',
+        part: {
+          type: 'text',
+          id: 'prt_xyz',
+          sessionID: 'ses_abc',
+          messageID: 'msg_123',
+          text: 'Hello from opencode',
+          time: { start: 1000, end: 1100 },
+        },
+      }),
+    );
+    expect(event?.kind).toBe('text_delta');
+    expect(event?.text).toBe('Hello from opencode');
+  });
+
+  it('keeps the flat-shape fallback for forward compatibility', () => {
+    // If opencode ever flattens the shape, we don't want to regress users.
+    const event = openCodeAdapter.parseStreamLine!(
+      JSON.stringify({ type: 'text', text: 'flat shape' }),
+    );
+    expect(event?.kind).toBe('text_delta');
+    expect(event?.text).toBe('flat shape');
+  });
+
+  it('parses reasoning events as text_delta (thinking blocks)', () => {
+    const event = openCodeAdapter.parseStreamLine!(
+      JSON.stringify({
+        type: 'reasoning',
+        timestamp: 2000,
+        sessionID: 'ses_abc',
+        part: { type: 'reasoning', text: 'Let me think...', time: { start: 2000 } },
+      }),
+    );
+    expect(event?.kind).toBe('text_delta');
+    expect(event?.text).toBe('Let me think...');
+  });
+
+  it('parses session.error with nested error.message', () => {
+    const event = openCodeAdapter.parseStreamLine!(
+      JSON.stringify({
+        type: 'session.error',
+        timestamp: 3000,
+        sessionID: 'ses_abc',
+        properties: {
+          error: { name: 'ProviderAuthError', message: 'invalid api key' },
+        },
+      }),
+    );
+    expect(event?.kind).toBe('error');
+    expect(event?.message).toBe('invalid api key');
+  });
+
+  it('parses top-level error with error.message object shape', () => {
+    const event = openCodeAdapter.parseStreamLine!(
+      JSON.stringify({
+        type: 'error',
+        error: { message: 'upstream timeout' },
+      }),
+    );
+    expect(event?.kind).toBe('error');
+    expect(event?.message).toBe('upstream timeout');
+  });
+
+  it('returns null for message.part.updated (v0.30.1 no-op — dedup deferred)', () => {
+    // Cumulative snapshots would duplicate text without runner-level dedup
+    // state. v0.30.2 will wire token-by-token streaming via partId tracking.
+    // Pinning the no-op here means a future contributor who wires
+    // message.part.updated MUST also wire dedup state — the test forces
+    // the conversation.
+    const event = openCodeAdapter.parseStreamLine!(
+      JSON.stringify({
+        type: 'message.part.updated',
+        properties: {
+          part: { type: 'text', id: 'prt_xyz', text: 'hello' },
+        },
+      }),
+    );
+    expect(event).toBeNull();
+  });
+
+  it('returns null for step_start / step_finish (lifecycle, not content)', () => {
+    expect(
+      openCodeAdapter.parseStreamLine!(
+        JSON.stringify({ type: 'step_start', part: {} }),
+      ),
+    ).toBeNull();
+    expect(
+      openCodeAdapter.parseStreamLine!(
+        JSON.stringify({
+          type: 'step_finish',
+          part: { type: 'step-finish', reason: 'stop', cost: 0.001 },
+        }),
+      ),
+    ).toBeNull();
+  });
+});

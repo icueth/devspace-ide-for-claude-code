@@ -206,10 +206,21 @@ function buildSpawnArgs(
 }
 
 // Stream-line parser. opencode --format json emits one JSON event per
-// line. The exact schema is evolving across opencode releases; we
-// pattern-match on a few well-known shapes and gracefully ignore
-// anything else. v0.30 ships text-delta + done; tool events are
-// deferred to v0.30.1 (see TODO below).
+// line. Real shape (confirmed against opencode v1.2.27 source):
+//
+//   {type, timestamp, sessionID, part?, error?, properties?}
+//
+// Each top-level event nests the actual data in `part` (TextPart,
+// ToolPart, ReasoningPart, StepStartPart, StepFinishPart). TextPart
+// puts the text at part.text — NOT obj.text. v0.30 shipped a parser
+// that looked at obj.text directly → every text event returned null
+// → user saw "Done" with no response. v0.30.1 fixes that.
+//
+// Known limit (documented for v0.30.2): we emit on the top-level `text`
+// event which fires once per finalized part. Streaming token-by-token
+// arrives via `message.part.updated`, but those are cumulative
+// snapshots — naively emitting them duplicates text. Proper handling
+// needs runner-level dedup state which is queued for v0.30.2.
 function parseStreamLine(line: string): ChatEvent | null {
   const trimmed = line.trim();
   if (!trimmed) return null;
@@ -225,33 +236,55 @@ function parseStreamLine(line: string): ChatEvent | null {
   if (!parsed || typeof parsed !== 'object') return null;
   const obj = parsed as Record<string, unknown>;
 
-  // Common shape: { type: 'text' | 'message' | 'done' | 'error', ... }
-  // We treat `text` / `message_delta` / `content` as streaming text and
-  // `done` / `complete` as terminal. Anything else returns null — the
-  // runner is lenient about unknown event types.
   const kind = String(obj.type ?? obj.event ?? '').toLowerCase();
   const ts = Date.now();
 
+  // text — finalized TextPart. opencode v1.2.27 shape:
+  //   {type:'text', timestamp, sessionID, part:{type:'text', text:'...', id, time, ...}}
+  // Fallback to top-level obj.text / obj.delta / obj.content so we keep
+  // working against future opencode versions that flatten the shape.
   if (kind === 'text' || kind === 'message_delta' || kind === 'content_delta') {
+    const part = obj.part as Record<string, unknown> | undefined;
     const text =
-      typeof obj.text === 'string'
-        ? obj.text
-        : typeof obj.delta === 'string'
-          ? obj.delta
-          : typeof obj.content === 'string'
-            ? obj.content
-            : '';
+      typeof part?.text === 'string' && part.text
+        ? part.text
+        : typeof obj.text === 'string'
+          ? obj.text
+          : typeof obj.delta === 'string'
+            ? obj.delta
+            : typeof obj.content === 'string'
+              ? obj.content
+              : '';
     if (!text) return null;
     return { kind: 'text_delta', text, ts };
   }
 
-  if (kind === 'error') {
-    const message =
-      typeof obj.message === 'string'
-        ? obj.message
-        : typeof obj.error === 'string'
-          ? obj.error
-          : 'opencode error';
+  // reasoning — thinking blocks (gpt-5-style models). Same nesting as
+  // TextPart. We surface them as text_delta in v0.30.1 because there's
+  // no dedicated `thinking` ChatEvent yet — a separate kind is queued
+  // for v0.30.2 so the renderer can render them dim/collapsed.
+  if (kind === 'reasoning') {
+    const part = obj.part as Record<string, unknown> | undefined;
+    const text = typeof part?.text === 'string' ? part.text : '';
+    if (!text) return null;
+    return { kind: 'text_delta', text, ts };
+  }
+
+  // error / session.error — both shapes exist; session.error nests
+  // under `properties`, top-level error puts the object at `obj.error`.
+  if (kind === 'error' || kind === 'session.error') {
+    const errRaw =
+      (obj.error as unknown) ??
+      ((obj.properties as Record<string, unknown> | undefined)?.error as unknown);
+    let message = 'opencode error';
+    if (typeof errRaw === 'string' && errRaw.trim()) {
+      message = errRaw;
+    } else if (errRaw && typeof errRaw === 'object') {
+      const m = (errRaw as Record<string, unknown>).message;
+      if (typeof m === 'string' && m.trim()) message = m;
+    } else if (typeof obj.message === 'string' && obj.message.trim()) {
+      message = obj.message;
+    }
     return { kind: 'error', message, ts };
   }
 
@@ -259,12 +292,11 @@ function parseStreamLine(line: string): ChatEvent | null {
     return { kind: 'done', ts };
   }
 
-  // TODO(v0.30.1): map opencode tool events (`tool_use`, `tool_result`)
-  // into ChatEvent.tool_use / tool_result so the renderer's existing
-  // ToolCard component can render them. v0.30 ships text-only — the
-  // summaryLabel chip says "~90% tools" because the underlying CLI
-  // supports tools, but DevSpace doesn't render them yet.
-
+  // Known v0.30.1 no-ops (will be wired in later patches):
+  //   - message.part.updated (streaming cumulative — needs dedup state)
+  //   - tool_use / tool_result (needs tool_use ChatEvent mapping)
+  //   - step_start / step_finish / session.status / permission.asked
+  //     (lifecycle signals, not user-visible content)
   return null;
 }
 

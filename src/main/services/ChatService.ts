@@ -52,7 +52,7 @@ import {
   startChatRun,
 } from '@main/services/TmuxChatRunner';
 import { getProfile, getProfileAsync } from '@main/services/LlmChatProfilesService';
-import { startLlmChatRun, type LlmRunMessage } from '@main/services/LlmChatRunner';
+import { startLlmChatRun, type LlmRunHandle, type LlmRunMessage } from '@main/services/LlmChatRunner';
 import {
   getProfile as getCliProfile,
   getProfileAsync as getCliProfileAsync,

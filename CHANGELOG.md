@@ -5,6 +5,62 @@ All notable changes to DevSpace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.30.1] — 2026-05-22
+
+OpenCode parser hotfix (BRANCH BUILD — `feat/multi-cli`, not merged to
+main yet). v0.30.0 shipped with an OpenCode stream parser that missed
+the actual event shape — user said "hello", saw a Done indicator, and
+no response text. This release fixes that and pins all four real event
+shapes against regression. Streaming behaviour and tool events are
+still deferred (text appears once when the part completes, not
+token-by-token); v0.30.2 will wire token streaming with partId dedup.
+
+### Fixed
+
+- **OpenCode "Done with no response" bug** — `parseStreamLine` was
+  reading `obj.text` directly, but opencode v1.2.27 nests the text in
+  `obj.part.text` for `{type:'text'}` events. Parser now extracts from
+  `part.text` with a flat-shape fallback so future opencode versions
+  that flatten the wire format don't break the same way.
+- **`reasoning` events surfaced as text_delta** — gpt-5-style thinking
+  blocks were silently dropped before. They're rendered as plain text
+  in v0.30.1 (a dedicated `thinking` ChatEvent kind is queued for
+  v0.30.2 so the renderer can dim/collapse them).
+- **`session.error` with nested `properties.error.message`** — opencode
+  emits provider auth failures and rate-limit errors through this
+  event shape. Previously the error message was lost; now it surfaces
+  in the chat as an `error` event so users see "invalid api key" /
+  "rate limited" instead of a silent failure.
+- **Pre-existing typecheck error** — v0.30.0 commit `d51870e` left a
+  `handle as unknown as LlmRunHandle` cast at ChatService.ts:1261
+  without importing `LlmRunHandle`. Tests + the electron-vite build
+  passed because both paths run through permissive transformers; only
+  strict `tsc --noEmit` caught it. Importing the type as v0.30.1
+  unblocks `pnpm typecheck`. The SHIP-NOTE comment above the cast
+  still stands — collapsing `activeLlmRunHandle` into a discriminated
+  union is a v0.30.2 refactor, not a hotfix.
+
+### Tests
+
+- **+7 regression tests** in `opencode.test.ts` pinning the real
+  opencode v1.2.27 event shapes (`text` with nested part, `reasoning`,
+  `session.error`, top-level `error`, `message.part.updated` as a
+  documented no-op, `step_start` / `step_finish` as lifecycle no-ops).
+  `message.part.updated` no-op is intentional and pinned: a future
+  contributor who wires that event MUST also wire runner-level dedup
+  state — the test forces that conversation.
+- 930/930 vitest pass (was 923, +7).
+
+### Honest v0.30.1 limits (still deferred)
+
+- Text appears at part completion, not token-by-token. Streaming
+  smoothness needs runner-level dedup state for `message.part.updated`.
+- No tool cards / diff preview / Devlog auto-capture for OpenCode
+  threads (Claude path unchanged). Capability chip honestly says
+  `Plain text (v0.30)`.
+- No resume-on-boot for OpenCode threads — orphan sweep still flips
+  interrupted runs to `error: 'interrupted'`.
+
 ## [0.30.0] — 2026-05-22
 
 Multi-CLI runtime support (BRANCH BUILD — `feat/multi-cli`, not merged to
