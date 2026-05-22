@@ -88,6 +88,14 @@ export const IPC = {
   LLM_COMPLETE: 'llm:complete',
   LLM_EDIT: 'llm:edit',
 
+  // v0.29: per-profile chat profiles — separate file/store from the
+  // single autocomplete config. The chat panel's provider dropdown reads
+  // these. `LLM_TEST` is reused for both surfaces (it just takes a
+  // config object regardless of source).
+  LLM_CHAT_PROFILES_LIST: 'llm:chat-profiles:list',
+  LLM_CHAT_PROFILES_UPSERT: 'llm:chat-profiles:upsert',
+  LLM_CHAT_PROFILES_DELETE: 'llm:chat-profiles:delete',
+
   // Chat (CLI-agent rendered as conversation, alternative to PTY dock)
   CHAT_LIST_THREADS: 'chat:list-threads',
   CHAT_GET_THREAD: 'chat:get-thread',

@@ -54,6 +54,8 @@ import {
 } from '@main/services/ClaudeCliLauncher';
 import { shutdownAll as shutdownDevServers } from '@main/services/DevServerService';
 import { shutdownWatchers } from '@main/services/FileWatcherService';
+import { preloadLlmConfig } from '@main/services/LlmConfigService';
+import { preloadProfiles } from '@main/services/LlmChatProfilesService';
 import { init as initMemory } from '@main/services/MemoryService';
 import { shutdownAll as shutdownPtyPool } from '@main/services/PtyPool';
 import { pruneStaleSessions as pruneStaleTmuxSessions } from '@main/services/TmuxChatRunner';
@@ -283,6 +285,12 @@ app.whenReady().then(async () => {
   void initMemory().catch((err) => {
     console.error('[main] memory init failed:', (err as Error).message);
   });
+
+  // Pre-warm LLM config + chat profile caches so the first autocomplete
+  // tick / chat-panel mount doesn't pay the I/O cost. Both are
+  // best-effort and never throw.
+  preloadLlmConfig();
+  preloadProfiles();
 
   // Prune stale tmux sessions older than 2 days. Sessions are created by
   // chat runs, design generations, and CLI launchers — without this, a

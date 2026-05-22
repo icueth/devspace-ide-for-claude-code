@@ -68,8 +68,14 @@ export async function saveLlmConfig(next: LlmConfig): Promise<LlmConfig> {
         DEFAULT_CONFIG.autocompleteDebounceMs,
       ) ?? DEFAULT_CONFIG.autocompleteDebounceMs,
   };
-  await fs.promises.mkdir(path.dirname(configFile()), { recursive: true });
-  await atomicWriteAsync(configFile(), JSON.stringify(sanitized, null, 2));
+  // SECRET file — apiKey lives here. 0o600 + 0o700 dir so a shared-system
+  // snoop (or any process running as another local user) can't lift the
+  // key. atomicWriteAsync inherits the tmp file's mode on rename, so
+  // setting it once at write time is sufficient.
+  await atomicWriteAsync(configFile(), JSON.stringify(sanitized, null, 2), {
+    mode: 0o600,
+    dirMode: 0o700,
+  });
   cache = sanitized;
   logger.info(
     `saved: provider=${sanitized.provider} model=${sanitized.model} autocomplete=${sanitized.autocompleteEnabled}`,

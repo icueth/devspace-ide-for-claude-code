@@ -14,6 +14,7 @@ function emptyState(): ProjectState {
     projectPath: '/tmp/devspace-test',
     threads: new Map(),
     activeRunHandle: null,
+    activeLlmRunHandle: null,
     activeThreadId: null,
     subscribers: new Set(),
     hydrationPromise: Promise.resolve(),

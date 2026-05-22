@@ -30,17 +30,44 @@ async function renameWithRetry(src: string, dest: string): Promise<void> {
   }
 }
 
+export interface AtomicWriteOpts {
+  /**
+   * File mode bits applied to the tmp write (inherited by the target on
+   * rename). Pass `0o600` for credentials-bearing files so they're not
+   * world-readable on shared systems.
+   */
+  mode?: number;
+  /**
+   * Directory mode bits applied to the parent mkdir. Pass `0o700` for
+   * directories that should only be reachable by the owner.
+   */
+  dirMode?: number;
+}
+
 /**
  * Async atomic write: write to a tmp sibling then rename over the target.
  * Uses best-effort fsync and tolerates EXDEV/EPERM transient errors.
+ *
+ * Pass `mode: 0o600` for credential files (API keys, tokens). Default
+ * mode is 0o666 & ~umask (typically 0o644 — world-readable).
  */
-export async function atomicWriteAsync(targetPath: string, data: string): Promise<void> {
+export async function atomicWriteAsync(
+  targetPath: string,
+  data: string,
+  opts: AtomicWriteOpts = {},
+): Promise<void> {
   const dir = path.dirname(targetPath);
   const tmpPath = path.join(dir, `.tmp.${randomUUID()}`);
 
   try {
-    await fs.promises.mkdir(dir, { recursive: true });
-    await fs.promises.writeFile(tmpPath, data, 'utf8');
+    await fs.promises.mkdir(dir, {
+      recursive: true,
+      ...(opts.dirMode !== undefined ? { mode: opts.dirMode } : {}),
+    });
+    await fs.promises.writeFile(tmpPath, data, {
+      encoding: 'utf8',
+      ...(opts.mode !== undefined ? { mode: opts.mode } : {}),
+    });
 
     let fd: fs.promises.FileHandle | null = null;
     try {

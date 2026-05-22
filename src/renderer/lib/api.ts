@@ -13,6 +13,7 @@ import type {
   CodeflowGraphEdge,
   CodeflowStatus,
   DirEntry,
+  LlmChatProfile,
   LlmCompleteRequest,
   LlmCompleteResponse,
   LlmConfig,
@@ -218,9 +219,12 @@ export interface DevspaceApi {
   llm: {
     getConfig: () => Promise<LlmConfig>;
     setConfig: (cfg: LlmConfig) => Promise<LlmConfig>;
-    test: (cfg: LlmConfig) => Promise<LlmTestResult>;
+    test: (cfg: LlmConfig | LlmChatProfile) => Promise<LlmTestResult>;
     complete: (req: LlmCompleteRequest) => Promise<LlmCompleteResponse>;
     edit: (req: LlmEditRequest) => Promise<LlmEditResponse>;
+    listChatProfiles: () => Promise<LlmChatProfile[]>;
+    upsertChatProfile: (profile: LlmChatProfile) => Promise<LlmChatProfile>;
+    deleteChatProfile: (id: string) => Promise<void>;
   };
   chat: {
     listThreads: (projectPath: string) => Promise<ChatThreadMeta[]>;
@@ -228,7 +232,11 @@ export interface DevspaceApi {
       projectPath: string,
       threadId: string,
     ) => Promise<ChatThread | null>;
-    createThread: (projectPath: string, title?: string) => Promise<ChatThread>;
+    createThread: (
+      projectPath: string,
+      title?: string,
+      llmProfileId?: string,
+    ) => Promise<ChatThread>;
     deleteThread: (projectPath: string, threadId: string) => Promise<void>;
     send: (req: ChatSendRequest) => Promise<{ messageId: string }>;
     cancel: (projectPath: string) => Promise<void>;
@@ -740,6 +748,9 @@ function makeStubApi(): DevspaceApi {
       test: notWired('llm.test'),
       complete: () => Promise.resolve({ text: '', latencyMs: 0 }),
       edit: () => Promise.resolve({ text: '', latencyMs: 0 }),
+      listChatProfiles: () => Promise.resolve([]),
+      upsertChatProfile: notWired('llm.upsertChatProfile'),
+      deleteChatProfile: notWired('llm.deleteChatProfile'),
     },
     chat: {
       listThreads: () => Promise.resolve([]),

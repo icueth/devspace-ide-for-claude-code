@@ -1,5 +1,7 @@
+import { assertSafeBaseUrl } from '@main/utils/urlSafety';
 import { createLogger } from '@shared/logger';
 import type {
+  LlmChatProfile,
   LlmCompleteRequest,
   LlmCompleteResponse,
   LlmConfig,
@@ -9,6 +11,18 @@ import type {
 } from '@shared/types';
 
 const logger = createLogger('LlmClient');
+
+// SSE safety caps — defense against hostile/buggy upstream that streams
+// forever, never emits a newline, or sends a single 1-GB "line". Hitting
+// either cap throws and is converted to `{ error }` by the caller's
+// non-throwing contract.
+const MAX_SSE_LINE_BYTES = 1 << 20;        // 1 MB per line
+const MAX_RESPONSE_BYTES = 16 * 1024 * 1024; // 16 MB aggregate text
+
+// All call sites allow loopback by default so users running local
+// Ollama / LM Studio / vLLM aren't broken. The metadata/private-network
+// blocks still apply (AWS IMDS, 10/8, 192.168/16, IPv6 ULA).
+const URL_SAFETY_OPTS = { allowLoopback: true } as const;
 
 interface ChatMessage {
   role: 'system' | 'user' | 'assistant';
@@ -33,6 +47,15 @@ export async function chatComplete(
 
   if (!config.apiKey) {
     return { text: '', latencyMs: 0, error: 'No API key configured.' };
+  }
+  // SSRF gate — block private / metadata / non-http(s) baseUrls before
+  // any apiKey hits the wire. Returning the error keeps the never-throw
+  // contract; the autocomplete path will surface it through its usual
+  // error display (Settings → LLM Test button / inline diagnostic).
+  try {
+    assertSafeBaseUrl(config.baseUrl, URL_SAFETY_OPTS);
+  } catch (err) {
+    return { text: '', latencyMs: 0, error: (err as Error).message };
   }
 
   if (config.provider === 'anthropic') {
@@ -62,7 +85,7 @@ export async function chatComplete(
  * field, so it gets dropped automatically — only the inline tag form
  * needs explicit stripping here.
  */
-function stripThinkingTags(text: string): string {
+export function stripThinkingTags(text: string): string {
   if (!text) return text;
   let out = text;
   // Closed think/thinking blocks anywhere in the text. Multi-line.
@@ -442,6 +465,404 @@ export async function editForSelection(
   const fenceMatch = text.match(/^```[\w]*\s*\n([\s\S]*?)\n```\s*$/);
   if (fenceMatch) text = fenceMatch[1] ?? text;
   return { text, latencyMs: Date.now() - t0 };
+}
+
+// ─── Streaming chat (v0.29) ────────────────────────────────────────────────
+//
+// SSE-driven variant of chatComplete for the new LlmChatRunner. Streams
+// text deltas + final usage to the caller as they arrive instead of
+// returning one giant string at the end. Mirrors chatComplete's branching
+// on provider — OpenAI's /chat/completions and Anthropic's /v1/messages
+// both speak SSE but with different event shapes.
+//
+// IMPORTANT: kept SIBLING to chatComplete (not a replacement). chatComplete
+// is used by autocomplete + Cmd+K and is intentionally NON-streaming —
+// callers consume one terminal result. This streaming variant ONLY backs
+// chat-panel turns where the renderer paints deltas as they arrive.
+
+export interface StreamingChatOpts {
+  signal?: AbortSignal;
+  maxTokens?: number;
+  temperature?: number;
+  onDelta: (text: string) => void;
+  onUsage?: (u: { input: number; output: number }) => void;
+}
+
+export interface StreamingChatResult {
+  text: string;
+  latencyMs: number;
+  error?: string;
+  modelEcho?: string;
+}
+
+interface StreamingChatMessage {
+  role: 'system' | 'user' | 'assistant';
+  content: string;
+}
+
+/**
+ * Stream a chat completion. Aggregates deltas into the returned `text` so
+ * the caller can persist the full response without re-stitching events,
+ * AND fires opts.onDelta for each incremental chunk so the renderer
+ * paints live. Returns `{ error }` on failure (matches chatComplete's
+ * never-throw contract); abort via opts.signal cleanly cancels.
+ *
+ * Cancellation: opts.signal is passed straight to fetch. When the signal
+ * aborts mid-stream, the reader read() throws AbortError which we catch
+ * and surface as `{ cancelled }` semantics by returning the partial text
+ * with no error — the caller (LlmChatRunner) decides whether to broadcast
+ * an error or a clean cancel based on whether IT initiated the abort.
+ */
+export async function chatCompleteStreaming(
+  config: LlmConfig | LlmChatProfile,
+  messages: StreamingChatMessage[],
+  opts: StreamingChatOpts,
+): Promise<StreamingChatResult> {
+  const t0 = Date.now();
+  const maxTokens = opts.maxTokens ?? config.maxTokens ?? 1024;
+  const temperature = opts.temperature ?? config.temperature ?? 0.7;
+
+  if (!config.apiKey) {
+    return { text: '', latencyMs: Date.now() - t0, error: 'No API key configured.' };
+  }
+  // SSRF gate — same posture as chatComplete. Loopback allowed for
+  // local Ollama/LM Studio; metadata + private networks blocked.
+  try {
+    assertSafeBaseUrl(config.baseUrl, URL_SAFETY_OPTS);
+  } catch (err) {
+    return { text: '', latencyMs: Date.now() - t0, error: (err as Error).message };
+  }
+
+  if (config.provider === 'anthropic') {
+    return anthropicStream(config, messages, {
+      signal: opts.signal,
+      maxTokens,
+      temperature,
+      onDelta: opts.onDelta,
+      onUsage: opts.onUsage,
+    }).then((r) => ({ ...r, latencyMs: Date.now() - t0 }));
+  }
+  return openaiStream(config, messages, {
+    signal: opts.signal,
+    maxTokens,
+    temperature,
+    onDelta: opts.onDelta,
+    onUsage: opts.onUsage,
+  }).then((r) => ({ ...r, latencyMs: Date.now() - t0 }));
+}
+
+// Iterate a fetch response body line-by-line. We can't use a TextDecoder
+// in the stream pipe directly because SSE events can span multiple chunks
+// — manual buffering is simplest. Lines come back WITHOUT trailing '\n'.
+async function* iterSseLines(
+  body: ReadableStream<Uint8Array>,
+  signal?: AbortSignal,
+): AsyncGenerator<string> {
+  const reader = body.getReader();
+  const decoder = new TextDecoder('utf-8');
+  let buffer = '';
+  try {
+    while (true) {
+      if (signal?.aborted) return;
+      const { value, done } = await reader.read();
+      if (done) {
+        if (buffer.length > 0) yield buffer;
+        return;
+      }
+      buffer += decoder.decode(value, { stream: true });
+      // Per-line cap — hostile/buggy upstream that never emits \n would
+      // otherwise grow `buffer` until V8 OOMs the main process, taking
+      // every open project's renderer down with it.
+      if (buffer.length > MAX_SSE_LINE_BYTES) {
+        throw new Error(
+          `sse: line exceeds ${MAX_SSE_LINE_BYTES} bytes (no newline)`,
+        );
+      }
+      let nl: number;
+      while ((nl = buffer.indexOf('\n')) !== -1) {
+        const line = buffer.slice(0, nl);
+        buffer = buffer.slice(nl + 1);
+        // Strip trailing \r so CRLF SSE servers parse the same.
+        yield line.endsWith('\r') ? line.slice(0, -1) : line;
+      }
+    }
+  } finally {
+    try {
+      reader.releaseLock();
+    } catch {
+      /* already released */
+    }
+  }
+}
+
+async function openaiStream(
+  config: LlmConfig | LlmChatProfile,
+  messages: StreamingChatMessage[],
+  opts: {
+    signal?: AbortSignal;
+    maxTokens: number;
+    temperature: number;
+    onDelta: (text: string) => void;
+    onUsage?: (u: { input: number; output: number }) => void;
+  },
+): Promise<{ text: string; error?: string; modelEcho?: string }> {
+  const url = stripTrailingSlash(config.baseUrl) + '/chat/completions';
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${config.apiKey}`,
+      },
+      body: JSON.stringify({
+        model: config.model,
+        messages,
+        max_tokens: opts.maxTokens,
+        temperature: opts.temperature,
+        stream: true,
+        // Streaming responses also benefit from disabled thinking when
+        // talking to vLLM-hosted Qwen3 / DeepSeek-R1 / etc. — same
+        // reasoning as the non-streaming path.
+        stream_options: { include_usage: true },
+        enable_thinking: false,
+        chat_template_kwargs: { enable_thinking: false },
+      }),
+      signal: opts.signal,
+    });
+  } catch (err) {
+    // AbortError from caller-driven cancel — surface empty text + no
+    // error so the caller decides whether to flag this as a cancel or
+    // error based on whether THEY aborted.
+    if ((err as Error).name === 'AbortError') {
+      return { text: '' };
+    }
+    return { text: '', error: `network: ${(err as Error).message}` };
+  }
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    return {
+      text: '',
+      error: `HTTP ${res.status}: ${body.slice(0, 400) || res.statusText}`,
+    };
+  }
+  if (!res.body) {
+    return { text: '', error: 'no response body (stream)' };
+  }
+
+  let full = '';
+  let modelEcho: string | undefined;
+  let lastUsage: { input: number; output: number } | undefined;
+
+  try {
+    for await (const line of iterSseLines(res.body, opts.signal)) {
+      if (!line.startsWith('data:')) continue;
+      const data = line.slice(5).trim();
+      if (!data) continue;
+      if (data === '[DONE]') break;
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(data);
+      } catch {
+        // Some proxies emit comment/keepalive lines; skip silently.
+        continue;
+      }
+      const d = parsed as {
+        model?: string;
+        choices?: {
+          delta?: { content?: string; reasoning_content?: string };
+          finish_reason?: string | null;
+        }[];
+        usage?: { prompt_tokens?: number; completion_tokens?: number };
+      };
+      if (d.model && !modelEcho) modelEcho = d.model;
+      const delta = d.choices?.[0]?.delta?.content;
+      if (typeof delta === 'string' && delta.length > 0) {
+        // stripThinkingTags trims whitespace, which would corrupt
+        // per-chunk streaming (a delta of ", " becomes ","). Only invoke
+        // it when the chunk actually contains a think tag — the common
+        // path is a no-op pass-through that preserves spaces.
+        const safe = /<think/i.test(delta) ? stripThinkingTags(delta) : delta;
+        if (safe.length > 0) {
+          if (full.length + safe.length > MAX_RESPONSE_BYTES) {
+            throw new Error(
+              `sse: response exceeds ${MAX_RESPONSE_BYTES} bytes — runaway stream aborted`,
+            );
+          }
+          full += safe;
+          opts.onDelta(safe);
+        }
+      }
+      if (d.usage) {
+        lastUsage = {
+          input: d.usage.prompt_tokens ?? 0,
+          output: d.usage.completion_tokens ?? 0,
+        };
+      }
+    }
+  } catch (err) {
+    if ((err as Error).name === 'AbortError') {
+      // Caller-initiated abort. Return whatever we collected; caller
+      // decides cancel-vs-error.
+      if (lastUsage) opts.onUsage?.(lastUsage);
+      return { text: full, modelEcho };
+    }
+    return { text: full, error: `stream read: ${(err as Error).message}` };
+  }
+
+  if (lastUsage) opts.onUsage?.(lastUsage);
+  return { text: full, modelEcho };
+}
+
+async function anthropicStream(
+  config: LlmConfig | LlmChatProfile,
+  messages: StreamingChatMessage[],
+  opts: {
+    signal?: AbortSignal;
+    maxTokens: number;
+    temperature: number;
+    onDelta: (text: string) => void;
+    onUsage?: (u: { input: number; output: number }) => void;
+  },
+): Promise<{ text: string; error?: string; modelEcho?: string }> {
+  const url = stripTrailingSlash(config.baseUrl) + '/v1/messages';
+  const systemMessages = messages.filter((m) => m.role === 'system');
+  const conversation = messages.filter((m) => m.role !== 'system');
+  const system = systemMessages.map((m) => m.content).join('\n\n');
+
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': config.apiKey,
+        'anthropic-version': '2023-06-01',
+        'anthropic-dangerous-direct-browser-access': 'true',
+      },
+      body: JSON.stringify({
+        model: config.model,
+        max_tokens: opts.maxTokens,
+        temperature: opts.temperature,
+        stream: true,
+        ...(system ? { system } : {}),
+        messages: conversation.map((m) => ({
+          role: m.role,
+          content: m.content,
+        })),
+      }),
+      signal: opts.signal,
+    });
+  } catch (err) {
+    if ((err as Error).name === 'AbortError') {
+      return { text: '' };
+    }
+    return { text: '', error: `network: ${(err as Error).message}` };
+  }
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    return {
+      text: '',
+      error: `HTTP ${res.status}: ${body.slice(0, 400) || res.statusText}`,
+    };
+  }
+  if (!res.body) {
+    return { text: '', error: 'no response body (stream)' };
+  }
+
+  let full = '';
+  let modelEcho: string | undefined;
+  let inputTokens = 0;
+  let outputTokens = 0;
+
+  try {
+    for await (const line of iterSseLines(res.body, opts.signal)) {
+      // Anthropic SSE format: `event: <name>\ndata: {...}\n\n` — we only
+      // care about the data lines, the event lines are advisory (the JSON
+      // payload always carries its own `type` field).
+      if (!line.startsWith('data:')) continue;
+      const data = line.slice(5).trim();
+      if (!data) continue;
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(data);
+      } catch {
+        continue;
+      }
+      const ev = parsed as {
+        type?: string;
+        delta?: {
+          type?: string;
+          text?: string;
+          stop_reason?: string;
+          usage?: { input_tokens?: number; output_tokens?: number };
+        };
+        message?: {
+          model?: string;
+          usage?: { input_tokens?: number; output_tokens?: number };
+        };
+        usage?: { input_tokens?: number; output_tokens?: number };
+      };
+
+      if (ev.type === 'message_start') {
+        if (ev.message?.model) modelEcho = ev.message.model;
+        if (ev.message?.usage) {
+          inputTokens = ev.message.usage.input_tokens ?? 0;
+          outputTokens = ev.message.usage.output_tokens ?? 0;
+        }
+      } else if (ev.type === 'content_block_delta') {
+        // delta.type === 'text_delta' carries .text; 'thinking_delta'
+        // and 'input_json_delta' don't go into the visible turn.
+        if (ev.delta?.type === 'text_delta' && typeof ev.delta.text === 'string') {
+          const txt = ev.delta.text;
+          // Same per-chunk-trim guard as the OpenAI branch: only strip
+          // when a think tag is actually present so a leading space in
+          // a regular delta isn't swallowed.
+          const safe = /<think/i.test(txt) ? stripThinkingTags(txt) : txt;
+          if (safe.length > 0) {
+            if (full.length + safe.length > MAX_RESPONSE_BYTES) {
+              throw new Error(
+                `sse: response exceeds ${MAX_RESPONSE_BYTES} bytes — runaway stream aborted`,
+              );
+            }
+            full += safe;
+            opts.onDelta(safe);
+          }
+        }
+      } else if (ev.type === 'message_delta') {
+        if (ev.usage) {
+          // message_delta carries cumulative output_tokens.
+          if (typeof ev.usage.input_tokens === 'number')
+            inputTokens = ev.usage.input_tokens;
+          if (typeof ev.usage.output_tokens === 'number')
+            outputTokens = ev.usage.output_tokens;
+        }
+      } else if (ev.type === 'message_stop') {
+        break;
+      } else if (ev.type === 'error') {
+        // Anthropic's error event carries a message envelope.
+        const errEv = parsed as { error?: { message?: string; type?: string } };
+        return {
+          text: full,
+          error: errEv.error?.message ?? 'anthropic stream error',
+          modelEcho,
+        };
+      }
+    }
+  } catch (err) {
+    if ((err as Error).name === 'AbortError') {
+      if (inputTokens || outputTokens) {
+        opts.onUsage?.({ input: inputTokens, output: outputTokens });
+      }
+      return { text: full, modelEcho };
+    }
+    return { text: full, error: `stream read: ${(err as Error).message}` };
+  }
+
+  if (inputTokens || outputTokens) {
+    opts.onUsage?.({ input: inputTokens, output: outputTokens });
+  }
+  return { text: full, modelEcho };
 }
 
 function guessLanguageFromFilename(filename: string): string {

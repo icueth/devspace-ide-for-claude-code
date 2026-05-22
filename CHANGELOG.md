@@ -5,6 +5,103 @@ All notable changes to DevSpace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.29.0] — 2026-05-22
+
+LLM chat profiles. The Claude path stays the headline feature, but now
+you can plug in additional chat-only LLM endpoints (OpenAI, Anthropic
+direct, OpenAI-compatible local servers like Ollama / LM Studio / vLLM)
+and pick one from a new dropdown next to the Team picker in the chat
+panel. Each profile is independent — switching the dropdown creates a
+fresh thread bound to that profile, so contexts don't mix.
+
+### Added
+
+- **Settings → LLM → Chat profiles** — a new section below the existing
+  inline-autocomplete config. Add / edit / delete profiles (name,
+  provider, baseUrl, apiKey, model, optional temperature / max tokens /
+  system prompt). Inline `Test` button reuses the same endpoint as the
+  autocomplete config so you can verify credentials before saving.
+- **Chat panel provider dropdown** — sits to the LEFT of the Team picker.
+  Defaults to `🤖 Claude (default)`; switching to a profile spawns a new
+  thread bound to it. The top thread selector appends `· ProfileName` so
+  you can see at a glance which threads are non-Claude.
+- **`LlmChatRunner`** — streaming-fetch runner that emits ChatEvent
+  `text_delta` + `done` events the existing renderer reducer consumes
+  unchanged. No tool cards, no diff preview, no AskUserQuestion — LLM
+  threads are plain prose only (Claude-specific UX stays on the Claude
+  path).
+- **Project context for LLM threads** — memory + devlog preambles are
+  prepended as a system message at the head of every new LLM turn, so
+  Claude-style "knows about this project" survives the provider swap.
+
+### Security (review pass)
+
+The Wave 2 Security + Code reviews surfaced 2 BLOCKERS + 6 HIGH + 5 MED
+findings — all fixed before commit:
+
+- **SSRF defense** (`src/main/utils/urlSafety.ts`) — new `assertSafeBaseUrl`
+  blocks AWS IMDS (`169.254.169.254`), GCP metadata, RFC-1918 private
+  IPs (10/8, 172.16/12, 192.168/16), IPv6 ULA + link-local, and
+  non-http(s) schemes (`file://`, `javascript:`, `data:`). Loopback is
+  permitted for local Ollama / LM Studio. Enforced at 4 sites:
+  `upsertProfile`, `chatComplete`, `chatCompleteStreaming`, and the
+  `LLM_TEST` IPC.
+- **`LLM_TEST` rate limit + payload sanitizer** — 6 calls/min/webContents
+  + drop unknown fields before constructing the test config. Closes the
+  fingerprinting / credential-spray oracle the Security review flagged.
+- **0o600 secret files** — `atomicWriteAsync` gained optional `mode` +
+  `dirMode` opts; both `~/.devspace/llm-config.json` and
+  `~/.devspace/llm-chat-profiles.json` now write with owner-read-only
+  perms (was world-readable `0644` by default umask). Closes the
+  shared-system credential leak vector.
+- **SSE caps** — `iterSseLines` aborts on lines > 1 MB; aggregate text
+  response capped at 16 MB. Prevents a hostile or buggy upstream from
+  buffering forever and OOM-killing the main process.
+- **Orphaned-streaming sweep** (BLOCKER) — on hydrate, assistant messages
+  with `status: 'streaming'` and no `activeRun` (the LLM-crash case) get
+  flipped to `status: 'error'` with `error: 'interrupted'`. Without this,
+  an app crash mid-LLM-stream stranded the renderer composer in
+  "running" mode forever waiting for a `done` event that never arrived.
+- **`deleteThread` snapshot fix** — the original implementation nulled
+  `activeThreadId` in the tmux branch, leaving the LLM-handle branch
+  unable to match — a latent zombie-stream cleanup bug. Now snapshots
+  once at the top.
+- **`memoryInjected` only on success** — the LLM `runLlmTurn` previously
+  set the flag even when both preamble loaders threw, permanently
+  losing memory injection on that thread. Now requires at least one
+  loader to succeed.
+- **Double-click thread spam** — the provider dropdown's `onProfileChange`
+  could create N empty threads on fast double-click (the selection state
+  is updated asynchronously by an effect). Now guarded with a ref-based
+  in-flight marker.
+- **`apiKey` / `baseUrl` length caps** — 8 KB / 2 KB respectively, with a
+  separate system-prompt cap at 32 KB. Defense against a fat-fingered
+  paste blowing up the JSON write.
+- **maxTokens range alignment** — service raised cap from 32 k → 200 k
+  to match the renderer form (Anthropic Claude 3.5+ context).
+- **`ProfileEditor` unmount-mid-save error capture** — post-save reload
+  failures (which fire AFTER the editor unmounts) now route to a
+  section-level error banner instead of being silently dropped by
+  React's setState-on-unmounted guard.
+
+### Notes
+
+- The Claude path is byte-identical — `sendMessage` branches on
+  `thread.llmProfileId`. Existing threads with no profile id pass
+  through to the same `TmuxChatRunner` path with full tool cards, diff
+  preview, AskUserQuestion, Devlog auto-capture, and Forge signals.
+- The inline-autocomplete LlmConfig at `~/.devspace/llm-config.json`
+  is untouched. Same provider / model / apiKey form, same fetch path
+  (`chatComplete`). The new chat profiles file is parallel and separate.
+- Schema-level additions are backward-compatible: `ChatThread.llmProfileId`
+  and `ChatThreadMeta.llmProfileId` are both optional. Older threads
+  loaded from disk continue to deserialize cleanly.
+- 802 vitest tests pass (was 732 baseline → **+70** including 17
+  pre-commit security regression tests covering the SSRF helper, SSE
+  buffer caps, and orphan sweep).
+
+---
+
 ## [0.28.2] — 2026-05-20
 
 AskUserQuestion submit fix. After answering a multi-question card the UI

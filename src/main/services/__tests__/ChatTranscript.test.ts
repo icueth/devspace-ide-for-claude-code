@@ -316,4 +316,92 @@ describe('ChatTranscript metadata + lazy getThread (v0.27)', () => {
     );
     expect(missing).toBeNull();
   });
+
+  // v0.29 BLOCKER B1 regression — orphaned 'streaming' message sweep.
+  // The LLM path has no equivalent to the Claude tmux activeRun resume,
+  // so an app crash mid-stream would leave the assistant message stuck
+  // at status='streaming' forever, locking the renderer composer.
+  it("flips orphaned 'streaming' assistant messages to 'error' on hydrate", async () => {
+    const id = 'cccccccc-cccc-cccc-cccc-cccccccccccc';
+    const dir = path.join(tmpRoot, '.devspace', 'chat');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, `${id}.json`),
+      JSON.stringify({
+        id,
+        projectId: path.basename(tmpRoot),
+        title: 'orphaned',
+        createdAt: 1,
+        updatedAt: 2,
+        // No activeRun — LLM thread that died mid-stream.
+        messages: [
+          { id: 'u1', role: 'user', content: 'hi', toolCalls: [], createdAt: 1, status: 'done' },
+          {
+            id: 'a1',
+            role: 'assistant',
+            content: 'partial',
+            toolCalls: [],
+            createdAt: 2,
+            status: 'streaming',
+          },
+        ],
+      }),
+    );
+
+    const list = await listThreads(tmpRoot);
+    expect(list).toHaveLength(1);
+
+    // Sweep should have flipped status + persisted. Re-read fresh from disk.
+    const reloaded = JSON.parse(fs.readFileSync(path.join(dir, `${id}.json`), 'utf8'));
+    const assistant = reloaded.messages[1];
+    expect(assistant.status).toBe('error');
+    expect(assistant.error).toBe('interrupted');
+    expect(assistant.content).toBe('partial');  // partial text preserved
+  });
+
+  it("does NOT sweep streaming messages when thread.activeRun is set (Claude resume case)", async () => {
+    // Tmux runs DO have a resume path — sweeping them would race with
+    // resumeActiveRuns re-attaching to the still-running tmux session.
+    const id = 'dddddddd-dddd-dddd-dddd-dddddddddddd';
+    const dir = path.join(tmpRoot, '.devspace', 'chat');
+    fs.mkdirSync(dir, { recursive: true });
+    const runDir = path.join(dir, 'runs', 'r1');
+    fs.writeFileSync(
+      path.join(dir, `${id}.json`),
+      JSON.stringify({
+        id,
+        projectId: path.basename(tmpRoot),
+        title: 'resumable',
+        createdAt: 1,
+        updatedAt: 2,
+        activeRun: {
+          runId: 'r1',
+          sessionName: 'devspace-chatrun-r1',
+          runDir,
+          startedAt: 2,
+          assistantMessageId: 'a1',
+          kind: 'solo',
+        },
+        messages: [
+          { id: 'u1', role: 'user', content: 'hi', toolCalls: [], createdAt: 1, status: 'done' },
+          {
+            id: 'a1',
+            role: 'assistant',
+            content: 'partial',
+            toolCalls: [],
+            createdAt: 2,
+            status: 'streaming',
+          },
+        ],
+      }),
+    );
+
+    await listThreads(tmpRoot);
+
+    const reloaded = JSON.parse(fs.readFileSync(path.join(dir, `${id}.json`), 'utf8'));
+    const assistant = reloaded.messages[1];
+    // Status untouched — the resume path owns this.
+    expect(assistant.status).toBe('streaming');
+    expect(assistant.error).toBeUndefined();
+  });
 });

@@ -47,6 +47,36 @@ export interface LlmTestResult {
   error?: string;
 }
 
+// v0.29: per-profile chat-only LLM connection. Lives ALONGSIDE LlmConfig
+// (which stays single-config for inline autocomplete). Stored as
+// `~/.devspace/llm-chat-profiles.json` → `{ profiles: LlmChatProfile[] }`.
+// User can add 0..N profiles in Settings → LLM → Chat profiles, then pick
+// one in the chat panel's provider dropdown. Selecting a profile creates
+// a new thread bound to that profileId (see ChatThread.llmProfileId).
+export interface LlmChatProfile {
+  // Stable id (UUID) generated on create — referenced by ChatThread.
+  id: string;
+  // Human-readable label shown in the dropdown and on the row card.
+  // Required, trimmed, capped at 64 chars by the service layer.
+  name: string;
+  provider: LlmProvider;
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+  // Optional knobs — undefined = use sane runner defaults (1024 / 0.7).
+  // Note: chat tends to want HIGHER temperature than autocomplete (which
+  // defaults to 0.2). Different fields from LlmConfig so we don't reuse
+  // the autocomplete tunings by accident.
+  temperature?: number;
+  maxTokens?: number;
+  // Optional per-profile system prompt prepended to every turn on this
+  // profile's threads. Concatenated AFTER the project memory + devlog
+  // preambles so it can refer to project context.
+  systemPrompt?: string;
+  // ms-epoch — used for stable sort order in the dropdown.
+  createdAt: number;
+}
+
 export interface LlmCompleteRequest {
   // Code before the cursor (truncated to last ~N chars on the renderer).
   prefix: string;
@@ -350,6 +380,13 @@ export interface ChatThread {
   // from .devspace/chat-config.json is used. Lets the user pin a
   // different model / system prompt / tool set to a specific thread.
   config?: ChatConfig;
+  // v0.29: when set, this thread is bound to a non-Claude chat profile
+  // (OpenAI, local Ollama via openai-compatible, anthropic-direct, etc.)
+  // — sendMessage branches to LlmChatRunner instead of TmuxChatRunner.
+  // Provider lock is per-thread: switching the chat-panel dropdown to a
+  // different profile creates a NEW thread, never mutates an existing
+  // one. Undefined = Claude (default, backward compat).
+  llmProfileId?: string;
   // Set while a tmux-backed run is in flight for this thread. Persists
   // across app restarts so on next boot ChatService can re-attach its
   // watcher to the still-running tmux session and continue streaming
@@ -381,6 +418,9 @@ export interface ChatThreadMeta {
   // True when this thread has a persisted in-flight run (activeRun on any
   // message) so the list can show a "running" affordance without messages.
   hasActiveRun?: boolean;
+  // v0.29: provider lock — mirrors ChatThread.llmProfileId so the thread
+  // list can show a small provider badge without fetching full threads.
+  llmProfileId?: string;
 }
 
 // Metadata describing an in-flight chat run that was spawned inside a

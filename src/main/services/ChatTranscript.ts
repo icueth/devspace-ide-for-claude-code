@@ -9,6 +9,7 @@ import * as path from 'node:path';
 import type { WebContents } from 'electron';
 
 import { type ChatRunHandle } from '@main/services/TmuxChatRunner';
+import { type LlmRunHandle } from '@main/services/LlmChatRunner';
 import { createLogger } from '@shared/logger';
 import type {
   ChatConfig,
@@ -36,6 +37,12 @@ export interface ProjectState {
   projectPath: string;
   threads: Map<string, ChatThread>;
   activeRunHandle: ChatRunHandle | null;
+  // v0.29: parallel slot for LLM-backed (non-Claude) runs. Same
+  // single-concurrent-turn-per-project rule applies; sendMessage checks
+  // both fields. Cleanly separated by type so the resume-on-boot path
+  // and team-sequential codepaths don't accidentally treat an LLM run
+  // as a tmux handle (and vice-versa).
+  activeLlmRunHandle: LlmRunHandle | null;
   activeThreadId: string | null;
   subscribers: Set<WebContents>;
   hydrationPromise: Promise<void>;
@@ -59,6 +66,7 @@ export function getState(projectPath: string): ProjectState {
       projectPath: key,
       threads: new Map(),
       activeRunHandle: null,
+      activeLlmRunHandle: null,
       activeThreadId: null,
       subscribers: new Set(),
       hydrationPromise: Promise.resolve(),
@@ -99,6 +107,14 @@ export async function disposeProject(projectPath: string): Promise<void> {
       /* best-effort: the project is going away */
     }
     state.activeRunHandle = null;
+  }
+  if (state.activeLlmRunHandle) {
+    try {
+      await state.activeLlmRunHandle.kill();
+    } catch {
+      /* best-effort: the project is going away */
+    }
+    state.activeLlmRunHandle = null;
   }
 }
 
@@ -199,6 +215,43 @@ async function hydrateFromDisk(state: ProjectState): Promise<void> {
       logger.warn(`thread parse failed for ${f.name}: ${(err as Error).message}`);
       await quarantine(filePath, 'parse-error').catch(() => {});
     }
+  }
+  // v0.29: orphaned-streaming sweep. The Claude path resumes via
+  // `thread.activeRun` (tmux session re-attach), but the LLM path uses
+  // streaming HTTP — there's no equivalent to resume. If the app
+  // crashed / was force-quit mid-LLM-stream, the persisted assistant
+  // message is stuck at `status: 'streaming'` with no `activeRun`, and
+  // the renderer locks the composer into "running" mode forever waiting
+  // for a `done` event that will never arrive. Flip those to 'error'
+  // here so the renderer surfaces them as an interrupted turn the user
+  // can retry. The same logic applies to a hypothetical Claude orphan
+  // without activeRun, so we don't condition on `llmProfileId`.
+  let mutatedAny = false;
+  for (const thread of state.threads.values()) {
+    if (thread.activeRun) continue;     // tmux resume will handle it
+    let mutated = false;
+    for (const m of thread.messages) {
+      if (m.role === 'assistant' && m.status === 'streaming') {
+        m.status = 'error';
+        (m as { error?: string }).error = 'interrupted';
+        mutated = true;
+      }
+    }
+    if (mutated) {
+      try {
+        await persistThread(state.projectPath, thread);
+        mutatedAny = true;
+      } catch (err) {
+        logger.warn(
+          `orphan sweep persist failed for ${thread.id.slice(0, 8)}: ${(err as Error).message}`,
+        );
+      }
+    }
+  }
+  if (mutatedAny) {
+    logger.info(
+      `swept orphaned 'streaming' messages on hydrate for ${state.projectPath}`,
+    );
   }
 }
 
@@ -302,6 +355,7 @@ export async function listThreads(
         messageCount: t.messages.length,
         hasActiveRun: threadHasActiveRun(t),
         ...(t.config ? { config: t.config } : {}),
+        ...(t.llmProfileId ? { llmProfileId: t.llmProfileId } : {}),
       }),
     );
 }
@@ -328,9 +382,19 @@ export async function getThread(
 export async function createThread(
   projectPath: string,
   title?: string,
+  llmProfileId?: string,
 ): Promise<ChatThread> {
   const s = getState(projectPath);
   await s.hydrationPromise;
+  // v0.29: provider lock is captured at thread creation. Validation /
+  // existence-check happens in the IPC layer before we get here — by the
+  // time we're storing it, the id has been confirmed against the
+  // profiles list (or rejected as 400 upstream). Persisting an unknown
+  // id would be inert but confusing on later loads.
+  const trimmedProfileId =
+    typeof llmProfileId === 'string' && llmProfileId.trim()
+      ? llmProfileId.trim()
+      : undefined;
   const thread: ChatThread = {
     id: randomUUID(),
     projectId: path.basename(s.projectPath),
@@ -338,6 +402,7 @@ export async function createThread(
     createdAt: Date.now(),
     updatedAt: Date.now(),
     messages: [],
+    ...(trimmedProfileId ? { llmProfileId: trimmedProfileId } : {}),
   };
   s.threads.set(thread.id, thread);
   await persistThread(s.projectPath, thread);
@@ -355,13 +420,37 @@ export async function deleteThread(
   await s.hydrationPromise;
   // Kill any in-flight run for this thread first — otherwise the tail
   // loop keeps streaming events into nowhere and may crash line handlers.
-  if (s.activeThreadId === threadId && s.activeRunHandle) {
+  // Snapshot `activeThreadId` BEFORE mutating so the LLM-handle branch
+  // below sees the same value (the original implementation nulled
+  // activeThreadId in the tmux branch, leaving the LLM branch unable
+  // to match — a latent zombie-stream bug).
+  const wasActive = s.activeThreadId === threadId;
+  if (wasActive && s.activeRunHandle) {
     try {
       await s.activeRunHandle.kill();
     } catch (err) {
       logger.warn(`kill on delete failed: ${(err as Error).message}`);
     }
     s.activeRunHandle = null;
+  }
+  if (wasActive && s.activeLlmRunHandle) {
+    try {
+      await s.activeLlmRunHandle.kill();
+    } catch (err) {
+      logger.warn(`kill llm on delete failed: ${(err as Error).message}`);
+    }
+    s.activeLlmRunHandle = null;
+  }
+  if (wasActive) {
+    s.activeThreadId = null;
+  }
+  if (s.activeThreadId === threadId && s.activeLlmRunHandle) {
+    try {
+      await s.activeLlmRunHandle.kill();
+    } catch (err) {
+      logger.warn(`llm kill on delete failed: ${(err as Error).message}`);
+    }
+    s.activeLlmRunHandle = null;
     s.activeThreadId = null;
   }
   s.threads.delete(threadId);

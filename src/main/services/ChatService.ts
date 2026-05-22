@@ -51,6 +51,8 @@ import {
   newRunId,
   startChatRun,
 } from '@main/services/TmuxChatRunner';
+import { getProfile, getProfileAsync } from '@main/services/LlmChatProfilesService';
+import { startLlmChatRun, type LlmRunMessage } from '@main/services/LlmChatRunner';
 import { resolveInteractiveShellEnv } from '@main/utils/shellEnv';
 import { createLogger } from '@shared/logger';
 import type {
@@ -193,17 +195,29 @@ export async function setProjectConfig(
 
 export async function cancelActive(projectPath: string): Promise<void> {
   const s = lookupState(projectPath);
-  if (!s || !s.activeRunHandle) return;
-  // Await tmux kill-session so any failure (session already gone, tmux
-  // binary missing) surfaces to the IPC caller and the renderer can
-  // show an error toast. The tail loop still notices the session
-  // disappear and resolves with cancelled=true, which fires the same
-  // finalize path as a normal exit.
-  try {
-    await s.activeRunHandle.kill();
-  } catch (err) {
-    logger.warn(`cancel kill failed: ${(err as Error).message}`);
-    throw err;
+  if (!s) return;
+  if (s.activeRunHandle) {
+    // Await tmux kill-session so any failure (session already gone, tmux
+    // binary missing) surfaces to the IPC caller and the renderer can
+    // show an error toast. The tail loop still notices the session
+    // disappear and resolves with cancelled=true, which fires the same
+    // finalize path as a normal exit.
+    try {
+      await s.activeRunHandle.kill();
+    } catch (err) {
+      logger.warn(`cancel kill failed: ${(err as Error).message}`);
+      throw err;
+    }
+  }
+  if (s.activeLlmRunHandle) {
+    // LLM path — aborting the controller propagates into the finalize
+    // logic which broadcasts the cancelled status.
+    try {
+      await s.activeLlmRunHandle.kill();
+    } catch (err) {
+      logger.warn(`cancel llm kill failed: ${(err as Error).message}`);
+      throw err;
+    }
   }
 }
 
@@ -223,7 +237,7 @@ export async function sendMessage(req: ChatSendRequest): Promise<{ messageId: st
   await s.hydrationPromise; // wait for resume-on-boot before checking active state
   const thread = s.threads.get(req.threadId);
   if (!thread) throw new Error(`thread not found: ${req.threadId}`);
-  if (s.activeRunHandle) {
+  if (s.activeRunHandle || s.activeLlmRunHandle) {
     throw new Error('a chat turn is already running for this project');
   }
 
@@ -294,6 +308,20 @@ export async function sendMessage(req: ChatSendRequest): Promise<{ messageId: st
   thread.messages.push(assistantMsg);
   thread.updatedAt = Date.now();
   await persistThread(s.projectPath, thread);
+
+  // v0.29: LLM-profile-backed threads route to LlmChatRunner instead of
+  // the Claude/tmux path. All Claude-specific machinery (tool cards,
+  // AskUserQuestion early-finalize, Forge signals, devlog auto-capture,
+  // Task subagent dispatch) is skipped — the LLM path streams plain
+  // text via fetch and persists usage. Memory/devlog preamble IS still
+  // injected, but as a system message at the head of the messages
+  // array (LLMs have no equivalent of --append-system-prompt).
+  if (thread.llmProfileId) {
+    void runLlmTurn(s, thread, assistantMsg).catch((err) => {
+      logger.error(`llm chat turn failed: ${(err as Error).message}`);
+    });
+    return { messageId: assistantMsg.id };
+  }
 
   // Resolve effective config for this turn before we lose the request
   // reference. Highest precedence: turn override (req.config) → thread
@@ -870,6 +898,171 @@ async function finalizeSoloRun(
     userMsg,
     assistant,
   );
+}
+
+// ─── v0.29: LLM-profile turn execution ─────────────────────────────────────
+//
+// Parallel to runClaudeTurn but with a much simpler lifecycle: no tmux,
+// no subprocess, no tool cards, no Forge/Devlog auto-capture. Streams
+// text_delta + usage + done events to subscribers, persists the final
+// assistant content. Memory/devlog preamble is injected as a HEAD
+// system message (LLM endpoints don't support append-style system
+// prompts the way claude does).
+
+async function runLlmTurn(
+  state: ProjectState,
+  thread: ChatThread,
+  assistant: ChatMessage,
+): Promise<void> {
+  // Resolve the profile. Try sync cache first (cheap); if missing, fall
+  // back to the async loader (e.g. preloadProfiles hasn't fired yet on a
+  // very early send). If it's still missing, fail with a clean error so
+  // the renderer surfaces the broken profile binding.
+  const profileId = thread.llmProfileId!;
+  let profile = getProfile(profileId);
+  if (!profile) profile = await getProfileAsync(profileId);
+  if (!profile) {
+    const err = `LLM profile not found: ${profileId}`;
+    assistant.status = 'error';
+    assistant.error = err;
+    broadcast(state, thread.id, {
+      kind: 'error',
+      message: err,
+      ts: Date.now(),
+    });
+    broadcast(state, thread.id, { kind: 'done', ts: Date.now() });
+    await persistThread(state.projectPath, thread);
+    return;
+  }
+
+  // Build the messages array from full thread history. Map user/assistant
+  // pairs into the OpenAI-style role+content shape; drop tool calls /
+  // segments (LLM path doesn't render or send those). EXCLUDE the
+  // current streaming assistant (last element) — that's the placeholder
+  // we're about to fill.
+  const history: LlmRunMessage[] = thread.messages.slice(0, -1).map((m) => ({
+    role: m.role,
+    content: m.content,
+  }));
+
+  // Memory + devlog preamble — best-effort, prepended as system message
+  // at the HEAD of the messages array. One-shot per thread, same as
+  // Claude path's memoryInjected gate.
+  const systemBlocks: string[] = [];
+  if (!thread.memoryInjected) {
+    // Track success of each loader independently — if BOTH threw, the
+    // preamble fetch is transiently broken (file lock, ENOSPC, etc.)
+    // and we should NOT set memoryInjected=true, otherwise the user
+    // permanently loses memory injection on this thread. Empty preamble
+    // is still a successful fetch and locks the flag (intended).
+    let memoryOk = false;
+    let devlogOk = false;
+    try {
+      const memoryPre = await buildInjectPreamble(state.projectPath);
+      if (memoryPre) systemBlocks.push(`## Project memory\n\n${memoryPre}`);
+      memoryOk = true;
+    } catch (err) {
+      logger.warn(`llm memory inject failed: ${(err as Error).message}`);
+    }
+    try {
+      const devlogPre = await buildDevlogPreamble(state.projectPath);
+      if (devlogPre) systemBlocks.push(devlogPre);
+      devlogOk = true;
+    } catch (err) {
+      logger.warn(`llm devlog inject failed: ${(err as Error).message}`);
+    }
+    if (memoryOk || devlogOk) {
+      thread.memoryInjected = true;
+      await persistThread(state.projectPath, thread);
+    }
+  }
+
+  const messages: LlmRunMessage[] = [];
+  if (systemBlocks.length > 0) {
+    messages.push({
+      role: 'system',
+      content: systemBlocks.join('\n\n---\n\n').trimEnd(),
+    });
+  }
+  for (const h of history) messages.push(h);
+
+  logger.info(
+    `start llm chat thread=${thread.id.slice(0, 8)} profile=${profile.id.slice(0, 8)} provider=${profile.provider} model=${profile.model}`,
+  );
+
+  broadcast(state, thread.id, {
+    kind: 'status',
+    message: `running (${profile.provider})`,
+    ts: Date.now(),
+  });
+
+  let cancelled = false;
+  let usage: { input: number; output: number } | undefined;
+  let errored = false;
+
+  const handle = startLlmChatRun({
+    profile,
+    messages,
+    onDelta: (text) => {
+      assistant.content += text;
+      broadcast(state, thread.id, {
+        kind: 'text_delta',
+        text,
+        ts: Date.now(),
+      });
+    },
+    onDone: (info) => {
+      cancelled = info.cancelled;
+      usage = info.usage;
+      // The text the runner returns is the canonical assembled body —
+      // assistant.content was built incrementally via onDelta but if
+      // the two ever disagree (e.g. an onDelta throw silently dropped a
+      // chunk) the runner's text is authoritative.
+      if (info.text && info.text.length >= assistant.content.length) {
+        assistant.content = info.text;
+      }
+      if (usage) {
+        assistant.usage = usage;
+        broadcast(state, thread.id, {
+          kind: 'usage',
+          inputTokens: usage.input,
+          outputTokens: usage.output,
+          ts: Date.now(),
+        });
+      }
+    },
+    onError: (message) => {
+      errored = true;
+      assistant.status = 'error';
+      assistant.error = message;
+      broadcast(state, thread.id, {
+        kind: 'error',
+        message,
+        ts: Date.now(),
+      });
+    },
+  });
+
+  state.activeLlmRunHandle = handle;
+  state.activeThreadId = thread.id;
+
+  await handle.promise;
+
+  // Defensive ownership check — if the user kicked off another run while
+  // ours was finishing, don't clobber the new handle.
+  if (state.activeLlmRunHandle === handle) {
+    state.activeLlmRunHandle = null;
+    state.activeThreadId = null;
+  }
+
+  if (cancelled) {
+    assistant.status = 'cancelled';
+  } else if (!errored) {
+    assistant.status = 'done';
+  }
+  thread.updatedAt = Date.now();
+  broadcast(state, thread.id, { kind: 'done', ts: Date.now() });
+  await persistThread(state.projectPath, thread);
 }
 
 // ─── team execution (sequential) ────────────────────────────────────────────

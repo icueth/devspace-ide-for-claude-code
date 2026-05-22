@@ -3,6 +3,7 @@ import 'highlight.js/styles/github-dark.css';
 import {
   AlertTriangle,
   ArrowDown,
+  Bot,
   Brain,
   Check,
   CheckCircle2,
@@ -60,6 +61,10 @@ import {
   resolveAnswerOutcome,
 } from '@renderer/components/Dock/askUserQuestion';
 import { applyEvent, capLoaded } from '@renderer/components/Dock/chatEvents';
+import {
+  profileNameForBadge,
+  resolveProfileSelection,
+} from '@renderer/components/Dock/chatProfileSelection';
 import { ChatSettingsDrawer } from '@renderer/components/Dock/ChatSettingsDrawer';
 import {
   parseSlashInput,
@@ -87,6 +92,7 @@ import type {
   ChatMessageSegment,
   ChatThread,
   ChatThreadMeta,
+  LlmChatProfile,
   TeamDef,
   TeamStep,
   ToolDiffHunk,
@@ -181,6 +187,9 @@ function metaFromThread(t: ChatThread): ChatThreadMeta {
       !!t.activeRun ||
       t.messages.some((m) => !!(m as { activeRun?: unknown }).activeRun),
     ...(t.config ? { config: t.config } : {}),
+    // v0.29: carry provider lock so the dropdown + thread-list badge can
+    // reflect the freshly-created thread before listThreads round-trips.
+    ...(t.llmProfileId ? { llmProfileId: t.llmProfileId } : {}),
   };
 }
 
@@ -291,6 +300,15 @@ export function ChatPanel({ projectPath }: ChatPanelProps) {
   // null, sends as a normal solo claude turn.
   const [teams, setTeams] = useState<TeamDef[]>([]);
   const [selectedTeamId, setSelectedTeamId] = useState<string | null>(null);
+  // v0.29: chat profiles (non-Claude LLM endpoints). `selectedProfileId`
+  // mirrors the active thread's `llmProfileId` so the dropdown stays in
+  // sync as the user picks different threads. Changing the dropdown does
+  // NOT mutate the current thread — it spawns a fresh thread bound to
+  // the new profile (or to Claude when null). See onProfileChange below.
+  const [chatProfiles, setChatProfiles] = useState<LlmChatProfile[]>([]);
+  const [selectedProfileId, setSelectedProfileId] = useState<string | null>(
+    null,
+  );
   // Opt-in "Start in new thread" — creates a fresh thread before the
   // team send so the run gets clean context. Default off because most
   // team uses are follow-ups within an ongoing conversation.
@@ -645,6 +663,37 @@ export function ChatPanel({ projectPath }: ChatPanelProps) {
     };
   }, [loadTeams, projectPath]);
 
+  // v0.29: load chat profiles for the provider dropdown. Global config
+  // (lives at ~/.devspace/llm-chat-profiles.json) so it's not gated on
+  // the active project. Listens for the same-process custom event
+  // LlmSettings emits after save / delete so the dropdown refreshes
+  // without a window reload.
+  const loadChatProfiles = useCallback(async () => {
+    try {
+      const list = await api.llm.listChatProfiles();
+      setChatProfiles(list);
+    } catch (err) {
+      console.error('[chat] failed to load chat profiles', err);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadChatProfiles();
+  }, [loadChatProfiles]);
+
+  useEffect(() => {
+    const refresh = () => void loadChatProfiles();
+    window.addEventListener('devspace:llm-chat-profiles-changed', refresh);
+    window.addEventListener('focus', refresh);
+    return () => {
+      window.removeEventListener(
+        'devspace:llm-chat-profiles-changed',
+        refresh,
+      );
+      window.removeEventListener('focus', refresh);
+    };
+  }, [loadChatProfiles]);
+
   // Pull the design skills catalog once on mount + whenever the project
   // changes. Cached in skillsRef so the bubble right-click menu can build
   // accurate enabled/disabled state without an IPC round trip per click.
@@ -771,6 +820,21 @@ export function ChatPanel({ projectPath }: ChatPanelProps) {
     const meta = threads.find((t) => t.id === activeId);
     return !!meta && meta.messageCount > 0;
   }, [activeId, activeThread, threads]);
+
+  // v0.29: keep the provider dropdown in sync with whichever thread is
+  // active. Picking a Claude-only thread resets to null; picking a
+  // profile-bound thread highlights that profile. Stale ids (profile
+  // deleted) also collapse to null so the dropdown can't show a ghost
+  // selection. Sources `llmProfileId` from the meta list since it's
+  // populated immediately by `metaFromThread`, even before the full
+  // transcript has been lazily fetched.
+  const activeMeta = useMemo(
+    () => (activeId ? threads.find((t) => t.id === activeId) ?? null : null),
+    [activeId, threads],
+  );
+  useEffect(() => {
+    setSelectedProfileId(resolveProfileSelection(activeMeta, chatProfiles));
+  }, [activeMeta, chatProfiles]);
 
   // True while the active thread has at least one assistant message in
   // 'streaming' state. Drives the Send→Stop button swap AND the v0.16 queue
@@ -1132,6 +1196,54 @@ export function ChatPanel({ projectPath }: ChatPanelProps) {
     setActiveId(t.id);
   }, [projectPath]);
 
+  // v0.29: switch provider. We DON'T mutate the current thread (provider
+  // lock is per-thread) — instead we spawn a fresh thread bound to the
+  // chosen profile (or to Claude when nextId is null) and make it active.
+  // The activeMeta sync effect above then highlights the right dropdown
+  // option from the new thread's llmProfileId. No-op when the user
+  // re-picks the already-selected option so a stray click doesn't
+  // generate a graveyard of empty threads.
+  // Double-click guard — `selectedProfileId` is updated asynchronously
+  // by the activeMeta sync effect (it watches threads + activeId), so
+  // between calling onProfileChange('B') and the effect firing,
+  // `selectedProfileId` is still 'A'. Without this ref the second click
+  // on 'B' passes the guard and creates a SECOND empty thread bound to
+  // B. The ref tracks "we're currently creating a thread for this id"
+  // and short-circuits — cleared in finally.
+  const creatingProfileRef = useRef<string | null>(null);
+  const onProfileChange = useCallback(
+    async (nextId: string | null) => {
+      if (nextId === selectedProfileId) return;
+      if (creatingProfileRef.current === nextId) return;
+      const profile = nextId
+        ? chatProfiles.find((p) => p.id === nextId) ?? null
+        : null;
+      if (nextId && !profile) return;
+      const title = profile ? `New chat (${profile.name})` : 'New chat';
+      creatingProfileRef.current = nextId;
+      try {
+        const t = await api.chat.createThread(
+          projectPath,
+          title,
+          profile ? profile.id : undefined,
+        );
+        setThreads((prev) => [metaFromThread(t), ...prev]);
+        setLoaded((prev) => ({ ...prev, [t.id]: t }));
+        setActiveId(t.id);
+      } catch (err) {
+        console.error('[chat] failed to create thread for profile', err);
+      } finally {
+        // Only clear if we still own the slot — if the user clicked yet
+        // another option mid-await, we don't want to wipe their new
+        // in-flight marker.
+        if (creatingProfileRef.current === nextId) {
+          creatingProfileRef.current = null;
+        }
+      }
+    },
+    [chatProfiles, projectPath, selectedProfileId],
+  );
+
   const onDeleteThread = useCallback(
     async (id: string) => {
       await api.chat.deleteThread(projectPath, id);
@@ -1400,11 +1512,17 @@ export function ChatPanel({ projectPath }: ChatPanelProps) {
           onChange={(e) => setActiveId(e.target.value)}
           className="min-w-0 flex-1 truncate rounded-[6px] border border-border-subtle bg-surface-3 px-2 py-1 text-[11.5px] text-text focus:outline-none focus:ring-1 focus:ring-accent/40"
         >
-          {threads.map((t) => (
-            <option key={t.id} value={t.id}>
-              {t.title}
-            </option>
-          ))}
+          {threads.map((t) => {
+            // v0.29: provider badge — appended only when the thread is
+            // bound to a profile, so Claude threads stay visually clean.
+            // Falls back to 'unknown LLM' when the profile was deleted.
+            const badge = profileNameForBadge(t.llmProfileId, chatProfiles);
+            return (
+              <option key={t.id} value={t.id}>
+                {badge ? `${t.title} · ${badge}` : t.title}
+              </option>
+            );
+          })}
         </select>
         <button
           onClick={onNewThread}
@@ -1447,10 +1565,28 @@ export function ChatPanel({ projectPath }: ChatPanelProps) {
         )}
       </div>
 
-      {/* Team picker — always rendered so the user has a visible hook
-          to discover Team mode. When no teams exist, the dropdown shows
-          a single hint option pointing them at Settings. */}
+      {/* Provider + Team pickers — the provider dropdown picks which LLM
+          backs the next NEW thread; switching it always spawns a fresh
+          thread (provider lock is per-thread, see onProfileChange). The
+          team picker controls multi-agent routing on the next send. */}
       <div className="flex shrink-0 items-center gap-2 border-b border-border bg-surface-2 px-3 py-1.5">
+        <Bot size={11} className="shrink-0 text-text-muted" />
+        <span className="text-[10.5px] text-text-muted">LLM:</span>
+        <select
+          value={selectedProfileId ?? ''}
+          onChange={(e) => void onProfileChange(e.target.value || null)}
+          className="min-w-0 rounded-[5px] border border-border-subtle bg-surface-3 px-2 py-[2px] text-[11px] text-text focus:outline-none focus:ring-1 focus:ring-accent/40"
+          title="Switching the LLM creates a new thread"
+        >
+          <option value="">🤖 Claude (default)</option>
+          {chatProfiles.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.provider === 'anthropic' ? '🅰️ ' : '🅾️ '}
+              {p.name} ({p.model})
+            </option>
+          ))}
+        </select>
+        <span className="mx-1 h-3 w-px shrink-0 bg-border-subtle" />
         <Users size={11} className="shrink-0 text-text-muted" />
         <span className="text-[10.5px] text-text-muted">Team:</span>
         <select

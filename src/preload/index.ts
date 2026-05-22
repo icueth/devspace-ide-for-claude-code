@@ -162,14 +162,20 @@ const api = {
     test: (cfg: unknown) => ipcRenderer.invoke(IPC.LLM_TEST, cfg),
     complete: (req: unknown) => ipcRenderer.invoke(IPC.LLM_COMPLETE, req),
     edit: (req: unknown) => ipcRenderer.invoke(IPC.LLM_EDIT, req),
+    // v0.29 — chat profiles (separate store from autocomplete config).
+    listChatProfiles: () => ipcRenderer.invoke(IPC.LLM_CHAT_PROFILES_LIST),
+    upsertChatProfile: (profile: unknown) =>
+      ipcRenderer.invoke(IPC.LLM_CHAT_PROFILES_UPSERT, profile),
+    deleteChatProfile: (id: string) =>
+      ipcRenderer.invoke(IPC.LLM_CHAT_PROFILES_DELETE, id),
   },
   chat: {
     listThreads: (projectPath: string) =>
       ipcRenderer.invoke(IPC.CHAT_LIST_THREADS, projectPath),
     getThread: (projectPath: string, threadId: string) =>
       ipcRenderer.invoke(IPC.CHAT_GET_THREAD, projectPath, threadId),
-    createThread: (projectPath: string, title?: string) =>
-      ipcRenderer.invoke(IPC.CHAT_CREATE_THREAD, projectPath, title),
+    createThread: (projectPath: string, title?: string, llmProfileId?: string) =>
+      ipcRenderer.invoke(IPC.CHAT_CREATE_THREAD, projectPath, title, llmProfileId),
     deleteThread: (projectPath: string, threadId: string) =>
       ipcRenderer.invoke(IPC.CHAT_DELETE_THREAD, projectPath, threadId),
     send: (req: unknown) => ipcRenderer.invoke(IPC.CHAT_SEND, req),
