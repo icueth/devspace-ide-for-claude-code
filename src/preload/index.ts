@@ -169,13 +169,36 @@ const api = {
     deleteChatProfile: (id: string) =>
       ipcRenderer.invoke(IPC.LLM_CHAT_PROFILES_DELETE, id),
   },
+  // v0.30 — multi-CLI runtime profiles (OpenCode now; Codex/Gemini later).
+  cli: {
+    listProfiles: () => ipcRenderer.invoke(IPC.CLI_PROFILES_LIST),
+    upsertProfile: (profile: unknown) =>
+      ipcRenderer.invoke(IPC.CLI_PROFILES_UPSERT, profile),
+    deleteProfile: (id: string) =>
+      ipcRenderer.invoke(IPC.CLI_PROFILES_DELETE, id),
+    detect: () => ipcRenderer.invoke(IPC.CLI_DETECT),
+  },
   chat: {
     listThreads: (projectPath: string) =>
       ipcRenderer.invoke(IPC.CHAT_LIST_THREADS, projectPath),
     getThread: (projectPath: string, threadId: string) =>
       ipcRenderer.invoke(IPC.CHAT_GET_THREAD, projectPath, threadId),
-    createThread: (projectPath: string, title?: string, llmProfileId?: string) =>
-      ipcRenderer.invoke(IPC.CHAT_CREATE_THREAD, projectPath, title, llmProfileId),
+    // SEC-MED-1: forward the 4th `cliProfileId` arg too so renderer
+    // callers can actually create OpenCode-bound threads. Without this,
+    // the v0.30 feature is unreachable from the typed preload API.
+    createThread: (
+      projectPath: string,
+      title?: string,
+      llmProfileId?: string,
+      cliProfileId?: string,
+    ) =>
+      ipcRenderer.invoke(
+        IPC.CHAT_CREATE_THREAD,
+        projectPath,
+        title,
+        llmProfileId,
+        cliProfileId,
+      ),
     deleteThread: (projectPath: string, threadId: string) =>
       ipcRenderer.invoke(IPC.CHAT_DELETE_THREAD, projectPath, threadId),
     send: (req: unknown) => ipcRenderer.invoke(IPC.CHAT_SEND, req),

@@ -53,6 +53,11 @@ import {
 } from '@main/services/TmuxChatRunner';
 import { getProfile, getProfileAsync } from '@main/services/LlmChatProfilesService';
 import { startLlmChatRun, type LlmRunMessage } from '@main/services/LlmChatRunner';
+import {
+  getProfile as getCliProfile,
+  getProfileAsync as getCliProfileAsync,
+} from '@main/services/CliProfilesService';
+import { startOpenCodeRun } from '@main/services/OpenCodeRunner';
 import { resolveInteractiveShellEnv } from '@main/utils/shellEnv';
 import { createLogger } from '@shared/logger';
 import type {
@@ -319,6 +324,20 @@ export async function sendMessage(req: ChatSendRequest): Promise<{ messageId: st
   if (thread.llmProfileId) {
     void runLlmTurn(s, thread, assistantMsg).catch((err) => {
       logger.error(`llm chat turn failed: ${(err as Error).message}`);
+    });
+    return { messageId: assistantMsg.id };
+  }
+
+  // v0.30: non-Claude CLI runtimes (opencode for now) route to the
+  // generic CliRunner path. Currently text-streaming only — tool cards
+  // / AskUserQuestion / Forge signals are owned by the Claude path and
+  // intentionally NOT replicated here. Memory preamble is prepended as
+  // a system message at the head of the prompt, same posture as the
+  // LLM-profile path. The Claude branch below is unchanged byte-for-
+  // byte; this is a sibling early-return.
+  if (thread.cliId === 'opencode' && thread.cliProfileId) {
+    void runOpenCodeTurn(s, thread, assistantMsg).catch((err) => {
+      logger.error(`opencode chat turn failed: ${(err as Error).message}`);
     });
     return { messageId: assistantMsg.id };
   }
@@ -1058,6 +1077,217 @@ async function runLlmTurn(
   if (cancelled) {
     assistant.status = 'cancelled';
   } else if (!errored) {
+    assistant.status = 'done';
+  }
+  thread.updatedAt = Date.now();
+  broadcast(state, thread.id, { kind: 'done', ts: Date.now() });
+  await persistThread(state.projectPath, thread);
+}
+
+// ─── v0.30: non-Claude CLI runtime turn execution ─────────────────────────
+//
+// Parallel to runLlmTurn but spawns an external CLI (opencode) instead
+// of streaming HTTP. The flow is:
+//
+//   1. Resolve the bound CliProfile from cache (sync) with async fallback.
+//   2. Stack memory/devlog preamble + per-profile systemPrompt at the
+//      HEAD of the prompt — the CLI is opaque to us, so we cannot
+//      cleanly thread system instructions through any other channel.
+//   3. Hand the full prompt to OpenCodeRunner over stdin (NOT argv — the
+//      32KB Windows / 128KB Linux argv cap would clip long chat
+//      histories). The runner spawns opencode with OPENCODE_CONFIG_DIR
+//      pointing at the per-profile isolated dir.
+//   4. Stream text_delta / done / error events back through broadcast.
+//
+// Tool-event parsing is deferred to v0.30.1 — see the adapter's
+// parseStreamLine TODO. The capabilities chip says "~90% tools" because
+// the CLI itself supports tools, but the renderer renders text only.
+
+function fenceUntrustedBlock(label: string, body: string): string {
+  if (!body.trim()) return '';
+  const safe = body.replace(/```/g, '` ` `');
+  return `## ${label}\n\n\`\`\`text\n${safe}\n\`\`\``;
+}
+
+async function runOpenCodeTurn(
+  state: ProjectState,
+  thread: ChatThread,
+  assistant: ChatMessage,
+): Promise<void> {
+  // Code H2: explicit precondition instead of non-null assertion. After
+  // hydration sanitization in ChatTranscript, a thread with cliId set
+  // without cliProfileId is impossible — but defense in depth keeps the
+  // dispatch readable AND surfaces a clean error if the dispatch order
+  // upstream ever changes (don't trust a `!`).
+  const profileId = thread.cliProfileId;
+  if (typeof profileId !== 'string' || !profileId.trim()) {
+    const err = `CLI profile id missing on thread ${thread.id.slice(0, 8)}`;
+    assistant.status = 'error';
+    assistant.error = err;
+    broadcast(state, thread.id, { kind: 'error', message: err, ts: Date.now() });
+    broadcast(state, thread.id, { kind: 'done', ts: Date.now() });
+    await persistThread(state.projectPath, thread);
+    return;
+  }
+  let profile = getCliProfile(profileId);
+  if (!profile) profile = await getCliProfileAsync(profileId);
+  if (!profile) {
+    const err = `CLI profile not found: ${profileId}`;
+    assistant.status = 'error';
+    assistant.error = err;
+    broadcast(state, thread.id, { kind: 'error', message: err, ts: Date.now() });
+    broadcast(state, thread.id, { kind: 'done', ts: Date.now() });
+    await persistThread(state.projectPath, thread);
+    return;
+  }
+
+  // Build the prompt. opencode treats stdin as the full message body, so
+  // we lay out: system blocks (memory + devlog + profile prompt), then
+  // chat history (User: / Assistant: pairs), then the just-pushed user
+  // turn. The CURRENT streaming assistant placeholder (last message) is
+  // excluded — it's our scratch space, not a real prior turn.
+  const systemBlocks: string[] = [];
+
+  // One-shot memory injection per thread — same gate as the Claude /
+  // LLM paths so a long thread doesn't get the memory preamble re-
+  // injected on every turn.
+  if (!thread.memoryInjected) {
+    let memoryOk = false;
+    let devlogOk = false;
+    try {
+      const memoryPre = await buildInjectPreamble(state.projectPath);
+      if (memoryPre) systemBlocks.push(`## Project memory\n\n${memoryPre}`);
+      memoryOk = true;
+    } catch (err) {
+      logger.warn(`opencode memory inject failed: ${(err as Error).message}`);
+    }
+    try {
+      const devlogPre = await buildDevlogPreamble(state.projectPath);
+      if (devlogPre) systemBlocks.push(devlogPre);
+      devlogOk = true;
+    } catch (err) {
+      logger.warn(`opencode devlog inject failed: ${(err as Error).message}`);
+    }
+    if (memoryOk || devlogOk) {
+      thread.memoryInjected = true;
+      await persistThread(state.projectPath, thread);
+    }
+  }
+
+  // Per-profile systemPrompt — applied to EVERY turn (not gated by
+  // memoryInjected). Capped at write-time by CliProfilesService so the
+  // body is already bounded.
+  if (profile.systemPrompt && profile.systemPrompt.trim()) {
+    systemBlocks.push(profile.systemPrompt);
+  }
+
+  const historyTurns = thread.messages.slice(0, -1);
+  const transcriptLines: string[] = [];
+  for (const m of historyTurns) {
+    const role = m.role === 'assistant' ? 'Assistant' : 'User';
+    transcriptLines.push(`${role}: ${m.content}`);
+  }
+
+  const promptParts: string[] = [];
+  if (systemBlocks.length > 0) {
+    promptParts.push(systemBlocks.join('\n\n---\n\n').trimEnd());
+  }
+  if (transcriptLines.length > 0) {
+    promptParts.push(
+      fenceUntrustedBlock('Conversation so far', transcriptLines.join('\n\n')),
+    );
+  }
+  // Trailing instruction so the model knows to respond AS the assistant
+  // — same convention the Claude path uses.
+  promptParts.push('Continue the conversation. Reply as the assistant.');
+
+  const prompt = promptParts.join('\n\n---\n\n').trimEnd();
+
+  logger.info(
+    `start opencode chat thread=${thread.id.slice(0, 8)} profile=${profile.id.slice(0, 8)} model=${profile.provider.model}`,
+  );
+
+  broadcast(state, thread.id, {
+    kind: 'status',
+    message: 'running (opencode)',
+    ts: Date.now(),
+  });
+
+  let cancelled = false;
+  let errored = false;
+
+  // Adapter parseStreamLine emits text_delta / error / done. We need to
+  // accumulate text into assistant.content (the runner doesn't do this
+  // for us — it's the same separation as the LLM path).
+  const handle = startOpenCodeRun({
+    profile,
+    cwd: state.projectPath,
+    prompt,
+    onEvent: (event) => {
+      if (event.kind === 'text_delta' && event.text) {
+        assistant.content += event.text;
+        broadcast(state, thread.id, event);
+        return;
+      }
+      if (event.kind === 'error') {
+        errored = true;
+        assistant.status = 'error';
+        assistant.error = event.message ?? 'opencode error';
+        broadcast(state, thread.id, event);
+        return;
+      }
+      if (event.kind === 'done') {
+        // Re-broadcast — the runner already emits its own synthetic done
+        // at exit but adapter-emitted done events should still propagate
+        // so the renderer can clear the spinner mid-flight if opencode
+        // emits early. The post-await done below is a defense-in-depth
+        // fallback.
+        broadcast(state, thread.id, event);
+        return;
+      }
+      // Forward anything else (status, usage) verbatim.
+      broadcast(state, thread.id, event);
+    },
+  });
+
+  // SHIP-NOTE v0.30: reusing `activeLlmRunHandle` for an OpenCodeRunHandle
+  // works because both interfaces are structurally `{ promise, kill }`-
+  // compatible. The single-concurrent-turn-per-project invariant is
+  // enforced by both fields being null in sendMessage(). The field name
+  // is now a slight lie — code-reviewer H5 / architect H2 both flagged
+  // this. v0.30.1 plan: collapse to `state.activeRunHandle = { kind, h }`
+  // discriminated union so naming matches reality. For ship, the
+  // structural-compat works and `cancelActive` covers both paths.
+  state.activeLlmRunHandle = handle as unknown as LlmRunHandle;
+  state.activeThreadId = thread.id;
+
+  const result = await handle.promise;
+  cancelled = result.cancelled;
+
+  if (state.activeLlmRunHandle === handle) {
+    state.activeLlmRunHandle = null;
+    state.activeThreadId = null;
+  }
+
+  if (cancelled) {
+    assistant.status = 'cancelled';
+  } else if (errored) {
+    // assistant.status / error already set above
+  } else if (result.exitCode !== 0 && result.exitCode !== null) {
+    assistant.status = 'error';
+    const stderrTail = result.stderr ? result.stderr.slice(-2048) : '';
+    assistant.error = stderrTail
+      ? `opencode exited ${result.exitCode}: ${stderrTail}`
+      : `opencode exited ${result.exitCode}`;
+    broadcast(state, thread.id, {
+      kind: 'error',
+      message: assistant.error,
+      ts: Date.now(),
+    });
+  } else if (result.spawnError) {
+    assistant.status = 'error';
+    assistant.error = result.spawnError;
+  } else {
     assistant.status = 'done';
   }
   thread.updatedAt = Date.now();

@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
+import { CliSettings } from '@renderer/components/Settings/CliSettings';
 import {
   draftFromProfile,
   type LlmChatProfileDraft,
@@ -332,6 +333,15 @@ export function LlmSettings() {
           provider dropdown. Wholly additive: deleting all profiles
           leaves the autocomplete form untouched. */}
       <ChatProfilesSection />
+
+      {/* v0.30: CLI runtime profiles — sibling capability to "Chat
+          profiles" above. Distinct mental model: chat profiles are
+          HTTP API endpoints; CLI runtimes spawn an actual binary
+          (OpenCode today; Codex / Gemini later) with isolated config.
+          Lives inside the LLM tab per design — same "alternative
+          backend" mental bucket from the user's POV. Self-contained
+          component so SettingsPage navigation stays unchanged. */}
+      <CliSettings />
     </div>
   );
 }

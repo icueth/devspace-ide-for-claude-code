@@ -6,6 +6,10 @@ import type {
   ChatSendRequest,
   ChatThread,
   ChatThreadMeta,
+  CliCapabilities,
+  CliDetectionResult,
+  CliId,
+  CliProfile,
   CodeflowDoc,
   CodeflowFunctionEdge,
   CodeflowFunctionGraph,
@@ -226,6 +230,16 @@ export interface DevspaceApi {
     upsertChatProfile: (profile: LlmChatProfile) => Promise<LlmChatProfile>;
     deleteChatProfile: (id: string) => Promise<void>;
   };
+  // v0.30 — multi-CLI runtime profiles. Distinct from `llm` (HTTP API
+  // bindings) — this is about spawning alternative CLI binaries (OpenCode
+  // now; Codex/Gemini later) with isolated config dirs so the user's own
+  // ~/.config/<cli>/ is never mutated.
+  cli: {
+    listProfiles: () => Promise<CliProfile[]>;
+    upsertProfile: (profile: Partial<CliProfile>) => Promise<CliProfile>;
+    deleteProfile: (id: string) => Promise<void>;
+    detect: () => Promise<CliDetectionResult[]>;
+  };
   chat: {
     listThreads: (projectPath: string) => Promise<ChatThreadMeta[]>;
     getThread: (
@@ -236,6 +250,7 @@ export interface DevspaceApi {
       projectPath: string,
       title?: string,
       llmProfileId?: string,
+      cliProfileId?: string,
     ) => Promise<ChatThread>;
     deleteThread: (projectPath: string, threadId: string) => Promise<void>;
     send: (req: ChatSendRequest) => Promise<{ messageId: string }>;
@@ -751,6 +766,12 @@ function makeStubApi(): DevspaceApi {
       listChatProfiles: () => Promise.resolve([]),
       upsertChatProfile: notWired('llm.upsertChatProfile'),
       deleteChatProfile: notWired('llm.deleteChatProfile'),
+    },
+    cli: {
+      listProfiles: () => Promise.resolve([]),
+      upsertProfile: notWired('cli.upsertProfile'),
+      deleteProfile: notWired('cli.deleteProfile'),
+      detect: () => Promise.resolve([]),
     },
     chat: {
       listThreads: () => Promise.resolve([]),

@@ -178,6 +178,42 @@ async function hydrateFromDisk(state: ProjectState): Promise<void> {
         await quarantine(filePath, 'invalid-shape');
         continue;
       }
+      // v0.30 SEC-HIGH-4: validate cliId/cliProfileId pair on hydration so
+      // a hand-edited thread JSON can't smuggle a hostile runtime id into
+      // dispatch (e.g. routing to a future adapter before it has its own
+      // guards) or correlate the thread to a different profile's apiKey.
+      // Strip both fields if either is invalid or unpaired. Also enforce
+      // mutual exclusion with llmProfileId — IPC rejects this at create
+      // time, but pre-existing tampered JSONs would otherwise persist.
+      const ALLOWED_PERSISTED_CLI_IDS = new Set(['opencode']);
+      const tAsRec = thread as {
+        cliId?: unknown;
+        cliProfileId?: unknown;
+        llmProfileId?: unknown;
+      };
+      if (tAsRec.cliId !== undefined) {
+        const cidOk =
+          typeof tAsRec.cliId === 'string' &&
+          ALLOWED_PERSISTED_CLI_IDS.has(tAsRec.cliId);
+        const pidOk = isUuid(tAsRec.cliProfileId);
+        if (!cidOk || !pidOk) {
+          delete tAsRec.cliId;
+          delete tAsRec.cliProfileId;
+        }
+      } else if (tAsRec.cliProfileId !== undefined) {
+        // cliProfileId without cliId — unpaired, drop it.
+        delete tAsRec.cliProfileId;
+      }
+      if (
+        typeof tAsRec.llmProfileId === 'string' &&
+        tAsRec.llmProfileId.trim() &&
+        tAsRec.cliProfileId !== undefined
+      ) {
+        // Mutual exclusion violated — llmProfileId wins (matches dispatch
+        // order in ChatService.sendMessage).
+        delete tAsRec.cliId;
+        delete tAsRec.cliProfileId;
+      }
       // Strip an unsafe top-level run handle. `thread.activeRun` is the
       // canonical field resume-on-boot consumes (and getThread now ships to
       // the renderer), so a hostile chat JSON pointing runDir outside the
@@ -356,6 +392,12 @@ export async function listThreads(
         hasActiveRun: threadHasActiveRun(t),
         ...(t.config ? { config: t.config } : {}),
         ...(t.llmProfileId ? { llmProfileId: t.llmProfileId } : {}),
+        // v0.30: mirror the CLI runtime lock so the thread list can
+        // paint an "OpenCode" badge without re-fetching the full
+        // thread JSON. cliId is undefined for the default Claude
+        // path; cliProfileId is only meaningful when cliId is set.
+        ...(t.cliId ? { cliId: t.cliId } : {}),
+        ...(t.cliProfileId ? { cliProfileId: t.cliProfileId } : {}),
       }),
     );
 }
@@ -383,14 +425,14 @@ export async function createThread(
   projectPath: string,
   title?: string,
   llmProfileId?: string,
+  // v0.30: CLI runtime lock. When set, the IPC layer has already
+  // validated the matching CliProfile exists and resolved its cliId
+  // (currently always 'opencode'). Mutually exclusive with llmProfileId
+  // — IPC must reject if both are non-empty before reaching here.
+  cliProfileBinding?: { profileId: string; cliId: 'opencode' },
 ): Promise<ChatThread> {
   const s = getState(projectPath);
   await s.hydrationPromise;
-  // v0.29: provider lock is captured at thread creation. Validation /
-  // existence-check happens in the IPC layer before we get here — by the
-  // time we're storing it, the id has been confirmed against the
-  // profiles list (or rejected as 400 upstream). Persisting an unknown
-  // id would be inert but confusing on later loads.
   const trimmedProfileId =
     typeof llmProfileId === 'string' && llmProfileId.trim()
       ? llmProfileId.trim()
@@ -403,6 +445,12 @@ export async function createThread(
     updatedAt: Date.now(),
     messages: [],
     ...(trimmedProfileId ? { llmProfileId: trimmedProfileId } : {}),
+    ...(cliProfileBinding
+      ? {
+          cliId: cliProfileBinding.cliId,
+          cliProfileId: cliProfileBinding.profileId,
+        }
+      : {}),
   };
   s.threads.set(thread.id, thread);
   await persistThread(s.projectPath, thread);
@@ -444,15 +492,10 @@ export async function deleteThread(
   if (wasActive) {
     s.activeThreadId = null;
   }
-  if (s.activeThreadId === threadId && s.activeLlmRunHandle) {
-    try {
-      await s.activeLlmRunHandle.kill();
-    } catch (err) {
-      logger.warn(`llm kill on delete failed: ${(err as Error).message}`);
-    }
-    s.activeLlmRunHandle = null;
-    s.activeThreadId = null;
-  }
+  // Code H4: removed unreachable second LLM-handle block — `wasActive`
+  // already covered the case, and the second `s.activeThreadId === threadId`
+  // could never be true after the null-flip above. Was confusing future
+  // readers; behavior is unchanged.
   s.threads.delete(threadId);
   try {
     await fs.promises.unlink(threadFile(s.projectPath, threadId));

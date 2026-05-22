@@ -5,6 +5,121 @@ All notable changes to DevSpace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.30.0] — 2026-05-22
+
+Multi-CLI runtime support (BRANCH BUILD — `feat/multi-cli`, not merged to
+main yet). Adds **OpenCode** as a second CLI runtime alongside Claude so
+you can route a chat thread to an OpenAI-compatible HTTP endpoint
+(local Ollama / vLLM / LM Studio / a self-hosted Qwen) through the
+opencode binary, while Claude stays the default and unchanged.
+
+Test before merge: install this dmg, add an OpenCode CLI profile in
+Settings → LLM → CLI runtimes, point it at your endpoint, pick it from
+the new dropdown in the chat panel. Claude threads must work exactly as
+0.29 — that's the merge gate.
+
+### Added
+
+- **Settings → LLM → CLI runtimes** — third section below the existing
+  Chat profiles. Detects whether opencode is installed (`~/.opencode/bin/`
+  or PATH); add profiles with name + baseURL + apiKey + model + optional
+  context/output limits + per-profile system prompt. HTTP endpoints
+  trigger an amber warning (not blocked — user-hosted vLLM is commonly
+  reached over plain HTTP behind a VPN).
+- **Chat panel CLI picker** — third dropdown next to Team + LLM. Picking
+  a CLI profile spawns a new thread bound to that profile + cliId — like
+  LLM profiles, threads lock to their runtime so transcripts stay
+  consistent. Capability chip under the dropdowns reflects what the
+  active runtime can render.
+- **`OpenCodeRunner`** — spawns opencode child process per turn with
+  per-profile config isolation (`OPENCODE_CONFIG_DIR=~/.devspace/cli-profiles/<id>/`),
+  prompt piped via stdin, stream-json stdout line-parsed into ChatEvents.
+  User's own `~/.config/opencode/` is never touched.
+- **Active-handles reaper** — `before-quit` waits up to 2.5s for any in-
+  flight opencode children to be SIGTERM'd so they don't survive as PID-1
+  orphans with the apiKey still in outbound headers.
+- 12 IPC handlers (`cli:profiles:list/upsert/delete`, `cli:detect`) +
+  preload bindings + renderer api typed wrapper.
+
+### Honest v0.30 limitations
+
+- OpenCode adapter reports `toolCards: false / diffPreview: false /
+  devlogAutoCapture: false` because the stream parser only handles text
+  deltas for v0.30 — `tool_use` / `tool_result` events from opencode's
+  protocol are deferred to v0.30.1. The capability chip says
+  `Plain text (v0.30)` to match. Flip both back when the parser lands.
+- No resume-on-boot for OpenCode threads. Like LlmChatRunner, an in-flight
+  opencode run dies when the app does. The orphan-sweep in
+  `hydrateFromDisk` flips persisted `streaming` to `error: 'interrupted'`
+  so the renderer doesn't show a phantom spinner forever.
+
+### Security hardening (Wave 2 review fixes, all applied pre-commit)
+
+- **SEC-CRIT-1** — `CliProfilesService.sanitizeProfile` rejects any
+  non-UUID `id` on the read path so a hand-edited cli-profiles.json
+  can't trick the adapter into writing the apiKey-bearing opencode.json
+  to an arbitrary directory via path-traversal in the id field. Paired
+  defense-in-depth guard in `opencode.profileConfigDir`.
+- **SEC-HIGH-1** — spawned opencode child gets an env ALLOWLIST
+  (PATH/HOME/USER/LANG/LC_ALL/TMPDIR/TERM/SHELL + opencode-specific
+  vars), NOT the full parent env. Was leaking ANTHROPIC_API_KEY /
+  OPENAI_API_KEY / GITHUB_TOKEN to a third-party binary routed to a user-
+  configured HTTP endpoint.
+- **SEC-HIGH-2** — `OPENCODE_BIN` env override gated behind
+  `NODE_ENV === 'test' || VITEST` so a `.zshrc`-exported override can't
+  swap the resolved binary in production.
+- **SEC-HIGH-4** — `ChatTranscript.hydrateFromDisk` validates the
+  `cliId` + `cliProfileId` pair (allowlist `cliId`, UUID `cliProfileId`,
+  mutual-exclusion with `llmProfileId`) and strips both if invalid.
+  Tampered thread JSON can no longer smuggle a hostile runtime id into
+  dispatch.
+- **SEC-HIGH-5** — orphan-reaper registry above.
+- **SEC-MED-1** — preload `chat.createThread` now forwards the 4th
+  `cliProfileId` arg so the feature is actually reachable from the
+  typed renderer API surface.
+- **Code H1** — `OpenCodeRunner` cancellation race: kill() during the
+  ensureConfig await left `child` null so killChild() bailed without
+  effect. Now bails cleanly before spawn + SIGTERMs the freshly-spawned
+  child if cancellation fired during the spawn-but-pre-handlers window.
+- **Code H2** — replaced the `thread.cliProfileId!` non-null assertion
+  in `runOpenCodeTurn` with an explicit precondition check that emits a
+  clean error event on violation.
+- **Code H4** — removed unreachable second LLM-handle branch in
+  `deleteThread` that the first `wasActive` block already covered.
+- **Arch H3** — flipped OpenCode capability flags to honest text-only
+  values (see "Honest v0.30 limitations" above).
+- **Arch H6** — `deleteProfile` now `rm -rf`s the per-profile config dir
+  so the apiKey-bearing opencode.json doesn't linger on disk after the
+  user thinks they've deleted the profile.
+
+### Deferred to v0.30.1 (documented, low blast radius)
+
+- Tool-event parsing (`tool_use` / `tool_result`) → flip capability flags
+  back to honest `true` when this lands.
+- Three-runner abstraction (`ThreadRunner` interface + polymorphic
+  `activeRunHandle: { kind, h }` slot) — current `state.activeLlmRunHandle`
+  is structurally compatible with OpenCodeRunHandle but the field name
+  is a slight lie. Refactor before adding a 4th runtime (Codex / Gemini).
+- `CliAdapter` interface split (Detector / Configurator / Spawner /
+  Parser) — Claude is currently a "detection-only stub" with throw guards.
+- `urlSafety.assertSafeBaseUrl` `allowHttp` default — currently `true` to
+  match v0.29 behavior; defense-in-depth flip to `false` + explicit
+  opt-in at every call site planned for v0.30.1.
+- SSRF advisory note (the guard validates user-configured URLs at upsert
+  time; the actual outbound requests are made by the opencode child
+  process, so a redirect-to-internal-IP attack would bypass the guard).
+  Mitigation: future sandbox / DNS pre-resolution.
+
+### Verified
+
+- **923 vitest tests pass** (was 802 at v0.29.0 → **+121** new) including
+  4 regression tests pinning the SEC-CRIT-1 and Arch H6 fixes.
+- Typecheck clean.
+- Claude path byte-identical with v0.29.0 (`git diff main..HEAD --
+  src/main/services/ChatService.ts` shows only additive `runOpenCodeTurn`
+  branch + sibling early-return; team-sequential / orchestrator /
+  resume-on-boot paths untouched).
+
 ## [0.29.0] — 2026-05-22
 
 LLM chat profiles. The Claude path stays the headline feature, but now

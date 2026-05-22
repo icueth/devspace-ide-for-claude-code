@@ -65,6 +65,10 @@ import {
   profileNameForBadge,
   resolveProfileSelection,
 } from '@renderer/components/Dock/chatProfileSelection';
+import {
+  capabilityChipClassName,
+  type CapabilityChip,
+} from '@renderer/components/Dock/cliPickerOptions';
 import { ChatSettingsDrawer } from '@renderer/components/Dock/ChatSettingsDrawer';
 import {
   parseSlashInput,
@@ -92,6 +96,7 @@ import type {
   ChatMessageSegment,
   ChatThread,
   ChatThreadMeta,
+  CliProfile,
   LlmChatProfile,
   TeamDef,
   TeamStep,
@@ -190,6 +195,10 @@ function metaFromThread(t: ChatThread): ChatThreadMeta {
     // v0.29: carry provider lock so the dropdown + thread-list badge can
     // reflect the freshly-created thread before listThreads round-trips.
     ...(t.llmProfileId ? { llmProfileId: t.llmProfileId } : {}),
+    // v0.30: same for the CLI lock pair. cliId on its own is harmless;
+    // cliProfileId is what gates routing in ChatService.
+    ...(t.cliId ? { cliId: t.cliId } : {}),
+    ...(t.cliProfileId ? { cliProfileId: t.cliProfileId } : {}),
   };
 }
 
@@ -308,6 +317,21 @@ export function ChatPanel({ projectPath }: ChatPanelProps) {
   const [chatProfiles, setChatProfiles] = useState<LlmChatProfile[]>([]);
   const [selectedProfileId, setSelectedProfileId] = useState<string | null>(
     null,
+  );
+  // v0.30: non-Claude CLI runtime profiles (OpenCode today; Codex / Gemini
+  // later). Lives alongside chatProfiles but routes through `api.chat
+  // .createThread(..., undefined, profile.id)` — the 4th positional arg
+  // — when the user picks one. Provider lock is per-thread, identical to
+  // chatProfiles, so switching the CLI picker always spawns a fresh thread.
+  const [cliProfiles, setCliProfiles] = useState<CliProfile[]>([]);
+  const [selectedCliProfileId, setSelectedCliProfileId] = useState<
+    string | null
+  >(null);
+  // Set of installed CLI binaries from `api.cli.detect()`. Used to gate
+  // the CLI picker — unrelated to Claude detection (Claude is the default
+  // runtime and is always offered).
+  const [installedCliIds, setInstalledCliIds] = useState<Set<string>>(
+    new Set(),
   );
   // Opt-in "Start in new thread" — creates a fresh thread before the
   // team send so the run gets clean context. Default off because most
@@ -694,6 +718,42 @@ export function ChatPanel({ projectPath }: ChatPanelProps) {
     };
   }, [loadChatProfiles]);
 
+  // v0.30: load CLI runtime profiles + detection results. Detection is
+  // cheap (which-style probe) so we co-load it with the profile list.
+  // Listens for the same-process 'devspace:cli-profiles-changed' event
+  // CliSettings emits after save / delete so the dropdown stays current
+  // without a window reload. Re-detects on focus too — the user may
+  // have installed opencode in another terminal while DevSpace was
+  // backgrounded, and we want the picker to enable without a restart.
+  const loadCliProfiles = useCallback(async () => {
+    try {
+      const [list, det] = await Promise.all([
+        api.cli.listProfiles(),
+        api.cli.detect(),
+      ]);
+      setCliProfiles(list);
+      setInstalledCliIds(
+        new Set(det.filter((d) => d.installed).map((d) => d.cliId)),
+      );
+    } catch (err) {
+      console.error('[chat] failed to load CLI profiles / detection', err);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadCliProfiles();
+  }, [loadCliProfiles]);
+
+  useEffect(() => {
+    const refresh = () => void loadCliProfiles();
+    window.addEventListener('devspace:cli-profiles-changed', refresh);
+    window.addEventListener('focus', refresh);
+    return () => {
+      window.removeEventListener('devspace:cli-profiles-changed', refresh);
+      window.removeEventListener('focus', refresh);
+    };
+  }, [loadCliProfiles]);
+
   // Pull the design skills catalog once on mount + whenever the project
   // changes. Cached in skillsRef so the bubble right-click menu can build
   // accurate enabled/disabled state without an IPC round trip per click.
@@ -835,6 +895,22 @@ export function ChatPanel({ projectPath }: ChatPanelProps) {
   useEffect(() => {
     setSelectedProfileId(resolveProfileSelection(activeMeta, chatProfiles));
   }, [activeMeta, chatProfiles]);
+
+  // v0.30: same pattern for the CLI picker. Pull the id off the meta
+  // list (populated immediately by metaFromThread) so the picker stays
+  // in sync as the user switches threads. Stale ids — profile deleted
+  // while a thread still references it — collapse to null so the
+  // picker can't highlight a ghost row.
+  useEffect(() => {
+    const id = activeMeta?.cliProfileId;
+    if (!id) {
+      setSelectedCliProfileId(null);
+      return;
+    }
+    setSelectedCliProfileId(
+      cliProfiles.some((p) => p.id === id) ? id : null,
+    );
+  }, [activeMeta, cliProfiles]);
 
   // True while the active thread has at least one assistant message in
   // 'streaming' state. Drives the Send→Stop button swap AND the v0.16 queue
@@ -1244,6 +1320,66 @@ export function ChatPanel({ projectPath }: ChatPanelProps) {
     [chatProfiles, projectPath, selectedProfileId],
   );
 
+  // v0.30: same per-thread lock pattern for CLI profiles. Selecting a
+  // CLI profile NEVER mutates an existing thread — it always spawns a
+  // fresh thread bound to that profileId. The 4th positional arg to
+  // createThread is `cliProfileId` per the contract; passing it
+  // alongside `undefined` for `llmProfileId` is what makes ChatService
+  // route the new thread through the CliRunner. Mirrors the double-
+  // click guard logic on the LLM picker.
+  const creatingCliProfileRef = useRef<string | null>(null);
+  const onCliProfileChange = useCallback(
+    async (nextId: string | null) => {
+      if (nextId === selectedCliProfileId) return;
+      if (creatingCliProfileRef.current === nextId) return;
+      const profile = nextId
+        ? cliProfiles.find((p) => p.id === nextId) ?? null
+        : null;
+      if (nextId && !profile) return;
+      const title = profile
+        ? `New chat (${profile.name} · ${profile.cliId})`
+        : 'New chat';
+      creatingCliProfileRef.current = nextId;
+      try {
+        const t = await api.chat.createThread(
+          projectPath,
+          title,
+          // 3rd arg is llmProfileId — explicitly undefined so the new
+          // thread isn't double-bound. ChatThread.cliId / llmProfileId
+          // are mutually exclusive in the type contract.
+          undefined,
+          profile ? profile.id : undefined,
+        );
+        setThreads((prev) => [metaFromThread(t), ...prev]);
+        setLoaded((prev) => ({ ...prev, [t.id]: t }));
+        setActiveId(t.id);
+      } catch (err) {
+        console.error('[chat] failed to create thread for CLI profile', err);
+      } finally {
+        if (creatingCliProfileRef.current === nextId) {
+          creatingCliProfileRef.current = null;
+        }
+      }
+    },
+    [cliProfiles, projectPath, selectedCliProfileId],
+  );
+
+  // v0.30: compute the capability chip text for the currently-selected
+  // option (Claude default | LLM profile | CLI profile). Falls back to
+  // 'Full' for Claude / 'Plain text' for raw HTTP LLM chats — the same
+  // labels the picker emits. Used by the chip rendered under the
+  // dropdowns so the user always knows what tools the next turn can
+  // (or can't) call.
+  const activeCapabilityChip: CapabilityChip = useMemo(() => {
+    if (selectedCliProfileId) {
+      // Arch H3: HONEST chip for v0.30 — tool_use/tool_result not yet
+      // parsed by OpenCodeRunner, so any CLI profile is Plain text.
+      return 'Plain text';
+    }
+    if (selectedProfileId) return 'Plain text';
+    return 'Full';
+  }, [selectedCliProfileId, selectedProfileId]);
+
   const onDeleteThread = useCallback(
     async (id: string) => {
       await api.chat.deleteThread(projectPath, id);
@@ -1516,7 +1652,20 @@ export function ChatPanel({ projectPath }: ChatPanelProps) {
             // v0.29: provider badge — appended only when the thread is
             // bound to a profile, so Claude threads stay visually clean.
             // Falls back to 'unknown LLM' when the profile was deleted.
-            const badge = profileNameForBadge(t.llmProfileId, chatProfiles);
+            // v0.30: CLI lock takes precedence over LLM lock (they're
+            // mutually exclusive in the contract). The CLI badge uses a
+            // two-letter abbreviation prefix ("OC ") so it's
+            // distinguishable from LLM-bound threads in the dropdown.
+            const cliProfile = t.cliProfileId
+              ? cliProfiles.find((p) => p.id === t.cliProfileId) ?? null
+              : null;
+            const cliBadge = t.cliProfileId
+              ? cliProfile
+                ? `OC ${cliProfile.name}`
+                : 'unknown CLI'
+              : null;
+            const llmBadge = profileNameForBadge(t.llmProfileId, chatProfiles);
+            const badge = cliBadge ?? llmBadge;
             return (
               <option key={t.id} value={t.id}>
                 {badge ? `${t.title} · ${badge}` : t.title}
@@ -1565,11 +1714,14 @@ export function ChatPanel({ projectPath }: ChatPanelProps) {
         )}
       </div>
 
-      {/* Provider + Team pickers — the provider dropdown picks which LLM
-          backs the next NEW thread; switching it always spawns a fresh
-          thread (provider lock is per-thread, see onProfileChange). The
-          team picker controls multi-agent routing on the next send. */}
-      <div className="flex shrink-0 items-center gap-2 border-b border-border bg-surface-2 px-3 py-1.5">
+      {/* Provider + CLI + Team pickers — the LLM dropdown picks which
+          HTTP API backs the next NEW thread; the CLI dropdown picks
+          which non-Claude CLI binary spawns for the next NEW thread.
+          Switching either always spawns a fresh thread (provider lock
+          is per-thread). The two are mutually exclusive in the type
+          contract: picking a CLI profile clears the LLM lock and vice
+          versa, because both flows route createThread differently. */}
+      <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border bg-surface-2 px-3 py-1.5">
         <Bot size={11} className="shrink-0 text-text-muted" />
         <span className="text-[10.5px] text-text-muted">LLM:</span>
         <select
@@ -1586,6 +1738,47 @@ export function ChatPanel({ projectPath }: ChatPanelProps) {
             </option>
           ))}
         </select>
+        <span className="mx-1 h-3 w-px shrink-0 bg-border-subtle" />
+        {/* v0.30: CLI runtime picker. Disabled options reflect missing
+            binaries (the user has a profile but hasn't installed the
+            matching CLI yet). Switching to a CLI profile spawns a fresh
+            thread via onCliProfileChange — same per-thread lock contract
+            as the LLM picker. */}
+        <Terminal size={11} className="shrink-0 text-text-muted" />
+        <span className="text-[10.5px] text-text-muted">CLI:</span>
+        <select
+          value={selectedCliProfileId ?? ''}
+          onChange={(e) => void onCliProfileChange(e.target.value || null)}
+          className="min-w-0 rounded-[5px] border border-border-subtle bg-surface-3 px-2 py-[2px] text-[11px] text-text focus:outline-none focus:ring-1 focus:ring-accent/40"
+          title="Switching the CLI creates a new thread"
+        >
+          <option value="">— None (use LLM / Claude) —</option>
+          {cliProfiles.length === 0 && (
+            <option value="" disabled>
+              (no CLI profiles — add one in Settings → LLM → CLI runtimes)
+            </option>
+          )}
+          {cliProfiles.map((p) => {
+            const installed = installedCliIds.has(p.cliId);
+            return (
+              <option key={p.id} value={p.id} disabled={!installed}>
+                {installed ? '⌨️ ' : '⚠ '}
+                {p.name} ({p.cliId}){installed ? '' : ' — not installed'}
+              </option>
+            );
+          })}
+        </select>
+        {/* Capability chip — verbatim summaryLabel for the active
+            selection, color-coded per the v0.30 spec. */}
+        <span
+          className={cn(
+            'inline-flex h-[18px] shrink-0 items-center rounded-full border px-2 text-[9.5px] font-medium',
+            capabilityChipClassName(activeCapabilityChip),
+          )}
+          title={`Tool capability for this provider: ${activeCapabilityChip}`}
+        >
+          {activeCapabilityChip}
+        </span>
         <span className="mx-1 h-3 w-px shrink-0 bg-border-subtle" />
         <Users size={11} className="shrink-0 text-text-muted" />
         <span className="text-[10.5px] text-text-muted">Team:</span>

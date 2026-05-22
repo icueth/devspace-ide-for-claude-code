@@ -96,6 +96,16 @@ export const IPC = {
   LLM_CHAT_PROFILES_UPSERT: 'llm:chat-profiles:upsert',
   LLM_CHAT_PROFILES_DELETE: 'llm:chat-profiles:delete',
 
+  // v0.30: multi-CLI runtime support. Profiles point a non-Claude CLI
+  // (currently 'opencode') at a provider config (OpenAI-compatible base
+  // URL + key + model). Each profile gets an isolated config dir under
+  // ~/.devspace/cli-profiles/<id>/ injected via env at spawn time. Detect
+  // probes binaries on PATH so the UI can gate creation on installed.
+  CLI_PROFILES_LIST: 'cli:profiles:list',
+  CLI_PROFILES_UPSERT: 'cli:profiles:upsert',
+  CLI_PROFILES_DELETE: 'cli:profiles:delete',
+  CLI_DETECT: 'cli:detect',
+
   // Chat (CLI-agent rendered as conversation, alternative to PTY dock)
   CHAT_LIST_THREADS: 'chat:list-threads',
   CHAT_GET_THREAD: 'chat:get-thread',

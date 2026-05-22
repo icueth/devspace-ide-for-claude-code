@@ -17,6 +17,7 @@ import {
   listProfiles,
   upsertProfile,
 } from '@main/services/LlmChatProfilesService';
+import { listProfiles as listCliProfiles } from '@main/services/CliProfilesService';
 import { IPC } from '@shared/ipc-channels';
 import type {
   ChatConfig,
@@ -50,20 +51,62 @@ export function registerChatIpc(): void {
       projectPath: string,
       title?: string,
       llmProfileId?: string,
+      // v0.30: optional non-Claude CLI profile binding. Mutually exclusive
+      // with llmProfileId — a thread is bound to exactly one of (Claude
+      // default, LLM HTTP profile, CLI runtime profile). Empty/undefined
+      // strings are treated as not-set.
+      cliProfileId?: string,
     ) => {
+      const trimmedLlmId =
+        typeof llmProfileId === 'string' && llmProfileId.trim()
+          ? llmProfileId.trim()
+          : '';
+      const trimmedCliId =
+        typeof cliProfileId === 'string' && cliProfileId.trim()
+          ? cliProfileId.trim()
+          : '';
+
+      if (trimmedLlmId && trimmedCliId) {
+        throw new Error(
+          'createThread: llmProfileId and cliProfileId are mutually exclusive',
+        );
+      }
+
       // v0.29: when an LLM profile is pinned, validate its existence
       // BEFORE creating the thread so a hand-crafted IPC call with a
       // bogus id can't strand a thread in an unrunnable state. Empty
       // string / undefined = default Claude path.
-      if (llmProfileId && typeof llmProfileId === 'string' && llmProfileId.trim()) {
-        const trimmed = llmProfileId.trim();
+      if (trimmedLlmId) {
         const profiles = await listProfiles();
-        const exists = profiles.some((p) => p.id === trimmed);
+        const exists = profiles.some((p) => p.id === trimmedLlmId);
         if (!exists) {
-          throw new Error(`unknown llmProfileId: ${trimmed}`);
+          throw new Error(`unknown llmProfileId: ${trimmedLlmId}`);
         }
-        return createThread(projectPath, title, trimmed);
+        return createThread(projectPath, title, trimmedLlmId);
       }
+
+      // v0.30: CLI profile binding. Look the profile up to resolve its
+      // cliId (currently always 'opencode' — the allowlist in
+      // CliProfilesService gates the set). createThread receives a
+      // typed binding so the ChatThread.cliId field is set from a
+      // source that we KNOW matches the persisted profile.
+      if (trimmedCliId) {
+        const cliProfiles = await listCliProfiles();
+        const profile = cliProfiles.find((p) => p.id === trimmedCliId);
+        if (!profile) {
+          throw new Error(`unknown cliProfileId: ${trimmedCliId}`);
+        }
+        if (profile.cliId !== 'opencode') {
+          throw new Error(
+            `unsupported cliId for v0.30 thread binding: ${profile.cliId}`,
+          );
+        }
+        return createThread(projectPath, title, undefined, {
+          profileId: profile.id,
+          cliId: profile.cliId,
+        });
+      }
+
       return createThread(projectPath, title);
     },
   );

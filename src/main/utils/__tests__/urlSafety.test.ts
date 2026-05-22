@@ -97,4 +97,56 @@ describe('assertSafeBaseUrl', () => {
     expect(isSafeBaseUrl('not a url')).toBe(false);
     expect(isSafeBaseUrl('')).toBe(false);
   });
+
+  // v0.30: explicit allowHttp flag. Default (omitted or true) accepts
+  // plain http:// for public hosts; passing `false` rejects them AFTER
+  // the more specific blocklist/loopback/private checks fire so the
+  // renderer toast still shows the right diagnostic.
+  describe('allowHttp flag', () => {
+    it('accepts public http:// by default (allowHttp omitted)', () => {
+      expect(() => assertSafeBaseUrl('http://api.example.com:8080/v1')).not.toThrow();
+    });
+
+    it('accepts public http:// when allowHttp=true', () => {
+      expect(() =>
+        assertSafeBaseUrl('http://api.example.com:8080/v1', { allowHttp: true }),
+      ).not.toThrow();
+    });
+
+    it('rejects public http:// when allowHttp=false', () => {
+      expect(() =>
+        assertSafeBaseUrl('http://api.example.com:8080/v1', { allowHttp: false }),
+      ).toThrow(/http:\/\/ blocked/);
+    });
+
+    it('https:// is unaffected by allowHttp=false', () => {
+      expect(() =>
+        assertSafeBaseUrl('https://api.openai.com/v1', { allowHttp: false }),
+      ).not.toThrow();
+    });
+
+    it('SSRF blocklist precedes allowHttp check', () => {
+      // A hostile profile with http://169.254.169.254 must still hit the
+      // metadata blocklist (specific diagnostic) rather than the generic
+      // http-blocked diagnostic.
+      expect(() =>
+        assertSafeBaseUrl('http://169.254.169.254', { allowHttp: false }),
+      ).toThrow(/blocked/);
+      // Private IP check fires before allowHttp.
+      expect(() =>
+        assertSafeBaseUrl('http://10.0.0.1', { allowHttp: false }),
+      ).toThrow(/private/);
+    });
+
+    it('loopback + allowLoopback bypasses allowHttp=false (local LLM use case)', () => {
+      // Local Ollama / LM Studio never run TLS; the allowLoopback opt-in
+      // is the user's explicit acknowledgment that loopback http is OK.
+      expect(() =>
+        assertSafeBaseUrl('http://localhost:11434', {
+          allowLoopback: true,
+          allowHttp: false,
+        }),
+      ).not.toThrow();
+    });
+  });
 });

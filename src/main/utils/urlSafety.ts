@@ -57,6 +57,30 @@ export interface AssertBaseUrlOpts {
    * services bound on loopback without explicit acknowledgment.
    */
   allowLoopback?: boolean;
+  /**
+   * Plain-HTTP policy. Three semantics:
+   *
+   *   • `true`  (default)  — accept `http://` URLs. Preserves the
+   *                          historical behavior every existing caller
+   *                          (LlmChatProfilesService, LlmClient) relies
+   *                          on. v0.30 OpenCode CLI profiles also pass
+   *                          this because user-hosted vLLM / TGI /
+   *                          openai-compatible inference servers are
+   *                          commonly reached over plain HTTP inside a
+   *                          private VPN where TLS is terminated at
+   *                          the edge.
+   *   • `false`            — reject `http://` URLs after the more
+   *                          specific blocklist / loopback / private
+   *                          checks have fired. Strict opt-in for new
+   *                          surfaces that want to require TLS for
+   *                          cleartext-credential protection.
+   *
+   * Note: this flag exists primarily for v0.30 audit clarity — the
+   * callable contract is unchanged for every existing call site since
+   * `true` is the default. SSRF blocklist + private-IP blocks STILL
+   * apply regardless of this flag's value.
+   */
+  allowHttp?: boolean;
 }
 
 export function assertSafeBaseUrl(
@@ -91,10 +115,21 @@ export function assertSafeBaseUrl(
         `baseUrl: loopback (${host}) blocked — use a public endpoint or enable local-endpoint opt-in`,
       );
     }
-    return u; // loopback explicitly allowed
+    // loopback explicitly allowed — http:// at this point is local-only,
+    // which is the original allowLoopback use case (Ollama/LM Studio
+    // never run TLS on 127.0.0.1). Don't re-apply allowHttp gating.
+    return u;
   }
   if (isPrivateIpv4(host) || isPrivateIpv6(host)) {
     throw new Error(`baseUrl: private network address blocked (${host})`);
+  }
+  // After all SSRF blocks have cleared, optionally require TLS for public
+  // hosts. Default `allowHttp: true` preserves historical behavior; only
+  // strict callers (none today; reserved for future hardening) flip it.
+  if (u.protocol === 'http:' && opts.allowHttp === false) {
+    throw new Error(
+      `baseUrl: http:// blocked — use https:// or enable plain-HTTP opt-in`,
+    );
   }
   return u;
 }

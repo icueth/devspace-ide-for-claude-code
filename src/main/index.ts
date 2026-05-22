@@ -27,6 +27,7 @@ app.commandLine.appendSwitch(
 import { registerAgentsIpc } from '@main/ipc/agents';
 import { registerAppIpc } from '@main/ipc/app';
 import { registerChatIpc } from '@main/ipc/chat';
+import { registerCliIpc } from '@main/ipc/cli';
 import { registerCodeflowIpc } from '@main/ipc/codeflow';
 import { registerDesignIpc } from '@main/ipc/design';
 import { registerDevServerIpc } from '@main/ipc/devserver';
@@ -52,10 +53,12 @@ import {
   resolveTmuxBinary,
   tmuxSocketArgs,
 } from '@main/services/ClaudeCliLauncher';
+import { shutdownAllOpenCode } from '@main/services/OpenCodeRunner';
 import { shutdownAll as shutdownDevServers } from '@main/services/DevServerService';
 import { shutdownWatchers } from '@main/services/FileWatcherService';
 import { preloadLlmConfig } from '@main/services/LlmConfigService';
 import { preloadProfiles } from '@main/services/LlmChatProfilesService';
+import { preloadProfiles as preloadCliProfiles } from '@main/services/CliProfilesService';
 import { init as initMemory } from '@main/services/MemoryService';
 import { shutdownAll as shutdownPtyPool } from '@main/services/PtyPool';
 import { pruneStaleSessions as pruneStaleTmuxSessions } from '@main/services/TmuxChatRunner';
@@ -264,6 +267,7 @@ app.whenReady().then(async () => {
   registerCodeflowIpc();
   registerLlmIpc();
   registerChatIpc();
+  registerCliIpc();
   registerAgentsIpc();
   registerMcpIpc();
   registerSkillsIpc();
@@ -291,6 +295,7 @@ app.whenReady().then(async () => {
   // best-effort and never throw.
   preloadLlmConfig();
   preloadProfiles();
+  preloadCliProfiles();
 
   // Prune stale tmux sessions older than 2 days. Sessions are created by
   // chat runs, design generations, and CLI launchers — without this, a
@@ -337,6 +342,10 @@ app.on('before-quit', (event) => {
       await Promise.all([
         shutdownDevServers(),
         shutdownPtyPool(),
+        // SEC-HIGH-5: reap any in-flight opencode children so they don't
+        // become orphan PID-1 processes still talking to the user's LLM
+        // endpoint with apiKey-bearing headers after the app exits.
+        shutdownAllOpenCode(),
       ]);
     } catch {
       /* best-effort during shutdown */

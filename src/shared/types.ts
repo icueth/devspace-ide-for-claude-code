@@ -387,6 +387,15 @@ export interface ChatThread {
   // different profile creates a NEW thread, never mutates an existing
   // one. Undefined = Claude (default, backward compat).
   llmProfileId?: string;
+  // v0.30: non-Claude CLI runtime lock (paired with cliProfileId). When
+  // set, ChatService routes to the CliRunner for this cliId instead of
+  // TmuxChatRunner or LlmChatRunner. Mutually exclusive with llmProfileId
+  // — a thread is bound to exactly one of (Claude default, LLM profile,
+  // CLI profile). 'claude' is never persisted (default = absent).
+  cliId?: Exclude<CliId, 'claude'>;
+  // Matching CliProfile.id. Required when cliId is set. Validated against
+  // the profiles list at the IPC layer (same pattern as llmProfileId).
+  cliProfileId?: string;
   // Set while a tmux-backed run is in flight for this thread. Persists
   // across app restarts so on next boot ChatService can re-attach its
   // watcher to the still-running tmux session and continue streaming
@@ -400,6 +409,62 @@ export interface ChatThread {
   // than inferred from messages.length so retries / errors don't cause
   // double-inject or skipped-inject edge cases.
   memoryInjected?: boolean;
+}
+
+// v0.30: multi-CLI support. Each CLI runtime is identified by a stable id;
+// 'claude' is the default and is built-in (no profile needed, uses tmux-
+// backed runner). Other CLIs (currently only 'opencode') require a
+// CliProfile that points at their provider config (OpenAI-compatible
+// endpoint + key + model). ChatThread.cliId locks a thread to one runtime
+// for transcript consistency — switching CLI = new thread, never mutates.
+export type CliId = 'claude' | 'opencode';
+
+// Capability flags published by each adapter. Renderer reads these to
+// decide which UI affordances apply to a thread (e.g. don't render tool
+// cards / Devlog auto-capture for CLIs whose stream format doesn't emit
+// them). `summaryLabel` is the chip text shown next to the picker.
+export interface CliCapabilities {
+  toolCards: boolean;
+  diffPreview: boolean;
+  askUserQuestion: boolean;
+  skills: boolean;
+  devlogAutoCapture: boolean;
+  // e.g. "Full" (Claude) / "~90% tools" (OpenCode) / "Bash only" (Codex)
+  summaryLabel: string;
+}
+
+// User-created profile that binds a non-Claude CLI runtime to a provider
+// config. Stored at `~/.devspace/cli-profiles.json` → { profiles: [...] }.
+// The matching auto-generated runtime config dir lives at
+// `~/.devspace/cli-profiles/<id>/` and is wired via env (e.g.
+// OPENCODE_CONFIG_DIR) at spawn time so each profile is isolated and the
+// user's own ~/.config/opencode/ is never mutated.
+export interface CliProfile {
+  id: string;                  // UUID generated on create
+  name: string;                // "AEON Qwen3.6" — capped 64 chars
+  cliId: Exclude<CliId, 'claude'>; // 'claude' has no profile (built-in)
+  provider: {
+    baseURL: string;           // e.g. http://123.253.61.68:8000/v1
+    apiKey: string;            // plaintext on disk, 0o600 mode
+    model: string;             // e.g. AEON-7/Qwen3.6-27B-...
+    // Optional knobs forwarded to the auto-generated runtime config:
+    contextLimit?: number;
+    outputLimit?: number;
+  };
+  // Optional per-profile system prompt prepended to every turn (after
+  // project memory/devlog preambles). Capped at 4096 chars by service.
+  systemPrompt?: string;
+  createdAt: number;           // ms-epoch, stable sort
+}
+
+// Result of probing a CLI binary on PATH (+ fallback bins). Returned by
+// `cli:detect` for the Settings UI to gate profile creation on the
+// matching runtime actually being installed.
+export interface CliDetectionResult {
+  cliId: CliId;
+  installed: boolean;
+  version?: string;
+  bin?: string;                // resolved absolute path if installed
 }
 
 // v0.27: lightweight thread descriptor for the thread LIST. `listThreads`
@@ -421,6 +486,10 @@ export interface ChatThreadMeta {
   // v0.29: provider lock — mirrors ChatThread.llmProfileId so the thread
   // list can show a small provider badge without fetching full threads.
   llmProfileId?: string;
+  // v0.30: non-Claude CLI runtime mirror (paired with cliProfileId on the
+  // full thread). Lets the list show e.g. an "OpenCode" badge.
+  cliId?: Exclude<CliId, 'claude'>;
+  cliProfileId?: string;
 }
 
 // Metadata describing an in-flight chat run that was spawned inside a
