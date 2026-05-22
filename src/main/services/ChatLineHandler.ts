@@ -102,7 +102,11 @@ function appendTextToSegments(target: SegmentTarget, text: string): void {
   }
 }
 
-function appendToolUseToSegments(target: SegmentTarget, toolUseId: string): void {
+// Exported in v0.30.2 so ChatService.runOpenCodeTurn can re-use the SAME
+// segmentation rule the Claude path applies — keeps tool-card rendering
+// canonical across runtimes (one source of truth for "how a tool_use
+// extends the assistant's chronological segment list").
+export function appendToolUseToSegments(target: SegmentTarget, toolUseId: string): void {
   target.segments ??= [];
   const last = target.segments[target.segments.length - 1];
   if (last && last.kind === 'tool_group') {

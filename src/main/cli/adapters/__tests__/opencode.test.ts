@@ -5,7 +5,7 @@ import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { openCodeAdapter, __testing } from '@main/cli/adapters/opencode';
-import type { CliProfile } from '@shared/types';
+import type { ChatEvent, CliProfile } from '@shared/types';
 
 const ORIGINAL_HOME = process.env.HOME;
 let tmpHome: string;
@@ -36,19 +36,18 @@ function profile(): CliProfile {
 }
 
 describe('openCodeAdapter — capabilities', () => {
-  // Arch H3: HONEST capabilities for v0.30 — tool_use/tool_result events
-  // are deferred to v0.30.1 so toolCards/diffPreview/devlogAutoCapture
-  // must report false until the parser lands. Flipping these back without
-  // also implementing the parser would put a `~90% tools` chip on plain-
-  // text output. This test pins the honest values.
-  it('reports plain-text-only for v0.30 (tool events deferred to 0.30.1)', () => {
+  // v0.30.2: tool_use / tool_result parsing landed, so toolCards +
+  // diffPreview + devlogAutoCapture flip to true. askUserQuestion stays
+  // false (Claude-specific MCP tool), skills stays false (Claude-only
+  // directory convention).
+  it('reports tool-card support for v0.30.2 (parser landed)', () => {
     expect(openCodeAdapter.capabilities).toEqual({
-      toolCards: false,
-      diffPreview: false,
+      toolCards: true,
+      diffPreview: true,
       askUserQuestion: false,
       skills: false,
-      devlogAutoCapture: false,
-      summaryLabel: 'Plain text (v0.30)',
+      devlogAutoCapture: true,
+      summaryLabel: 'Tools enabled (beta)',
     });
   });
 });
@@ -254,7 +253,10 @@ describe('openCodeAdapter — parseStreamLine', () => {
     );
   });
 
-  it('returns null for unknown event types (tool events deferred to v0.30.1)', () => {
+  it('returns null for malformed tool_use events (no part / no tool name)', () => {
+    // v0.30.2: tool_use events ARE parsed when properly structured, but
+    // a flat shape with no `part` and no `tool` is unrecognizable and
+    // must drop silently rather than emit a broken ToolCard.
     expect(
       openCodeAdapter.parseStreamLine!(
         '{"type":"tool_use","name":"Read","input":{}}',
@@ -341,21 +343,39 @@ describe('openCodeAdapter — parseStreamLine (opencode v1.2.27 real shapes)', (
     expect(event?.message).toBe('upstream timeout');
   });
 
-  it('returns null for message.part.updated (v0.30.1 no-op — dedup deferred)', () => {
-    // Cumulative snapshots would duplicate text without runner-level dedup
-    // state. v0.30.2 will wire token-by-token streaming via partId tracking.
-    // Pinning the no-op here means a future contributor who wires
-    // message.part.updated MUST also wire dedup state — the test forces
-    // the conversation.
-    const event = openCodeAdapter.parseStreamLine!(
-      JSON.stringify({
-        type: 'message.part.updated',
-        properties: {
-          part: { type: 'text', id: 'prt_xyz', text: 'hello' },
-        },
-      }),
-    );
-    expect(event).toBeNull();
+  it('drops message.part.updated entirely (v0.30.2 review HIGH-1+2 regression)', () => {
+    // The previous draft parsed message.part.updated into text_delta with
+    // an internal `_partId` marker, but the runner-side dedup that would
+    // have made that safe never landed in v0.30.2. Without dedup, every
+    // cumulative snapshot would APPEND the full prefix to assistant.content
+    // (1+2+3+4+5 tokens for a 5-snapshot stream). AND the `_partId` marker
+    // would leak to the renderer via IPC.
+    //
+    // Production opencode v1.2.27 does NOT emit this event in --format json
+    // (verified against opencode source apps/opencode/packages/opencode/
+    // src/cli/cmd/run.ts) so dropping costs us nothing today. v0.30.3 may
+    // re-enable with proper runner-side dedup state.
+    //
+    // This test PINS the dropped behavior so a future contributor can't
+    // re-add the half-design without also wiring the dedup.
+    expect(
+      openCodeAdapter.parseStreamLine!(
+        JSON.stringify({
+          type: 'message.part.updated',
+          properties: {
+            part: { type: 'text', id: 'prt_xyz', text: 'cumulative text' },
+          },
+        }),
+      ),
+    ).toBeNull();
+    expect(
+      openCodeAdapter.parseStreamLine!(
+        JSON.stringify({
+          type: 'message.part.updated',
+          part: { type: 'text', id: 'prt_flat', text: 'hi flat' },
+        }),
+      ),
+    ).toBeNull();
   });
 
   it('returns null for step_start / step_finish (lifecycle, not content)', () => {
@@ -372,5 +392,238 @@ describe('openCodeAdapter — parseStreamLine (opencode v1.2.27 real shapes)', (
         }),
       ),
     ).toBeNull();
+  });
+});
+
+describe('openCodeAdapter — parseStreamLine (tool events, v0.30.2)', () => {
+  // ToolPart shape from opencode message-v2.ts:
+  //   { type:'tool', id, sessionID, messageID, callID, tool,
+  //     state:{ status, input, output?, error?, ... } }
+  // Event wrapper (run.ts emit()):
+  //   { type:'tool_use'|'tool', timestamp, sessionID, part: ToolPart }
+  //
+  // opencode v1.x only emits `tool_use` for terminal states (completed/
+  // error) — running tool parts stay silent in JSON mode. We still
+  // accept the spec-described `tool` + status:'running' shape so a
+  // future opencode version that streams running tools renders live
+  // chips without an adapter patch.
+
+  it('parses tool_use event with completed state into a tool_result ChatEvent', () => {
+    // The dominant real-world case: opencode v1.x emit() for a finished
+    // file read. callID is the tool-call id, state.output is the result.
+    const event = openCodeAdapter.parseStreamLine!(
+      JSON.stringify({
+        type: 'tool_use',
+        timestamp: 1000,
+        sessionID: 'ses_abc',
+        part: {
+          type: 'tool',
+          id: 'prt_001',
+          callID: 'call_xyz_42',
+          tool: 'read',
+          sessionID: 'ses_abc',
+          messageID: 'msg_1',
+          state: {
+            status: 'completed',
+            input: { path: '/tmp/foo.txt' },
+            output: 'file contents here',
+            title: 'read /tmp/foo.txt',
+            metadata: {},
+            time: { start: 1000, end: 1100 },
+          },
+        },
+      }),
+    );
+    expect(event?.kind).toBe('tool_result');
+    expect(event?.toolUseId).toBe('call_xyz_42');
+    expect(event?.toolResult).toBe('file contents here');
+    expect(event?.toolIsError).toBe(false);
+  });
+
+  it('parses tool_use event with error state into tool_result with toolIsError=true', () => {
+    const event = openCodeAdapter.parseStreamLine!(
+      JSON.stringify({
+        type: 'tool_use',
+        sessionID: 'ses_abc',
+        part: {
+          type: 'tool',
+          callID: 'call_err_1',
+          tool: 'edit',
+          state: {
+            status: 'error',
+            input: { path: '/tmp/missing.txt', new_string: 'x' },
+            error: 'file not found',
+            time: { start: 1, end: 2 },
+          },
+        },
+      }),
+    );
+    expect(event?.kind).toBe('tool_result');
+    expect(event?.toolUseId).toBe('call_err_1');
+    expect(event?.toolResult).toBe('file not found');
+    expect(event?.toolIsError).toBe(true);
+  });
+
+  it('parses `tool` event with status:running into a tool_use ChatEvent (forward-compat)', () => {
+    // opencode v1.x doesn't emit this shape in JSON mode today, but the
+    // spec-described `tool` event with status:'running' is the natural
+    // place to surface a live ToolCard if/when opencode adds it. Wiring
+    // it now means a future version "just works" without an adapter
+    // bump.
+    const event = openCodeAdapter.parseStreamLine!(
+      JSON.stringify({
+        type: 'tool',
+        sessionID: 'ses_abc',
+        part: {
+          type: 'tool',
+          callID: 'call_run_1',
+          tool: 'bash',
+          state: {
+            status: 'running',
+            input: { command: 'ls -la' },
+            time: { start: 1000 },
+          },
+        },
+      }),
+    );
+    expect(event?.kind).toBe('tool_use');
+    expect(event?.toolUseId).toBe('call_run_1');
+    expect(event?.toolName).toBe('bash');
+    expect(event?.toolInput).toEqual({ command: 'ls -la' });
+  });
+
+  it('falls back to part.id when callID is absent (flat-shape forward-compat)', () => {
+    // Defensive: if a future opencode flattens away the callID/id
+    // distinction or omits callID entirely, we still need a stable id
+    // to pair tool_use ↔ tool_result. part.id (PartID from partBase)
+    // is the second-best candidate.
+    const event = openCodeAdapter.parseStreamLine!(
+      JSON.stringify({
+        type: 'tool_use',
+        part: {
+          type: 'tool',
+          id: 'prt_fallback',
+          tool: 'write',
+          state: { status: 'completed', input: {}, output: 'done' },
+        },
+      }),
+    );
+    expect(event?.kind).toBe('tool_result');
+    expect(event?.toolUseId).toBe('prt_fallback');
+  });
+
+  it('drops tool events with neither callID nor id (unrecoverable)', () => {
+    // Without any stable id we cannot pair a future tool_result back to
+    // its tool_use, so emitting a half-broken event would corrupt the
+    // renderer's ToolCard state. Drop silently.
+    const event = openCodeAdapter.parseStreamLine!(
+      JSON.stringify({
+        type: 'tool_use',
+        part: { type: 'tool', tool: 'read', state: { status: 'completed' } },
+      }),
+    );
+    expect(event).toBeNull();
+  });
+
+  it('drops tool events with no tool name (unrecoverable)', () => {
+    // Without the tool name the renderer has nothing to label the chip
+    // with. Drop silently rather than show a blank ToolCard.
+    const event = openCodeAdapter.parseStreamLine!(
+      JSON.stringify({
+        type: 'tool_use',
+        part: { type: 'tool', callID: 'c1', state: { status: 'completed' } },
+      }),
+    );
+    expect(event).toBeNull();
+  });
+
+  it('treats presence of state.output as terminal even when status is missing', () => {
+    // Defensive: a future shape change that drops the status discriminator
+    // string but keeps output should still surface the tool_result so the
+    // renderer doesn't get stuck on a "running" chip.
+    const event = openCodeAdapter.parseStreamLine!(
+      JSON.stringify({
+        type: 'tool_use',
+        part: {
+          type: 'tool',
+          callID: 'c_no_status',
+          tool: 'read',
+          state: { input: { path: '/x' }, output: 'contents' },
+        },
+      }),
+    );
+    expect(event?.kind).toBe('tool_result');
+    expect(event?.toolResult).toBe('contents');
+    expect(event?.toolIsError).toBe(false);
+  });
+
+  // ── SEC-M1 regression: unbounded id/name input from a hostile opencode ─
+
+  it('SEC-M1: rejects toolUseId longer than 256 chars', () => {
+    // A compromised opencode binary could emit megabytes of garbage here
+    // which would end up persisted in the thread transcript + broadcast on
+    // every event. Reject anything beyond a sane identifier length.
+    const longId = 'a'.repeat(257);
+    const event = openCodeAdapter.parseStreamLine!(
+      JSON.stringify({
+        type: 'tool_use',
+        part: {
+          type: 'tool',
+          callID: longId,
+          tool: 'read',
+          state: { status: 'completed', output: 'ok' },
+        },
+      }),
+    );
+    expect(event).toBeNull();
+  });
+
+  it('SEC-M1: rejects toolUseId with disallowed characters (path traversal, shell metachars)', () => {
+    // Restrict to [A-Za-z0-9._:-] so a fake id like "../../../etc/passwd"
+    // or "; rm -rf /" cannot ride through into renderer state.
+    for (const badId of ['../../../etc/passwd', '$(rm -rf /)', 'a/b', 'has space']) {
+      const event = openCodeAdapter.parseStreamLine!(
+        JSON.stringify({
+          type: 'tool_use',
+          part: {
+            type: 'tool',
+            callID: badId,
+            tool: 'read',
+            state: { status: 'completed', output: 'ok' },
+          },
+        }),
+      );
+      expect(event).toBeNull();
+    }
+  });
+
+  it('SEC-M1: rejects toolName longer than 128 chars or with disallowed characters', () => {
+    const longName = 'A'.repeat(129);
+    const eventA = openCodeAdapter.parseStreamLine!(
+      JSON.stringify({
+        type: 'tool_use',
+        part: {
+          type: 'tool',
+          callID: 'c1',
+          tool: longName,
+          state: { status: 'completed', output: 'ok' },
+        },
+      }),
+    );
+    expect(eventA).toBeNull();
+    for (const badName of ['rm -rf', 'a.b', 'a/b', '$(x)']) {
+      const event = openCodeAdapter.parseStreamLine!(
+        JSON.stringify({
+          type: 'tool_use',
+          part: {
+            type: 'tool',
+            callID: 'c1',
+            tool: badName,
+            state: { status: 'completed', output: 'ok' },
+          },
+        }),
+      );
+      expect(event).toBeNull();
+    }
   });
 });

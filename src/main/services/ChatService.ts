@@ -18,9 +18,14 @@ import { randomUUID } from 'node:crypto';
 import { listAgents } from '@main/services/AgentsService';
 import { resolveClaudeBinary } from '@main/services/ClaudeCliLauncher';
 import {
+  appendToolUseToSegments,
   makeSoloLineHandler,
   makeStepLineHandler,
 } from '@main/services/ChatLineHandler';
+import {
+  buildMinimalProjectContext,
+  formatAsPromptSection,
+} from '@main/services/MinimalProjectContext';
 import {
   type ProjectState,
   broadcast,
@@ -58,6 +63,8 @@ import {
   getProfileAsync as getCliProfileAsync,
 } from '@main/services/CliProfilesService';
 import { startOpenCodeRun } from '@main/services/OpenCodeRunner';
+import { computeToolDiffPreview } from '@main/utils/diffPreview';
+import { computeToolDiffStats } from '@main/utils/diffStats';
 import { resolveInteractiveShellEnv } from '@main/utils/shellEnv';
 import { createLogger } from '@shared/logger';
 import type {
@@ -559,6 +566,7 @@ async function captureWorkSignalsToDevlog(
   thread: ChatThread,
   user: ChatMessage | null,
   assistant: ChatMessage,
+  opts?: { vendor?: 'claude' | 'opencode' },
 ): Promise<void> {
   try {
     const settings = await getDevlogSettings(projectPath);
@@ -569,6 +577,12 @@ async function captureWorkSignalsToDevlog(
     const diff = summarizeDiffs(tcs);
     const userText = (user?.content ?? '').slice(0, 4000);
     const assistantText = (assistant.content ?? '').slice(0, 4000);
+    // v0.30.2: tag entries with their producing CLI runtime so the
+    // devlog timeline shows attribution. Default Claude = empty prefix
+    // to preserve byte-identical entries on the Claude path (no
+    // existing entries get rewritten).
+    const vendorTag =
+      opts?.vendor && opts.vendor !== 'claude' ? `Via: ${opts.vendor}\n\n` : '';
 
     // Did this turn run a "ship" bash command? The Bash tool's `isError`
     // only flags shell-exec failures, NOT a non-zero exit from the actual
@@ -628,7 +642,7 @@ async function captureWorkSignalsToDevlog(
         projectPath,
         type: 'result',
         title,
-        body: bodyLines.join('\n'),
+        body: vendorTag + bodyLines.join('\n'),
         verdict: shippedViaBash && shipLooksFailed ? 'partial' : 'success',
         threadId: thread.id,
         diffStats: diff
@@ -658,7 +672,7 @@ async function captureWorkSignalsToDevlog(
         userText.split('\n').find((l) => l.trim())?.trim() ?? 'plan';
       const title =
         firstLine.length > 140 ? firstLine.slice(0, 137) + '…' : firstLine;
-      const body = fenceUntrusted(userText);
+      const body = vendorTag + fenceUntrusted(userText);
       await createDevlogEntry({
         projectPath,
         type: 'plan',
@@ -990,7 +1004,21 @@ async function runLlmTurn(
     } catch (err) {
       logger.warn(`llm devlog inject failed: ${(err as Error).message}`);
     }
-    if (memoryOk || devlogOk) {
+    // v0.30.2: minimal project context — helps the model answer
+    // "what is this project?" without needing tool access. Skip if
+    // buildMinimalProjectContext returns null (no package.json).
+    // CODE-M1 review fix: include success in the gate flip so a
+    // memory+devlog-failure-but-ctx-success state isn't permanently
+    // locked into re-injection on every turn.
+    let projectCtxOk = false;
+    try {
+      const ctx = await buildMinimalProjectContext(state.projectPath);
+      if (ctx) systemBlocks.push(formatAsPromptSection(ctx));
+      projectCtxOk = true;
+    } catch (err) {
+      logger.warn(`llm project-context inject failed: ${(err as Error).message}`);
+    }
+    if (memoryOk || devlogOk || projectCtxOk) {
       thread.memoryInjected = true;
       await persistThread(state.projectPath, thread);
     }
@@ -1168,7 +1196,20 @@ async function runOpenCodeTurn(
     } catch (err) {
       logger.warn(`opencode devlog inject failed: ${(err as Error).message}`);
     }
-    if (memoryOk || devlogOk) {
+    // v0.30.2: minimal project context — helps the model answer
+    // "what is this project?" without needing tool access. Skip if
+    // buildMinimalProjectContext returns null (no package.json).
+    // CODE-M1 review fix: include success in the gate flip (see runLlmTurn
+    // for full rationale).
+    let projectCtxOk = false;
+    try {
+      const ctx = await buildMinimalProjectContext(state.projectPath);
+      if (ctx) systemBlocks.push(formatAsPromptSection(ctx));
+      projectCtxOk = true;
+    } catch (err) {
+      logger.warn(`opencode project-context inject failed: ${(err as Error).message}`);
+    }
+    if (memoryOk || devlogOk || projectCtxOk) {
       thread.memoryInjected = true;
       await persistThread(state.projectPath, thread);
     }
@@ -1216,14 +1257,58 @@ async function runOpenCodeTurn(
   let cancelled = false;
   let errored = false;
 
-  // Adapter parseStreamLine emits text_delta / error / done. We need to
-  // accumulate text into assistant.content (the runner doesn't do this
-  // for us — it's the same separation as the LLM path).
+  // Adapter parseStreamLine emits text_delta / tool_use / tool_result /
+  // error / done. We accumulate text into assistant.content (the runner
+  // doesn't do that — same separation as the LLM path) and mirror the
+  // Claude path's tool-card bookkeeping (toolCalls + segments + per-tool
+  // diff stats/preview) so the renderer's ToolCard component receives
+  // canonical input regardless of which CLI produced the events.
   const handle = startOpenCodeRun({
     profile,
     cwd: state.projectPath,
     prompt,
     onEvent: (event) => {
+      // v0.30.2: tool_use — mirror Claude's pattern in ChatLineHandler so
+      // the renderer's ToolCard sees the same diffStats/diffPreview chips
+      // for opencode-driven edits. Re-broadcast the event WITH the
+      // computed diff fields attached (the adapter doesn't compute them
+      // — it can't see disk).
+      if (event.kind === 'tool_use' && event.toolUseId) {
+        const toolName = event.toolName ?? 'tool';
+        const toolInput = event.toolInput ?? {};
+        const diffStats =
+          computeToolDiffStats(toolName, toolInput, state.projectPath) ??
+          undefined;
+        const diffPreview =
+          computeToolDiffPreview(toolName, toolInput, state.projectPath) ??
+          undefined;
+        assistant.toolCalls.push({
+          id: event.toolUseId,
+          name: toolName,
+          input: toolInput,
+          diffStats,
+          diffPreview,
+        });
+        appendToolUseToSegments(assistant, event.toolUseId);
+        broadcast(state, thread.id, {
+          ...event,
+          diffStats,
+          diffPreview,
+        });
+        return;
+      }
+      // v0.30.2: tool_result — match back to its tool_use by id and
+      // attach result/isError so devlog summarizeDiffs and the renderer
+      // both see the completed call.
+      if (event.kind === 'tool_result' && event.toolUseId) {
+        const tu = assistant.toolCalls.find((c) => c.id === event.toolUseId);
+        if (tu) {
+          tu.result = event.toolResult ?? '';
+          tu.isError = !!event.toolIsError;
+        }
+        broadcast(state, thread.id, event);
+        return;
+      }
       if (event.kind === 'text_delta' && event.text) {
         assistant.content += event.text;
         broadcast(state, thread.id, event);
@@ -1293,6 +1378,22 @@ async function runOpenCodeTurn(
   thread.updatedAt = Date.now();
   broadcast(state, thread.id, { kind: 'done', ts: Date.now() });
   await persistThread(state.projectPath, thread);
+
+  // v0.30.2: smart devlog auto-capture for OpenCode turns. Same heuristic
+  // as runClaudeTurn — assistant.toolCalls/diffStats are now populated via
+  // canonical events from the adapter (see tool_use/tool_result branches
+  // above), so summarizeDiffs works unchanged. Tag entries with
+  // `vendor: 'opencode'` attribution so the devlog timeline shows which
+  // CLI runtime produced the result.
+  const userMsg =
+    [...thread.messages].reverse().find((m) => m.role === 'user') ?? null;
+  void captureWorkSignalsToDevlog(
+    state.projectPath,
+    thread,
+    userMsg,
+    assistant,
+    { vendor: 'opencode' },
+  );
 }
 
 // ─── team execution (sequential) ────────────────────────────────────────────

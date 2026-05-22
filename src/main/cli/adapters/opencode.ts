@@ -206,7 +206,8 @@ function buildSpawnArgs(
 }
 
 // Stream-line parser. opencode --format json emits one JSON event per
-// line. Real shape (confirmed against opencode v1.2.27 source):
+// line. Real shape (confirmed against opencode v1.2.27 source —
+// packages/opencode/src/cli/cmd/run.ts emit() helper):
 //
 //   {type, timestamp, sessionID, part?, error?, properties?}
 //
@@ -214,13 +215,30 @@ function buildSpawnArgs(
 // ToolPart, ReasoningPart, StepStartPart, StepFinishPart). TextPart
 // puts the text at part.text — NOT obj.text. v0.30 shipped a parser
 // that looked at obj.text directly → every text event returned null
-// → user saw "Done" with no response. v0.30.1 fixes that.
+// → user saw "Done" with no response. v0.30.1 fixed text/reasoning/
+// error parsing. v0.30.2 (this patch) adds tool events + streaming
+// text dedup marker for the runner.
 //
-// Known limit (documented for v0.30.2): we emit on the top-level `text`
-// event which fires once per finalized part. Streaming token-by-token
-// arrives via `message.part.updated`, but those are cumulative
-// snapshots — naively emitting them duplicates text. Proper handling
-// needs runner-level dedup state which is queued for v0.30.2.
+// Tool events — opencode emits `tool_use` (NOT `tool`) when a ToolPart
+// reaches a terminal state (completed or error). Pending/running parts
+// are NOT emitted in JSON mode by current opencode (v1.x). We still
+// accept the spec-described `tool` event with status:'running' as a
+// future-compat path: if some future opencode version starts streaming
+// running tool parts, we emit a `tool_use` ChatEvent so the renderer's
+// ToolCard renders live. Completed → tool_result ChatEvent.
+//
+// ToolPart shape (message-v2.ts):
+//   { type:'tool', id: PartID, sessionID, messageID, callID, tool,
+//     state: { status, input, output?, error?, ... } }
+// We prefer `part.callID` (the actual tool call id) but fall back to
+// `part.id` for forward-compat with versions that might flatten.
+//
+// Streaming text — `message.part.updated` events carry CUMULATIVE
+// text snapshots. The adapter can't dedup alone because parseStreamLine
+// is stateless per call. We surface the snapshot with a `_partId`
+// marker so the runner (future patch) can do "if this partId was seen
+// before, replace previous; else emit fresh". The renderer never sees
+// `_partId` — runner strips it before broadcast.
 function parseStreamLine(line: string): ChatEvent | null {
   const trimmed = line.trim();
   if (!trimmed) return null;
@@ -262,7 +280,7 @@ function parseStreamLine(line: string): ChatEvent | null {
   // reasoning — thinking blocks (gpt-5-style models). Same nesting as
   // TextPart. We surface them as text_delta in v0.30.1 because there's
   // no dedicated `thinking` ChatEvent yet — a separate kind is queued
-  // for v0.30.2 so the renderer can render them dim/collapsed.
+  // for a later patch so the renderer can render them dim/collapsed.
   if (kind === 'reasoning') {
     const part = obj.part as Record<string, unknown> | undefined;
     const text = typeof part?.text === 'string' ? part.text : '';
@@ -292,30 +310,134 @@ function parseStreamLine(line: string): ChatEvent | null {
     return { kind: 'done', ts };
   }
 
-  // Known v0.30.1 no-ops (will be wired in later patches):
-  //   - message.part.updated (streaming cumulative — needs dedup state)
-  //   - tool_use / tool_result (needs tool_use ChatEvent mapping)
-  //   - step_start / step_finish / session.status / permission.asked
-  //     (lifecycle signals, not user-visible content)
+  // tool / tool_use / tool_result — ToolPart lifecycle. opencode v1.x
+  // emits `tool_use` (NOT `tool`) for terminal states only, but we
+  // accept all three event-name spellings + dispatch on the nested
+  // state.status so future versions that stream running tools also
+  // render live.
+  if (kind === 'tool' || kind === 'tool_use' || kind === 'tool_result') {
+    const part = obj.part as Record<string, unknown> | undefined;
+    if (!part || typeof part !== 'object') return null;
+    const state = (part.state ?? {}) as Record<string, unknown>;
+    const status = typeof state.status === 'string' ? state.status : undefined;
+
+    // Prefer `callID` (the actual tool-call id from ToolPart schema).
+    // Fall back to `part.id` (PartID — present on every part via
+    // partBase) for forward-compat with versions that flatten or drop
+    // the callID/id distinction.
+    const toolUseId =
+      typeof part.callID === 'string' && part.callID
+        ? part.callID
+        : typeof part.id === 'string' && part.id
+          ? part.id
+          : '';
+    // SEC-M1: bound id/name lengths + charset. A hostile/compromised
+    // opencode binary could emit megabytes of garbage here that would
+    // end up persisted in the thread transcript + broadcast on every
+    // event. Identifiers and tool names should be short tokens.
+    if (!toolUseId || toolUseId.length > 256 || !/^[A-Za-z0-9._:\-]+$/.test(toolUseId)) {
+      return null;
+    }
+
+    const toolName =
+      typeof part.tool === 'string' && part.tool ? part.tool : '';
+    if (!toolName || toolName.length > 128 || !/^[A-Za-z0-9_\-]+$/.test(toolName)) {
+      return null;
+    }
+
+    // Treat status:'completed' or 'error' as a tool_result. Any other
+    // status (or missing status with output present) is also a result.
+    // status:'running' / 'pending' (or missing status with no output) →
+    // emit the tool_use start so the renderer shows the chip live.
+    const isCompleted =
+      status === 'completed' ||
+      status === 'error' ||
+      // Defensive: presence of output/error fields means it's terminal
+      // regardless of whether the status string was set.
+      typeof state.output === 'string' ||
+      typeof state.error === 'string';
+
+    if (isCompleted) {
+      const output =
+        typeof state.output === 'string'
+          ? state.output
+          : typeof state.error === 'string'
+            ? state.error
+            : '';
+      return {
+        kind: 'tool_result',
+        toolUseId,
+        toolResult: output,
+        toolIsError: status === 'error' || typeof state.error === 'string',
+        ts,
+      };
+    }
+
+    // Running / pending — tool_use start.
+    const input =
+      state.input && typeof state.input === 'object'
+        ? (state.input as Record<string, unknown>)
+        : undefined;
+    return {
+      kind: 'tool_use',
+      toolUseId,
+      toolName,
+      toolInput: input,
+      ts,
+    };
+  }
+
+  // message.part.updated — cumulative streaming snapshot.
+  //
+  // v0.30.2 review (code-reviewer HIGH-1 + HIGH-2): the previous draft
+  // parsed this event into a text_delta with an internal `_partId`
+  // marker, intending for the runner to dedup. The runner-side dedup
+  // never landed in v0.30.2 (out of scope). Without it, every snapshot
+  // would APPEND its full cumulative prefix to assistant.content —
+  // a 5-snapshot stream would write 1+2+3+4+5 = 15 tokens for 5 unique
+  // tokens, corrupting the persisted transcript. AND the `_partId`
+  // marker would ride out through Electron structured-clone to the
+  // renderer as IPC noise.
+  //
+  // Verified against opencode v1.2.27 source (apps/opencode/packages/
+  // opencode/src/cli/cmd/run.ts emit loop): `message.part.updated` is
+  // a bus event NOT emitted in `--format json` mode today. Production
+  // opencode streams via finalized `text` events instead. So dropping
+  // this branch is a no-op for current opencode while removing the
+  // half-design + cumulative-text + IPC-leak risks.
+  //
+  // To re-enable in v0.30.3: implement runner-side `Map<partId,
+  // lastEmittedLength>` dedup in OpenCodeRunner.emitLine, emit only
+  // `text.slice(lastLen)` as the delta, then strip `_partId` before
+  // forwarding via opts.onEvent.
+
+  // Known no-ops (lifecycle signals, not user-visible content):
+  //   - step_start / step_finish (model API step boundaries)
+  //   - session.status (idle/running — runner uses exit code instead)
+  //   - permission.asked (auto-rejected by opencode in non-interactive
+  //     mode; surfacing it would just add noise to chat)
   return null;
 }
 
 export const openCodeAdapter: CliAdapter = {
   id: 'opencode',
-  // Arch H3: HONEST capabilities for v0.30. OpenCode's stream-json
-  // protocol CAN carry tool events, but parseStreamLine above only maps
-  // text-delta / done — tool_use/tool_result are deferred to v0.30.1.
-  // Until that parser ships, claiming toolCards/diffPreview/devlogAuto
-  // would set users up for the "I asked it to edit a file, nothing
-  // visible happened" surprise. Flip these back to true the same PR
-  // that lands tool-event parsing.
+  // v0.30.2: tool-event parsing (tool_use + tool_result) landed in
+  // parseStreamLine above, so toolCards + diffPreview + devlogAutoCapture
+  // are now honest claims. diffPreview is computed downstream by the
+  // ChatLineHandler / runner from the tool_use input — we just need to
+  // surface the events for it to fire on.
+  //
+  // STILL FALSE in v0.30.2:
+  //   - askUserQuestion: Claude-specific MCP tool. opencode has its own
+  //     permission flow but no programmatic question-answer pairing.
+  //   - skills: claude-only directory convention.
   capabilities: {
-    toolCards: false,
-    diffPreview: false,
+    toolCards: true,
+    diffPreview: true,
     askUserQuestion: false,
     skills: false,
-    devlogAutoCapture: false,
-    summaryLabel: 'Plain text (v0.30)',
+    devlogAutoCapture: true,
+    summaryLabel: 'Tools enabled (beta)',
   },
   detect,
   ensureConfig,
