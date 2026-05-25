@@ -13,9 +13,8 @@ function emptyState(): ProjectState {
   return {
     projectPath: '/tmp/devspace-test',
     threads: new Map(),
-    activeRunHandle: null,
-    activeLlmRunHandle: null,
-    activeThreadId: null,
+    activeRunsByThread: new Map(),
+    activeLlmRunsByThread: new Map(),
     subscribers: new Set(),
     hydrationPromise: Promise.resolve(),
   };

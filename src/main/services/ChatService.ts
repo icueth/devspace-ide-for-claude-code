@@ -205,27 +205,47 @@ export async function setProjectConfig(
   return cfg;
 }
 
-export async function cancelActive(projectPath: string): Promise<void> {
+/**
+ * Cancel in-flight runs. `threadId` is the v0.30.3 per-thread cancel
+ * path (the stop button on a specific thread). When omitted, every
+ * active run in the project is killed (workspace close / project quit).
+ *
+ * Kill failures bubble up so the IPC caller can show a toast. The
+ * finalize loop on each runner notices the kill via cancelled=true and
+ * broadcasts the cancelled status — so we don't need to touch the maps
+ * here; finalizers clean them up.
+ */
+export async function cancelActive(
+  projectPath: string,
+  threadId?: string,
+): Promise<void> {
   const s = lookupState(projectPath);
   if (!s) return;
-  if (s.activeRunHandle) {
-    // Await tmux kill-session so any failure (session already gone, tmux
-    // binary missing) surfaces to the IPC caller and the renderer can
-    // show an error toast. The tail loop still notices the session
-    // disappear and resolves with cancelled=true, which fires the same
-    // finalize path as a normal exit.
+
+  const claudeHandles = threadId
+    ? (() => {
+        const h = s.activeRunsByThread.get(threadId);
+        return h ? [h] : [];
+      })()
+    : Array.from(s.activeRunsByThread.values());
+  const llmHandles = threadId
+    ? (() => {
+        const h = s.activeLlmRunsByThread.get(threadId);
+        return h ? [h] : [];
+      })()
+    : Array.from(s.activeLlmRunsByThread.values());
+
+  for (const h of claudeHandles) {
     try {
-      await s.activeRunHandle.kill();
+      await h.kill();
     } catch (err) {
       logger.warn(`cancel kill failed: ${(err as Error).message}`);
       throw err;
     }
   }
-  if (s.activeLlmRunHandle) {
-    // LLM path — aborting the controller propagates into the finalize
-    // logic which broadcasts the cancelled status.
+  for (const h of llmHandles) {
     try {
-      await s.activeLlmRunHandle.kill();
+      await h.kill();
     } catch (err) {
       logger.warn(`cancel llm kill failed: ${(err as Error).message}`);
       throw err;
@@ -241,16 +261,21 @@ export async function cancelActive(projectPath: string): Promise<void> {
  * and stream them to every subscribed WebContents. Persists the final
  * message pair to disk when the turn completes.
  *
- * One concurrent turn per project. Calls during an active turn throw so
- * the caller can show a "stop the current run first" notice.
+ * v0.30.3: lock is now PER-THREAD. Two threads (e.g. Claude thread A
+ * still streaming + OpenCode thread B) can run concurrently. Sending
+ * to the same thread while its current run is in flight still throws
+ * — caller should show "stop the current run first" on that thread.
  */
 export async function sendMessage(req: ChatSendRequest): Promise<{ messageId: string }> {
   const s = getState(req.projectId);
   await s.hydrationPromise; // wait for resume-on-boot before checking active state
   const thread = s.threads.get(req.threadId);
   if (!thread) throw new Error(`thread not found: ${req.threadId}`);
-  if (s.activeRunHandle || s.activeLlmRunHandle) {
-    throw new Error('a chat turn is already running for this project');
+  if (
+    s.activeRunsByThread.has(req.threadId) ||
+    s.activeLlmRunsByThread.has(req.threadId)
+  ) {
+    throw new Error('a chat turn is already running for this thread');
   }
 
   const userMsg: ChatMessage = {
@@ -836,8 +861,7 @@ async function runClaudeTurn(
     return;
   }
 
-  state.activeRunHandle = handle;
-  state.activeThreadId = thread.id;
+  state.activeRunsByThread.set(thread.id, handle);
   thread.activeRun = {
     runId,
     sessionName: handle.sessionName,
@@ -869,10 +893,10 @@ async function finalizeSoloRun(
   const result = await handle.promise;
 
   // Only clear active state if WE are still the owner — defensive
-  // against a race where the user already started another run.
-  if (state.activeRunHandle === handle) {
-    state.activeRunHandle = null;
-    state.activeThreadId = null;
+  // against a race where the user already started another run on the
+  // same thread (which would have replaced our Map entry).
+  if (state.activeRunsByThread.get(thread.id) === handle) {
+    state.activeRunsByThread.delete(thread.id);
   }
   delete thread.activeRun;
 
@@ -1090,16 +1114,15 @@ async function runLlmTurn(
     },
   });
 
-  state.activeLlmRunHandle = handle;
-  state.activeThreadId = thread.id;
+  state.activeLlmRunsByThread.set(thread.id, handle);
 
   await handle.promise;
 
-  // Defensive ownership check — if the user kicked off another run while
-  // ours was finishing, don't clobber the new handle.
-  if (state.activeLlmRunHandle === handle) {
-    state.activeLlmRunHandle = null;
-    state.activeThreadId = null;
+  // Defensive ownership check — if the user kicked off another run on
+  // this same thread while ours was finishing, don't clobber the new
+  // handle (Map entry would point at the newer one).
+  if (state.activeLlmRunsByThread.get(thread.id) === handle) {
+    state.activeLlmRunsByThread.delete(thread.id);
   }
 
   if (cancelled) {
@@ -1335,23 +1358,20 @@ async function runOpenCodeTurn(
     },
   });
 
-  // SHIP-NOTE v0.30: reusing `activeLlmRunHandle` for an OpenCodeRunHandle
-  // works because both interfaces are structurally `{ promise, kill }`-
-  // compatible. The single-concurrent-turn-per-project invariant is
-  // enforced by both fields being null in sendMessage(). The field name
-  // is now a slight lie — code-reviewer H5 / architect H2 both flagged
-  // this. v0.30.1 plan: collapse to `state.activeRunHandle = { kind, h }`
-  // discriminated union so naming matches reality. For ship, the
-  // structural-compat works and `cancelActive` covers both paths.
-  state.activeLlmRunHandle = handle as unknown as LlmRunHandle;
-  state.activeThreadId = thread.id;
+  // SHIP-NOTE v0.30.3: per-thread lock now isolates Claude/LLM/OpenCode
+  // by threadId. OpenCode runs still share the LLM Map (structurally
+  // compatible `{promise,kill}`) — one slot per (kind, thread). The
+  // field-name lie is gone now that the slot is keyed by thread, but
+  // we still funnel OpenCode through the LLM map to keep the cancel
+  // path unified. Future cleanup: separate Maps per kind if a 3-kind
+  // discriminated union becomes worth it.
+  state.activeLlmRunsByThread.set(thread.id, handle as unknown as LlmRunHandle);
 
   const result = await handle.promise;
   cancelled = result.cancelled;
 
-  if (state.activeLlmRunHandle === handle) {
-    state.activeLlmRunHandle = null;
-    state.activeThreadId = null;
+  if (state.activeLlmRunsByThread.get(thread.id) === (handle as unknown as LlmRunHandle)) {
+    state.activeLlmRunsByThread.delete(thread.id);
   }
 
   if (cancelled) {
@@ -1709,8 +1729,7 @@ async function runStreamingSpawn(
     };
   }
 
-  state.activeRunHandle = handle;
-  state.activeThreadId = thread.id;
+  state.activeRunsByThread.set(thread.id, handle);
   thread.activeRun = {
     runId,
     sessionName: handle.sessionName,
@@ -1724,9 +1743,8 @@ async function runStreamingSpawn(
 
   const result = await handle.promise;
 
-  if (state.activeRunHandle === handle) {
-    state.activeRunHandle = null;
-    state.activeThreadId = null;
+  if (state.activeRunsByThread.get(thread.id) === handle) {
+    state.activeRunsByThread.delete(thread.id);
   }
   delete thread.activeRun;
 
@@ -1770,9 +1788,9 @@ async function resumeActiveRuns(state: ProjectState): Promise<void> {
       continue;
     }
 
-    if (state.activeRunHandle) {
+    if (state.activeRunsByThread.has(thread.id)) {
       logger.warn(
-        `thread ${thread.id.slice(0, 8)} resume skipped — another run already active`,
+        `thread ${thread.id.slice(0, 8)} resume skipped — another run already active for this thread`,
       );
       continue;
     }
@@ -1788,8 +1806,7 @@ async function resumeActiveRuns(state: ProjectState): Promise<void> {
         runDir: run.runDir,
         onLine: handleLine,
       });
-      state.activeRunHandle = handle;
-      state.activeThreadId = thread.id;
+      state.activeRunsByThread.set(thread.id, handle);
       broadcast(state, thread.id, {
         kind: 'status',
         message: 'resumed (tmux)',
@@ -1813,8 +1830,7 @@ async function resumeActiveRuns(state: ProjectState): Promise<void> {
         runDir: run.runDir,
         onLine: handleLine,
       });
-      state.activeRunHandle = handle;
-      state.activeThreadId = thread.id;
+      state.activeRunsByThread.set(thread.id, handle);
       broadcast(state, thread.id, {
         kind: 'status',
         message: `resumed step ${stepIndex + 1} (tmux)`,
@@ -1839,9 +1855,8 @@ async function finalizeResumedTeamStep(
 ): Promise<void> {
   const result = await handle.promise;
 
-  if (state.activeRunHandle === handle) {
-    state.activeRunHandle = null;
-    state.activeThreadId = null;
+  if (state.activeRunsByThread.get(thread.id) === handle) {
+    state.activeRunsByThread.delete(thread.id);
   }
   delete thread.activeRun;
 

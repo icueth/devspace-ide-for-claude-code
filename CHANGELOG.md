@@ -5,6 +5,45 @@ All notable changes to DevSpace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.30.3] — 2026-05-22
+
+Two user-reported UX bugs in the multi-CLI work — both visible the moment
+you started using LLM Chat profiles or OpenCode CLI alongside Claude.
+(BRANCH BUILD — `feat/multi-cli`, NOT merged to main yet.)
+
+### Fixed
+- **Per-thread active-run lock** — sending a message to thread B while
+  thread A is still streaming used to fail with "a chat turn is already
+  running for this project". The lock was project-scoped, so the
+  realistic flow ("Claude thread streaming → switch to OpenCode thread,
+  ask a quick question") was blocked. Lock is now keyed by threadId:
+  distinct threads stream in parallel, double-send to the same thread
+  still rejects with "already running for this thread". `cancelActive`
+  + the IPC handler accept an optional `threadId` so the stop button on
+  thread A doesn't kill thread B's run. Workspace-close and project
+  eviction still drain everything.
+- **WaitingPill says the right vendor** — the pre-first-output indicator
+  hardcoded "Waiting for claude…" no matter which model was actually
+  taking time. Now derives from the active thread's binding via a pure
+  `deriveVendorLabel` helper: "Waiting for AEON Qwen3.6…", "Waiting for
+  GPT-4 (translator)…", or "Waiting for claude…" for the default path.
+  Stale profile id (deleted between thread creation and now) falls back
+  to the runtime kind ("opencode" / "LLM") instead of lying.
+
+### State shape (internal)
+- `ProjectState.activeRunHandle` + `activeLlmRunHandle` + `activeThreadId`
+  → `activeRunsByThread: Map<string, ChatRunHandle>` +
+  `activeLlmRunsByThread: Map<string, LlmRunHandle>`. OpenCode handles
+  continue to share the LLM map (structurally `{promise, kill}`-compatible)
+  — one slot per (kind, thread). Closes the v0.30 SHIP-NOTE about
+  field-name lying.
+
+### Tests
+- 974 vitest tests pass (was 964 → +10 regression: 8 vendor-label
+  branches + 2 per-thread Map invariants pinning the new state shape
+  against future "convenience" reverts).
+- Typecheck clean.
+
 ## [0.30.2] — 2026-05-22
 
 OpenCode parity push — closer to Claude chat without touching Claude path

@@ -123,9 +123,12 @@ export function registerChatIpc(): void {
     return sendMessage(req);
   });
 
-  ipcMain.handle(IPC.CHAT_CANCEL, (_event, projectPath: string) => {
-    return cancelActive(projectPath);
-  });
+  ipcMain.handle(
+    IPC.CHAT_CANCEL,
+    (_event, projectPath: string, threadId?: string) => {
+      return cancelActive(projectPath, threadId);
+    },
+  );
 
   ipcMain.handle(IPC.CHAT_SUBSCRIBE, (event, projectPath: string) => {
     subscribe(projectPath, event.sender);

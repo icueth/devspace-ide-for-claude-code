@@ -79,7 +79,7 @@ export function startLlmChatRun(opts: StartLlmChatRunOptions): LlmRunHandle {
 
   const controller = new AbortController();
   // Chain caller's signal into our controller so an upstream abort
-  // (cancelActive → state.activeRunHandle.kill) cleanly forwards.
+  // (cancelActive → handle.kill) cleanly forwards.
   if (opts.signal) {
     if (opts.signal.aborted) {
       controller.abort();

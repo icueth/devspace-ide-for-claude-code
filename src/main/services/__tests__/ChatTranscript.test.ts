@@ -405,3 +405,72 @@ describe('ChatTranscript metadata + lazy getThread (v0.27)', () => {
     expect(assistant.error).toBeUndefined();
   });
 });
+
+// v0.30.3 regression: per-thread active-run lock. Before this release
+// the project carried a single `activeRunHandle` + `activeLlmRunHandle`
+// pair plus `activeThreadId`, so any in-flight run blocked sendMessage
+// on every other thread in the same project ("a chat turn is already
+// running for this project"). Now the lock is keyed by threadId, which
+// lets a Claude thread A continue streaming while the user kicks off
+// thread B on OpenCode. These tests pin the new state shape so that
+// invariant can't silently regress.
+describe('ProjectState per-thread active-run maps (v0.30.3)', () => {
+  it('getState seeds empty per-thread Maps (not single handles)', async () => {
+    // Lazy import so we exercise the same module-level singleton the
+    // production code does (states are keyed by resolved projectPath).
+    const { getState } = await import('@main/services/ChatTranscript');
+    const state = getState(tmpRoot);
+    expect(state.activeRunsByThread).toBeInstanceOf(Map);
+    expect(state.activeLlmRunsByThread).toBeInstanceOf(Map);
+    expect(state.activeRunsByThread.size).toBe(0);
+    expect(state.activeLlmRunsByThread.size).toBe(0);
+    // Type-level pin: legacy fields must NOT exist anymore. If a future
+    // contributor re-introduces them as a "convenience", typecheck will
+    // pass but this access compiles to undefined and the assertion fails.
+    expect((state as unknown as { activeRunHandle?: unknown }).activeRunHandle).toBeUndefined();
+    expect((state as unknown as { activeLlmRunHandle?: unknown }).activeLlmRunHandle).toBeUndefined();
+    expect((state as unknown as { activeThreadId?: unknown }).activeThreadId).toBeUndefined();
+  });
+
+  it('deleteThread kills ONLY the target thread; sibling thread entries survive', async () => {
+    const { getState, deleteThread } = await import('@main/services/ChatTranscript');
+    const threadA = await createThread(tmpRoot, 'A');
+    const threadB = await createThread(tmpRoot, 'B');
+    const state = getState(tmpRoot);
+
+    // Simulate two in-flight runs (one per thread). The kill stub flips
+    // a flag so we can prove the right handle was targeted.
+    let killedA = false;
+    let killedB = false;
+    const handleA = {
+      promise: new Promise(() => {}),
+      kill: async () => {
+        killedA = true;
+      },
+      sessionName: 'sess-A',
+      runDir: '/tmp/A',
+      detached: false,
+    };
+    const handleB = {
+      promise: new Promise(() => {}),
+      kill: async () => {
+        killedB = true;
+      },
+      sessionName: 'sess-B',
+      runDir: '/tmp/B',
+      detached: false,
+    };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    state.activeRunsByThread.set(threadA.id, handleA as any);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    state.activeRunsByThread.set(threadB.id, handleB as any);
+
+    await deleteThread(tmpRoot, threadA.id);
+
+    // Only A was killed; B's run keeps streaming (the user's other tab).
+    expect(killedA).toBe(true);
+    expect(killedB).toBe(false);
+    expect(state.activeRunsByThread.has(threadA.id)).toBe(false);
+    expect(state.activeRunsByThread.has(threadB.id)).toBe(true);
+  });
+});

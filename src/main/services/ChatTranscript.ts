@@ -36,14 +36,16 @@ export function threadFile(projectPath: string, threadId: string): string {
 export interface ProjectState {
   projectPath: string;
   threads: Map<string, ChatThread>;
-  activeRunHandle: ChatRunHandle | null;
-  // v0.29: parallel slot for LLM-backed (non-Claude) runs. Same
-  // single-concurrent-turn-per-project rule applies; sendMessage checks
-  // both fields. Cleanly separated by type so the resume-on-boot path
-  // and team-sequential codepaths don't accidentally treat an LLM run
-  // as a tmux handle (and vice-versa).
-  activeLlmRunHandle: LlmRunHandle | null;
-  activeThreadId: string | null;
+  // v0.30.3: per-thread active-run lock. Previously single handles +
+  // activeThreadId enforced project-wide single-concurrency, which broke
+  // the realistic flow of "Claude thread A is streaming, switch to LLM
+  // thread B, send a message there" (error: "a chat turn is already
+  // running for this project"). Map keyed by threadId lets distinct
+  // threads run in parallel; double-send to the same thread is still
+  // rejected at the sendMessage gate. Kind-separated so LLM/OpenCode
+  // handles never get mistaken for tmux handles in finalize paths.
+  activeRunsByThread: Map<string, ChatRunHandle>;
+  activeLlmRunsByThread: Map<string, LlmRunHandle>;
   subscribers: Set<WebContents>;
   hydrationPromise: Promise<void>;
 }
@@ -65,9 +67,8 @@ export function getState(projectPath: string): ProjectState {
     state = {
       projectPath: key,
       threads: new Map(),
-      activeRunHandle: null,
-      activeLlmRunHandle: null,
-      activeThreadId: null,
+      activeRunsByThread: new Map(),
+      activeLlmRunsByThread: new Map(),
       subscribers: new Set(),
       hydrationPromise: Promise.resolve(),
     };
@@ -100,21 +101,25 @@ export async function disposeProject(projectPath: string): Promise<void> {
   if (!state) return;
   states.delete(key);
   state.subscribers.clear();
-  if (state.activeRunHandle) {
+  // Drain every in-flight handle. Best-effort — the project is going
+  // away regardless, so we ignore individual kill failures.
+  const claudeHandles = Array.from(state.activeRunsByThread.values());
+  state.activeRunsByThread.clear();
+  for (const h of claudeHandles) {
     try {
-      await state.activeRunHandle.kill();
+      await h.kill();
     } catch {
-      /* best-effort: the project is going away */
+      /* best-effort */
     }
-    state.activeRunHandle = null;
   }
-  if (state.activeLlmRunHandle) {
+  const llmHandles = Array.from(state.activeLlmRunsByThread.values());
+  state.activeLlmRunsByThread.clear();
+  for (const h of llmHandles) {
     try {
-      await state.activeLlmRunHandle.kill();
+      await h.kill();
     } catch {
-      /* best-effort: the project is going away */
+      /* best-effort */
     }
-    state.activeLlmRunHandle = null;
   }
 }
 
@@ -466,36 +471,26 @@ export async function deleteThread(
   }
   const s = getState(projectPath);
   await s.hydrationPromise;
-  // Kill any in-flight run for this thread first — otherwise the tail
-  // loop keeps streaming events into nowhere and may crash line handlers.
-  // Snapshot `activeThreadId` BEFORE mutating so the LLM-handle branch
-  // below sees the same value (the original implementation nulled
-  // activeThreadId in the tmux branch, leaving the LLM branch unable
-  // to match — a latent zombie-stream bug).
-  const wasActive = s.activeThreadId === threadId;
-  if (wasActive && s.activeRunHandle) {
+  // Kill any in-flight run for THIS thread only (per-thread lock in
+  // v0.30.3). Concurrent runs on other threads keep streaming unaffected.
+  const claudeHandle = s.activeRunsByThread.get(threadId);
+  if (claudeHandle) {
+    s.activeRunsByThread.delete(threadId);
     try {
-      await s.activeRunHandle.kill();
+      await claudeHandle.kill();
     } catch (err) {
       logger.warn(`kill on delete failed: ${(err as Error).message}`);
     }
-    s.activeRunHandle = null;
   }
-  if (wasActive && s.activeLlmRunHandle) {
+  const llmHandle = s.activeLlmRunsByThread.get(threadId);
+  if (llmHandle) {
+    s.activeLlmRunsByThread.delete(threadId);
     try {
-      await s.activeLlmRunHandle.kill();
+      await llmHandle.kill();
     } catch (err) {
       logger.warn(`kill llm on delete failed: ${(err as Error).message}`);
     }
-    s.activeLlmRunHandle = null;
   }
-  if (wasActive) {
-    s.activeThreadId = null;
-  }
-  // Code H4: removed unreachable second LLM-handle block — `wasActive`
-  // already covered the case, and the second `s.activeThreadId === threadId`
-  // could never be true after the null-flip above. Was confusing future
-  // readers; behavior is unchanged.
   s.threads.delete(threadId);
   try {
     await fs.promises.unlink(threadFile(s.projectPath, threadId));

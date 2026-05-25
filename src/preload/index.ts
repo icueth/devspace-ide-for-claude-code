@@ -202,8 +202,8 @@ const api = {
     deleteThread: (projectPath: string, threadId: string) =>
       ipcRenderer.invoke(IPC.CHAT_DELETE_THREAD, projectPath, threadId),
     send: (req: unknown) => ipcRenderer.invoke(IPC.CHAT_SEND, req),
-    cancel: (projectPath: string) =>
-      ipcRenderer.invoke(IPC.CHAT_CANCEL, projectPath),
+    cancel: (projectPath: string, threadId?: string) =>
+      ipcRenderer.invoke(IPC.CHAT_CANCEL, projectPath, threadId),
     subscribe: (projectPath: string) =>
       ipcRenderer.invoke(IPC.CHAT_SUBSCRIBE, projectPath),
     getConfig: (projectPath: string) =>

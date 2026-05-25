@@ -61,6 +61,7 @@ import {
   resolveAnswerOutcome,
 } from '@renderer/components/Dock/askUserQuestion';
 import { applyEvent, capLoaded } from '@renderer/components/Dock/chatEvents';
+import { deriveVendorLabel } from '@renderer/components/Dock/chatVendorLabel';
 import {
   profileNameForBadge,
   resolveProfileSelection,
@@ -881,6 +882,7 @@ export function ChatPanel({ projectPath }: ChatPanelProps) {
     return !!meta && meta.messageCount > 0;
   }, [activeId, activeThread, threads]);
 
+
   // v0.29: keep the provider dropdown in sync with whichever thread is
   // active. Picking a Claude-only thread resets to null; picking a
   // profile-bound thread highlights that profile. Stale ids (profile
@@ -911,6 +913,18 @@ export function ChatPanel({ projectPath }: ChatPanelProps) {
       cliProfiles.some((p) => p.id === id) ? id : null,
     );
   }, [activeMeta, cliProfiles]);
+
+  // v0.30.3: derive a stable human label for whatever model/CLI is
+  // actually answering this thread. WaitingPill uses it instead of the
+  // old hardcoded "claude" — the old text was an outright lie the moment
+  // a user switched to an LLM or OpenCode thread, leaving them staring
+  // at "Waiting for claude…" while AEON was the one taking time. Stable
+  // string identity (memoized on the underlying ids) keeps MessageBubble
+  // memo working.
+  const vendorLabel = useMemo(
+    () => deriveVendorLabel({ meta: activeMeta, chatProfiles, cliProfiles }),
+    [activeMeta, chatProfiles, cliProfiles],
+  );
 
   // True while the active thread has at least one assistant message in
   // 'streaming' state. Drives the Send→Stop button swap AND the v0.16 queue
@@ -1262,8 +1276,11 @@ export function ChatPanel({ projectPath }: ChatPanelProps) {
   }, [qKey]);
 
   const onCancel = useCallback(() => {
-    void api.chat.cancel(projectPath);
-  }, [projectPath]);
+    // v0.30.3: pass active thread id so only this thread's run is cancelled —
+    // a concurrent run on another thread (e.g. an OpenCode thread streaming
+    // while user hits Stop on the Claude thread) stays intact.
+    void api.chat.cancel(projectPath, activeId ?? undefined);
+  }, [projectPath, activeId]);
 
   const onNewThread = useCallback(async () => {
     const t = await api.chat.createThread(projectPath, 'New chat');
@@ -1863,6 +1880,7 @@ export function ChatPanel({ projectPath }: ChatPanelProps) {
                 <MessageBubble
                   key={m.id}
                   message={m}
+                  vendorLabel={vendorLabel}
                   onContextMenu={handleBubbleContextMenu}
                 />
               ))}
@@ -2224,9 +2242,15 @@ function basename(p: string): string {
 
 const MessageBubble = memo(function MessageBubble({
   message,
+  vendorLabel,
   onContextMenu,
 }: {
   message: ChatMessage;
+  // v0.30.3: which model/CLI is answering this thread. Threaded down to
+  // WaitingPill so the "Waiting for X…" indicator names the right vendor
+  // (was hardcoded "claude" and lied for every non-Claude thread). Stable
+  // string from the parent's useMemo — keeps the memo wrapper effective.
+  vendorLabel?: string;
   // Right-click handler attached to both user AND assistant bubbles
   // (v0.19+: "Save to memory" surfaces on user feedback too). ChatPanel
   // owns menu state; the bubble stays dumb and forwards (message, event)
@@ -2296,17 +2320,17 @@ const MessageBubble = memo(function MessageBubble({
               // applied to the Update dialog.
               <TextSegmentCard text={message.content} />
             ) : message.status === 'streaming' && message.toolCalls.length === 0 ? (
-              <WaitingPill message={message} />
+              <WaitingPill message={message} vendorLabel={vendorLabel} />
             ) : null}
           </>
         )}
         {/* Pre-first-output pill: in segmented mode we still need the
-            "Waiting for claude" indicator while the turn is in flight
+            "Waiting for <vendor>" indicator while the turn is in flight
             but no segments have arrived (or every segment is empty). */}
         {message.segments && message.segments.length > 0 &&
           message.status === 'streaming' &&
           isSegmentListEmpty(message.segments) && (
-            <WaitingPill message={message} />
+            <WaitingPill message={message} vendorLabel={vendorLabel} />
           )}
         {message.status === 'error' && (
           <div className="rounded-[7px] border border-semantic-error/40 bg-semantic-error/10 px-3 py-2 font-mono text-[10.5px] text-semantic-error">
@@ -2488,12 +2512,22 @@ function AssistantFooter({ message }: { message: ChatMessage }) {
 // the assistant message has no text or tool calls yet — i.e. claude
 // just started and we haven't seen anything back. Gives a clearer cue
 // than the previous static "thinking…" by progressing as events fire.
-function WaitingPill({ message }: { message: ChatMessage }) {
+function WaitingPill({
+  message,
+  vendorLabel,
+}: {
+  message: ChatMessage;
+  // v0.30.3: vendor name to show in the "Waiting for X…" copy. Falls
+  // back to "claude" when unknown — same string the hardcode used to
+  // produce, so existing behavior for Claude threads is unchanged.
+  vendorLabel?: string;
+}) {
   const elapsedMs = useLiveElapsed(message.createdAt, true);
   const elapsedSec = Math.floor(elapsedMs / 1000);
+  const vendor = vendorLabel ?? 'claude';
   const status = (() => {
     if (message.thinking) return 'Thinking';
-    return elapsedSec < 2 ? 'Starting' : 'Waiting for claude';
+    return elapsedSec < 2 ? 'Starting' : `Waiting for ${vendor}`;
   })();
   return (
     <div className="flex items-center gap-2 rounded-[8px] border border-border-subtle bg-surface-2/60 px-3 py-1.5 text-[11.5px] text-text-muted">

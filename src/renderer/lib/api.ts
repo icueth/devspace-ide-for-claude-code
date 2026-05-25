@@ -254,7 +254,7 @@ export interface DevspaceApi {
     ) => Promise<ChatThread>;
     deleteThread: (projectPath: string, threadId: string) => Promise<void>;
     send: (req: ChatSendRequest) => Promise<{ messageId: string }>;
-    cancel: (projectPath: string) => Promise<void>;
+    cancel: (projectPath: string, threadId?: string) => Promise<void>;
     subscribe: (projectPath: string) => Promise<void>;
     getConfig: (projectPath: string) => Promise<ChatConfig>;
     setConfig: (projectPath: string, cfg: ChatConfig) => Promise<ChatConfig>;
