@@ -359,6 +359,15 @@ export function ChatPanel({ projectPath }: ChatPanelProps) {
     files: string[];
   } | null>(null);
   const [filesLoading, setFilesLoading] = useState(false);
+  // Stable "is the @-picker open?" flag. The lazy-load effect keys on THIS,
+  // not on `atMention` itself: `atMention` is a fresh object on every
+  // keystroke (the query changes), so depending on it re-fired the scan and
+  // its cleanup cancelled the in-flight walk on every character typed. That
+  // meant the file list never committed while the user was typing (→ empty
+  // list → "No files match") AND spawned N concurrent full-tree walks that
+  // saturated the libuv threadpool (→ whole-app lag). A boolean only flips on
+  // open/close, so the scan fires exactly once per open.
+  const atMentionOpen = atMention !== null;
   const atFiles = filesCache?.project === projectPath ? filesCache.files : [];
   const atVisible = useMemo(
     () => (atMention ? filterAtMentionFiles(atFiles, atMention.query) : []),
@@ -469,7 +478,7 @@ export function ChatPanel({ projectPath }: ChatPanelProps) {
   // a given project. We also refresh on every fresh trigger (close → open
   // cycle) so files added since the last open show up without restart.
   useEffect(() => {
-    if (!atMention) return;
+    if (!atMentionOpen) return;
     if (filesCache?.project === projectPath) return;
     let cancelled = false;
     setFilesLoading(true);
@@ -488,7 +497,7 @@ export function ChatPanel({ projectPath }: ChatPanelProps) {
     return () => {
       cancelled = true;
     };
-  }, [atMention, projectPath, filesCache]);
+  }, [atMentionOpen, projectPath, filesCache]);
 
   // Reset cache when project changes so we don't show stale paths from
   // the previous workspace.

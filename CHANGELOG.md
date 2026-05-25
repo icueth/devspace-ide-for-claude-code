@@ -5,6 +5,21 @@ All notable changes to DevSpace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.31.1] — 2026-05-25
+
+Fix `@`-mention file picker lag in chat. The lazy file-load effect keyed its
+dependency array on the `atMention` object, which is recreated on every
+keystroke as the query changes. Each keystroke therefore cancelled the
+in-flight project walk and started a fresh one — so a project's full file
+tree (up to 20k entries) was re-walked per character on the shared libuv
+threadpool. This caused three compounding symptoms: slow scans, files never
+appearing (the cache never settled between keystrokes so the filtered list
+stayed empty), and whole-app stalls as concurrent walks starved every other
+fs operation (editor reads, git, the file watcher). Fix keys the effect on a
+stable `atMentionOpen` boolean (`atMention !== null`) so the scan fires once
+per picker-open instead of once per keystroke. Single-line trigger change;
+the pure `findAtMentionToken` / `filterAtMentionFiles` helpers are untouched.
+
 ## [0.31.0] — 2026-05-25
 
 Design Studio teardown → design-as-skills + HTML preview. The bespoke
