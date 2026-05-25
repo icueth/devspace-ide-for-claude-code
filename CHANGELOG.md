@@ -5,6 +5,27 @@ All notable changes to DevSpace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.30.4] — 2026-05-22
+
+UX fix for the multi-runtime picker. (BRANCH BUILD — `feat/multi-cli`,
+NOT merged to main yet.)
+
+### Fixed
+- **Unified Runtime picker** — the previous design had two separate
+  dropdowns (LLM + CLI), and when the user picked an OpenCode CLI
+  profile the LLM dropdown still read "🤖 Claude (default)". Two visible
+  selections at once misled users into thinking Claude was still active.
+  The type contract says `ChatThread` is bound to at most one of
+  (Claude default, llmProfileId, cliProfileId), so the picker now shows
+  them as one mutually-exclusive list with `<optgroup>` separators:
+  Claude default at the top, then "LLM HTTP profiles", then "CLI
+  runtimes" (disabled rows for profiles whose binary isn't installed).
+  Encoded value: `''` = Claude, `llm:<id>` = LLM, `cli:<id>` = CLI —
+  parsed in the picker's `onChange` and routed to the existing
+  `onProfileChange` / `onCliProfileChange` handlers, so the per-thread
+  lock + double-click guard contracts from v0.30.0 are preserved
+  verbatim. Net surface: -64 / +83 lines in one file.
+
 ## [0.30.3] — 2026-05-22
 
 Two user-reported UX bugs in the multi-CLI work — both visible the moment

@@ -1731,68 +1731,88 @@ export function ChatPanel({ projectPath }: ChatPanelProps) {
         )}
       </div>
 
-      {/* Provider + CLI + Team pickers — the LLM dropdown picks which
-          HTTP API backs the next NEW thread; the CLI dropdown picks
-          which non-Claude CLI binary spawns for the next NEW thread.
-          Switching either always spawns a fresh thread (provider lock
-          is per-thread). The two are mutually exclusive in the type
-          contract: picking a CLI profile clears the LLM lock and vice
-          versa, because both flows route createThread differently. */}
+      {/* v0.30.4: Unified Runtime picker. Replaces the previous split
+          LLM + CLI dropdowns — `ChatThread` is bound to at most one of
+          (Claude default, llmProfileId, cliProfileId), so showing two
+          dropdowns with one always reading "Claude (default)" misled
+          users into thinking Claude was still active when they had
+          picked OpenCode. Encoded value: '' = Claude default,
+          'llm:<id>' = LLM HTTP profile, 'cli:<id>' = CLI profile.
+          Switching any non-Claude option ALWAYS spawns a fresh thread
+          (per-thread lock — selecting never mutates an existing
+          thread). The two handlers below dispatch to the matching
+          createThread call via onProfileChange / onCliProfileChange,
+          which still own the double-click guards from v0.30.0. */}
       <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border bg-surface-2 px-3 py-1.5">
         <Bot size={11} className="shrink-0 text-text-muted" />
-        <span className="text-[10.5px] text-text-muted">LLM:</span>
+        <span className="text-[10.5px] text-text-muted">Runtime:</span>
         <select
-          value={selectedProfileId ?? ''}
-          onChange={(e) => void onProfileChange(e.target.value || null)}
+          value={
+            selectedCliProfileId
+              ? `cli:${selectedCliProfileId}`
+              : selectedProfileId
+                ? `llm:${selectedProfileId}`
+                : ''
+          }
+          onChange={(e) => {
+            const raw = e.target.value;
+            if (!raw) {
+              // Claude default. Clear whichever lock is currently set —
+              // the active thread can only carry one, so we just need to
+              // clear the one that's set. If neither is set we're
+              // already on Claude, but onProfileChange's guard handles
+              // the no-op case.
+              if (selectedCliProfileId) void onCliProfileChange(null);
+              else void onProfileChange(null);
+              return;
+            }
+            const idx = raw.indexOf(':');
+            const kind = idx >= 0 ? raw.slice(0, idx) : '';
+            const id = idx >= 0 ? raw.slice(idx + 1) : '';
+            if (kind === 'cli') void onCliProfileChange(id || null);
+            else if (kind === 'llm') void onProfileChange(id || null);
+          }}
           className="min-w-0 rounded-[5px] border border-border-subtle bg-surface-3 px-2 py-[2px] text-[11px] text-text focus:outline-none focus:ring-1 focus:ring-accent/40"
-          title="Switching the LLM creates a new thread"
+          title="Switching the runtime creates a new thread"
         >
           <option value="">🤖 Claude (default)</option>
-          {chatProfiles.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.provider === 'anthropic' ? '🅰️ ' : '🅾️ '}
-              {p.name} ({p.model})
-            </option>
-          ))}
-        </select>
-        <span className="mx-1 h-3 w-px shrink-0 bg-border-subtle" />
-        {/* v0.30: CLI runtime picker. Disabled options reflect missing
-            binaries (the user has a profile but hasn't installed the
-            matching CLI yet). Switching to a CLI profile spawns a fresh
-            thread via onCliProfileChange — same per-thread lock contract
-            as the LLM picker. */}
-        <Terminal size={11} className="shrink-0 text-text-muted" />
-        <span className="text-[10.5px] text-text-muted">CLI:</span>
-        <select
-          value={selectedCliProfileId ?? ''}
-          onChange={(e) => void onCliProfileChange(e.target.value || null)}
-          className="min-w-0 rounded-[5px] border border-border-subtle bg-surface-3 px-2 py-[2px] text-[11px] text-text focus:outline-none focus:ring-1 focus:ring-accent/40"
-          title="Switching the CLI creates a new thread"
-        >
-          <option value="">— None (use LLM / Claude) —</option>
-          {cliProfiles.length === 0 && (
-            <option value="" disabled>
-              (no CLI profiles — add one in Settings → LLM → CLI runtimes)
-            </option>
+          {chatProfiles.length > 0 && (
+            <optgroup label="LLM HTTP profiles">
+              {chatProfiles.map((p) => (
+                <option key={`llm:${p.id}`} value={`llm:${p.id}`}>
+                  {p.provider === 'anthropic' ? '🅰️ ' : '🅾️ '}
+                  {p.name} ({p.model})
+                </option>
+              ))}
+            </optgroup>
           )}
-          {cliProfiles.map((p) => {
-            const installed = installedCliIds.has(p.cliId);
-            return (
-              <option key={p.id} value={p.id} disabled={!installed}>
-                {installed ? '⌨️ ' : '⚠ '}
-                {p.name} ({p.cliId}){installed ? '' : ' — not installed'}
-              </option>
-            );
-          })}
+          {cliProfiles.length > 0 && (
+            <optgroup label="CLI runtimes">
+              {cliProfiles.map((p) => {
+                const installed = installedCliIds.has(p.cliId);
+                return (
+                  <option
+                    key={`cli:${p.id}`}
+                    value={`cli:${p.id}`}
+                    disabled={!installed}
+                  >
+                    {installed ? '⌨️ ' : '⚠ '}
+                    {p.name} — {p.cliId}
+                    {installed ? '' : ' (not installed)'}
+                  </option>
+                );
+              })}
+            </optgroup>
+          )}
         </select>
         {/* Capability chip — verbatim summaryLabel for the active
-            selection, color-coded per the v0.30 spec. */}
+            runtime, color-coded per the v0.30 spec. */}
         <span
           className={cn(
             'inline-flex h-[18px] shrink-0 items-center rounded-full border px-2 text-[9.5px] font-medium',
             capabilityChipClassName(activeCapabilityChip),
           )}
-          title={`Tool capability for this provider: ${activeCapabilityChip}`}
+          title={`Tool capability for this runtime: ${activeCapabilityChip}`}
         >
           {activeCapabilityChip}
         </span>
