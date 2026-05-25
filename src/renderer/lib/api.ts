@@ -35,6 +35,8 @@ import type {
   Project,
   PtyCreateOptions,
   PtySession,
+  DesignSeedingReseedResult,
+  DesignSeedingStatus,
   SearchOptions,
   SearchResult,
   SettingsCategory,
@@ -311,6 +313,11 @@ export interface DevspaceApi {
       targetScope: 'global' | 'project',
       projectPath: string | null,
     ) => Promise<SkillDef>;
+  };
+  designSeeding: {
+    status: () => Promise<DesignSeedingStatus>;
+    setEnabled: (enabled: boolean) => Promise<void>;
+    reseed: () => Promise<DesignSeedingReseedResult>;
   };
   mcp: {
     list: (projectPath: string | null) => Promise<McpServerEntry[]>;
@@ -749,6 +756,18 @@ function makeStubApi(): DevspaceApi {
       create: notWired('skills.create'),
       delete: notWired('skills.delete'),
       duplicate: notWired('skills.duplicate'),
+    },
+    designSeeding: {
+      status: () =>
+        Promise.resolve({
+          enabled: true,
+          packVersion: null,
+          seededAt: null,
+          skillCount: 0,
+          systemCount: 0,
+        }),
+      setEnabled: notWired('designSeeding.setEnabled'),
+      reseed: notWired('designSeeding.reseed'),
     },
     teams: {
       list: () => Promise.resolve([]),

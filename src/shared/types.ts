@@ -682,6 +682,27 @@ export interface McpServerEntry {
 // builtin by creating the same slug at global or project scope.
 export type SkillScope = 'global' | 'project' | 'plugin' | 'builtin';
 
+// v0.31: status of the bundled design-skill seeding into ~/.claude/skills.
+export interface DesignSeedingStatus {
+  enabled: boolean;
+  packVersion: string | null;
+  seededAt: string | null;
+  skillCount: number;
+  systemCount: number;
+}
+
+export interface DesignSeedingReseedResult {
+  status:
+    | 'seeded'
+    | 'skipped-up-to-date'
+    | 'skipped-no-bundle'
+    | 'skipped-disabled';
+  seededSkills: number;
+  seededSystems: number;
+  skippedCollisions: number;
+  removedStale: number;
+}
+
 export interface SkillDef {
   path: string;          // absolute path to SKILL.md
   scope: SkillScope;

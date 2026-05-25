@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest';
 
 import {
   filterAtMentionFiles,
+  filterAtMentionIndexed,
   findAtMentionToken,
 } from '@renderer/components/Dock/AtMentionPicker';
+import { buildFileIndex } from '@renderer/utils/fileIndex';
 
 describe('findAtMentionToken', () => {
   it('detects @ at start of input', () => {
@@ -107,5 +109,44 @@ describe('filterAtMentionFiles', () => {
 
   it('returns empty array when nothing matches', () => {
     expect(filterAtMentionFiles(files, 'zzzz')).toEqual([]);
+  });
+});
+
+describe('filterAtMentionIndexed', () => {
+  const files = [
+    'src/main/index.ts',
+    'src/main/services/ChatService.ts',
+    'src/renderer/components/Dock/ChatPanel.tsx',
+    'README.md',
+    'package.json',
+  ];
+
+  it('matches filterAtMentionFiles output exactly (parity)', () => {
+    const index = buildFileIndex(files);
+    for (const q of ['', 'chat', 'ChatPanel', 'readme', 'src', 'zzzz']) {
+      expect(filterAtMentionIndexed(index, q)).toEqual(filterAtMentionFiles(files, q));
+    }
+  });
+
+  it('prefers basename matches over directory matches against a prebuilt index', () => {
+    const index = buildFileIndex(files);
+    const out = filterAtMentionIndexed(index, 'chat');
+    expect(out[0]?.endsWith('ChatService.ts') || out[0]?.endsWith('ChatPanel.tsx')).toBe(true);
+  });
+
+  it('is case-insensitive via cached lowercase fields', () => {
+    const index = buildFileIndex(files);
+    expect(filterAtMentionIndexed(index, 'README')[0]).toBe('README.md');
+    expect(filterAtMentionIndexed(index, 'readme')[0]).toBe('README.md');
+  });
+
+  it('breaks score ties by shorter path', () => {
+    const index = buildFileIndex(['aa/bb/cc/dd/match.ts', 'match.ts']);
+    expect(filterAtMentionIndexed(index, 'match')[0]).toBe('match.ts');
+  });
+
+  it('caps result at 50 entries', () => {
+    const index = buildFileIndex(Array.from({ length: 80 }, (_, i) => `src/file-${i}.ts`));
+    expect(filterAtMentionIndexed(index, 'file').length).toBe(50);
   });
 });

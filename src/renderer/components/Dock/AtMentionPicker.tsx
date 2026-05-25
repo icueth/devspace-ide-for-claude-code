@@ -1,10 +1,14 @@
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useRef } from 'react';
 
 import { cn } from '@renderer/lib/utils';
+import { buildFileIndex, type IndexedFile } from '@renderer/utils/fileIndex';
 
 interface AtMentionPickerProps {
   query: string;
-  files: string[];
+  // Already-filtered+ranked paths. Computed ONCE by the parent (ChatPanel)
+  // and passed down — the picker no longer re-filters internally, which
+  // previously ran filterAtMentionFiles twice for identical inputs.
+  filtered: string[];
   highlight: number;
   loading: boolean;
   onHighlight: (idx: number) => void;
@@ -23,14 +27,12 @@ interface AtMentionPickerProps {
  */
 export function AtMentionPicker({
   query,
-  files,
+  filtered,
   highlight,
   loading,
   onHighlight,
   onPick,
 }: AtMentionPickerProps) {
-  const filtered = useMemo(() => filterAtMentionFiles(files, query), [files, query]);
-
   const listRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     if (highlight >= filtered.length) onHighlight(0);
@@ -135,22 +137,36 @@ export function findAtMentionToken(
  * Score-and-sort file list for the given query. Prefers basename
  * matches over directory matches, earlier matches over later, and
  * caps the result at 50 rows. Pure so it can be unit-tested.
+ *
+ * Convenience wrapper that builds the lowercase index inline (used by the
+ * unit tests). The live picker uses filterAtMentionIndexed against an index
+ * built once when the project file list is set — see ChatPanel — so the
+ * per-file lowercase work isn't repeated on every keystroke.
  */
 export function filterAtMentionFiles(files: string[], query: string): string[] {
-  if (!query) return files.slice(0, 50);
+  return filterAtMentionIndexed(buildFileIndex(files), query);
+}
+
+/**
+ * Same ranking/caps as filterAtMentionFiles, but matches against a
+ * PRECOMPUTED lowercase index (relLower + nameLower) so no per-file
+ * `.toLowerCase()` or basename derivation happens per keystroke.
+ */
+export function filterAtMentionIndexed(
+  index: ReadonlyArray<IndexedFile>,
+  query: string,
+): string[] {
+  if (!query) return index.slice(0, 50).map((f) => f.rel);
   const q = query.toLowerCase();
   const scored: { path: string; score: number }[] = [];
-  for (const f of files) {
-    const lf = f.toLowerCase();
-    const idx = lf.indexOf(q);
+  for (const f of index) {
+    const idx = f.relLower.indexOf(q);
     if (idx < 0) continue;
-    const slash = lf.lastIndexOf('/');
-    const base = slash >= 0 ? lf.slice(slash + 1) : lf;
-    const baseIdx = base.indexOf(q);
+    const baseIdx = f.nameLower.indexOf(q);
     // Basename hits dominate; among basename hits, earlier is better.
     // Within directory-only hits, earlier path position wins.
     const score = baseIdx >= 0 ? 10_000 - baseIdx : 1_000 - idx;
-    scored.push({ path: f, score });
+    scored.push({ path: f.rel, score });
   }
   scored.sort((a, b) => {
     if (b.score !== a.score) return b.score - a.score;

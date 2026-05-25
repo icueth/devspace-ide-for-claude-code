@@ -103,7 +103,6 @@ function EditorPane({ pane, className }: EditorPaneProps) {
   const moveToSplit = useEditorStore((s) => s.moveToSplit);
   const moveToMain = useEditorStore((s) => s.moveToMain);
   const focusedPane = useEditorStore((s) => s.focusedPane);
-  const cursor = useEditorViewStore((s) => s.cursor);
   const wordWrap = useLayoutStore((s) => s.wordWrap);
   const editorFontSize = useLayoutStore((s) => s.editorFontSize);
   const [mdMode, setMdMode] = useState<'code' | 'preview' | 'split'>('split');
@@ -190,7 +189,7 @@ function EditorPane({ pane, className }: EditorPaneProps) {
       {activeTab && activeTab.kind === 'text' && !isCodeflow && (
         <StatusBar
           tab={activeTab}
-          cursor={cursor && isFocused ? cursor : null}
+          isFocused={isFocused}
           wordWrap={wordWrap}
           editorFontSize={editorFontSize}
           mdMode={mdMode}
@@ -345,7 +344,7 @@ function EditorBody({ tab, onChange, onSave, onNavDone, mdMode }: EditorBodyProp
 
 interface StatusBarProps {
   tab: import('@renderer/state/editor').EditorTab;
-  cursor: { line: number; column: number; selectionLength: number } | null;
+  isFocused: boolean;
   wordWrap: boolean;
   editorFontSize: number;
   mdMode: 'code' | 'preview' | 'split';
@@ -354,12 +353,20 @@ interface StatusBarProps {
 
 function StatusBar({
   tab,
-  cursor,
+  isFocused,
   wordWrap,
   editorFontSize,
   mdMode,
   onMdMode,
 }: StatusBarProps) {
+  // Perf P5 (renderer): the cursor subscription lives HERE, not in
+  // EditorPane. The CodeMirror updateListener pushes a fresh cursor object on
+  // every keystroke / selection change; subscribing in the parent re-rendered
+  // EditorTabs + EditorBody + StatusBar on every cursor tick. Only the status
+  // bar shows Ln/Col, so isolating the subscription confines those re-renders
+  // to this small component. Gating on `isFocused` preserves the previous
+  // behavior (only the focused pane shows the cursor readout).
+  const cursor = useEditorViewStore((s) => (isFocused ? s.cursor : null));
   const language = getLanguageFromFileName(tab.name);
   const isDirty = tab.content !== tab.savedContent;
   const isMarkdown = /\.(md|mdx|markdown)$/i.test(tab.name);

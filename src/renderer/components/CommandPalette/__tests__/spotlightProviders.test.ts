@@ -4,6 +4,7 @@ import {
   composeSections,
   filterCommands,
   filterFiles,
+  filterFilesIndexed,
   filterRecents,
   flattenSections,
   parseSpotlightQuery,
@@ -14,6 +15,7 @@ import {
 } from '../spotlightProviders';
 
 import { __test as recentTest } from '@renderer/state/spotlightRecent';
+import { buildFileIndex } from '@renderer/utils/fileIndex';
 
 const noop = () => {};
 
@@ -128,6 +130,48 @@ describe('filterFiles', () => {
 
   it('handles a negative limit by returning 0 items', () => {
     expect(filterFiles(files, '', -1).length).toBe(0);
+  });
+});
+
+describe('filterFilesIndexed', () => {
+  const files = ['src/ChatPanel.tsx', 'src/services/ChatService.ts', 'src/utils/diff.ts'];
+
+  it('matches filterFiles output exactly across queries (parity)', () => {
+    const index = buildFileIndex(files);
+    for (const q of ['', 'chat', 'ChatPanel', 'diff', 'zzz', 'src']) {
+      expect(filterFilesIndexed(index, q, 10)).toEqual(filterFiles(files, q, 10));
+    }
+  });
+
+  it('orders by score descending against a prebuilt index', () => {
+    const r = filterFilesIndexed(buildFileIndex(files), 'chat', 10);
+    expect(r[0]!.fileName).toBe('ChatPanel.tsx');
+  });
+
+  it('respects the limit cap', () => {
+    expect(filterFilesIndexed(buildFileIndex(files), '', 2).length).toBe(2);
+  });
+
+  it('handles a negative limit by returning 0 items', () => {
+    expect(filterFilesIndexed(buildFileIndex(files), '', -1).length).toBe(0);
+  });
+});
+
+describe('composeSections with precomputed fileIndex', () => {
+  const files = ['src/ChatPanel.tsx', 'src/ChatService.ts'];
+  const commands: SpotlightCommand[] = [mkCmd('toggle.wrap', 'Toggle word wrap', 'wrap')];
+
+  it('produces identical sections whether the index is passed or built internally', () => {
+    const parsed = { mode: 'mixed' as const, term: 'chat' };
+    const withIndex = composeSections({
+      parsed,
+      files,
+      commands,
+      recents: [],
+      fileIndex: buildFileIndex(files),
+    });
+    const without = composeSections({ parsed, files, commands, recents: [] });
+    expect(withIndex).toEqual(without);
   });
 });
 

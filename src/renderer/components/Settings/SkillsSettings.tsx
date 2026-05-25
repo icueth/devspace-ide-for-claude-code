@@ -38,6 +38,7 @@ import { useWorkspaceStore } from '@renderer/state/workspace';
 import { baseEditorTheme } from '@renderer/utils/codemirrorTheme';
 import { computeForgeRating } from '@renderer/utils/forgeRating';
 import type {
+  DesignSeedingStatus,
   ForgeCatalogItem,
   ForgeStats,
   SkillDef,
@@ -63,6 +64,82 @@ const TOOL_OPTIONS = [
   'Task',
   'TodoWrite',
 ];
+
+/**
+ * Status + controls for the bundled design-skill seeding. The seeder runs
+ * on boot (best-effort, default on) and copies the bundled design packs into
+ * ~/.claude/skills so the Claude Code CLI can discover them. This compact
+ * row surfaces that state, lets the user toggle on-launch seeding, and
+ * re-seed on demand (e.g. after a fresh install or to pick up a pack update).
+ */
+function DesignSeedingRow({ onReseeded }: { onReseeded: () => void }) {
+  const [status, setStatus] = useState<DesignSeedingStatus | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const refresh = useCallback(() => {
+    void api.designSeeding
+      .status()
+      .then(setStatus)
+      .catch(() => undefined);
+  }, []);
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  if (!status) return null;
+
+  const toggle = async (enabled: boolean) => {
+    setStatus({ ...status, enabled }); // optimistic
+    try {
+      await api.designSeeding.setEnabled(enabled);
+    } finally {
+      refresh();
+    }
+  };
+
+  const reseed = async () => {
+    setBusy(true);
+    try {
+      await api.designSeeding.reseed();
+      onReseeded();
+    } finally {
+      setBusy(false);
+      refresh();
+    }
+  };
+
+  return (
+    <div className="mt-2 rounded-[6px] border border-border-subtle bg-surface-3/40 p-2">
+      <div className="flex items-center gap-1.5 text-[10.5px] font-medium text-text-secondary">
+        <Sparkles size={10} className="text-accent" />
+        <span>Bundled design skills</span>
+      </div>
+      <p className="mt-1 text-[10px] leading-snug text-text-dim">
+        {status.skillCount > 0
+          ? `${status.skillCount} skills · ${status.systemCount} systems in ~/.claude/skills` +
+            (status.packVersion ? ` (pack ${status.packVersion})` : '')
+          : 'Not seeded yet — seed to let Claude use the bundled design skills.'}
+      </p>
+      <label className="mt-1.5 flex cursor-pointer items-center gap-1.5 text-[10.5px] text-text-secondary">
+        <input
+          type="checkbox"
+          checked={status.enabled}
+          onChange={(e) => void toggle(e.target.checked)}
+          className="h-3 w-3 accent-accent"
+        />
+        <span>Seed on launch</span>
+      </label>
+      <button
+        onClick={() => void reseed()}
+        disabled={busy}
+        className="mt-1.5 inline-flex w-full items-center justify-center gap-1 rounded-[6px] border border-border-subtle bg-surface-3 px-2 py-1 text-[10.5px] text-text-secondary transition hover:bg-surface-4 disabled:opacity-50"
+        title="Copy the bundled design skills into ~/.claude/skills now (never overwrites your own skills)"
+      >
+        {busy ? 'Re-seeding…' : 'Re-seed now'}
+      </button>
+    </div>
+  );
+}
 
 /**
  * Settings tab for Claude Code skills (~/.claude/skills/<name>/SKILL.md).
@@ -372,6 +449,7 @@ export function SkillsSettings() {
             <Package size={10} className="text-text-muted" />
             <span>Include marketplace plugins (read-only)</span>
           </label>
+          <DesignSeedingRow onReseeded={reload} />
         </div>
 
         <div className="flex-1 overflow-y-auto">

@@ -3,6 +3,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 
 import {
+  onAnyChange,
   subscribeWatch,
   unsubscribeWatch,
 } from '@main/services/FileWatcherService';
@@ -18,7 +19,10 @@ import type { DirEntry } from '@shared/types';
 
 const logger = createLogger('IPC:fs');
 
-const MAX_READ_BYTES = 5 * 1024 * 1024; // 5MB cap for text reads — binary has a larger cap.
+// 25MB cap for text reads — CodeMirror 6 handles documents this size. Binary
+// has its own larger cap below. (Streaming / head-load for >25MB is a deferred
+// feature.)
+const MAX_READ_BYTES = 25 * 1024 * 1024;
 const MAX_BINARY_BYTES = 50 * 1024 * 1024; // 50MB for images / PDFs.
 
 // Always hide — noisy/huge and never useful to open from the tree.
@@ -75,7 +79,7 @@ export function registerFsIpc(): void {
     const stat = await assertRegularFile(safe);
     if (stat.size > MAX_READ_BYTES) {
       throw new Error(
-        `File too large (${stat.size} bytes > ${MAX_READ_BYTES}). Large-file support is a later milestone.`,
+        `File too large to open: ${stat.size} bytes exceeds the ${MAX_READ_BYTES}-byte (25 MB) text-editor limit.`,
       );
     }
     return fs.promises.readFile(safe, 'utf8');
@@ -108,6 +112,7 @@ export function registerFsIpc(): void {
       logger.error(`write failed for ${safe}:`, (err as Error).message);
       throw err;
     }
+    invalidateListCacheFor(safe);
     return true;
   });
 
@@ -115,7 +120,7 @@ export function registerFsIpc(): void {
     IPC.FS_LIST_FILES,
     async (_e, cwd: string): Promise<string[]> => {
       const safe = await assertInWorkspace(cwd);
-      return listFiles(safe);
+      return listFilesCached(safe);
     },
   );
 
@@ -131,6 +136,7 @@ export function registerFsIpc(): void {
         const fh = await fs.promises.open(safe, 'wx');
         await fh.close();
       }
+      invalidateListCacheFor(safe);
       return safe;
     },
   );
@@ -141,6 +147,8 @@ export function registerFsIpc(): void {
       const safeSrc = await assertInWorkspace(src);
       const safeDest = await assertInWorkspace(dest);
       await fs.promises.rename(safeSrc, safeDest);
+      invalidateListCacheFor(safeSrc);
+      invalidateListCacheFor(safeDest);
       return safeDest;
     },
   );
@@ -153,6 +161,7 @@ export function registerFsIpc(): void {
       logger.warn(`trashItem failed, falling back to rm -rf: ${(err as Error).message}`);
       await fs.promises.rm(safe, { recursive: true, force: true });
     }
+    invalidateListCacheFor(safe);
   });
 
   ipcMain.handle(
@@ -172,6 +181,7 @@ export function registerFsIpc(): void {
       }
       const dest = path.join(dir, candidate);
       await fs.promises.cp(safe, dest, { recursive: true });
+      invalidateListCacheFor(dest);
       return dest;
     },
   );
@@ -208,7 +218,87 @@ const SKIP_DIRS = new Set([
   '__pycache__',
 ]);
 
+// ─── FS_LIST_FILES walk cache ───────────────────────────────────────────────
+//
+// listFiles recursively walks the whole project tree (capped at 20k entries)
+// and the renderer re-runs it UNCACHED on every Cmd+P / Cmd+K / @-mention open.
+// On large repos that floods the libuv pool and makes concurrent reads sluggish.
+// We cache the walk result per resolved root and invalidate on BOTH:
+//   (a) a short TTL (LIST_CACHE_TTL_MS), and
+//   (b) filesystem mutations — the FS write/create/rename/delete/duplicate
+//       handlers above call invalidateListCacheFor(), and FileWatcherService's
+//       onAnyChange hook clears the entry for any root reporting a change.
+const LIST_CACHE_TTL_MS = 4000;
+
+interface ListCacheEntry {
+  result: string[];
+  expires: number;
+}
+
+const listCache = new Map<string, ListCacheEntry>();
+
+function listCacheKey(root: string): string {
+  return path.resolve(root);
+}
+
+// Drop any cached walk whose root contains (or equals) the mutated path.
+// We can't know which root a mutated file belongs to without scanning the
+// cache, so clear every cached root that is an ancestor of (or equal to) the
+// mutated path. Cheap: the cache holds at most a handful of open workspaces.
+function invalidateListCacheFor(mutatedPath: string): void {
+  const resolved = path.resolve(mutatedPath);
+  for (const key of Array.from(listCache.keys())) {
+    if (resolved === key || resolved.startsWith(key + path.sep)) {
+      listCache.delete(key);
+    }
+  }
+}
+
+// FileWatcher reports the resolved root key directly — drop that exact entry.
+const unsubscribeListCacheWatch = onAnyChange((rootKey) => {
+  listCache.delete(path.resolve(rootKey));
+});
+// Referenced so lint/tsc don't flag it as unused; the subscription lives for
+// the process lifetime, but exposing the unsubscribe keeps the API symmetric.
+void unsubscribeListCacheWatch;
+
+// Exported for unit tests; the IPC handler is the production caller.
+export async function listFilesCached(cwd: string): Promise<string[]> {
+  const key = listCacheKey(cwd);
+  const now = Date.now();
+  const hit = listCache.get(key);
+  if (hit && hit.expires > now) {
+    return hit.result;
+  }
+  const result = await listFiles(cwd);
+  listCache.set(key, { result, expires: now + LIST_CACHE_TTL_MS });
+  return result;
+}
+
+// Test-observable counter: incremented once per *actual* tree walk (cache
+// miss). A cache hit returns without bumping it, so tests can assert that a
+// second call within the TTL did not re-walk.
+let listWalkCount = 0;
+
+/** Test-only: clear the FS_LIST_FILES walk cache + walk counter between cases. */
+export function __resetFsListCacheForTests(): void {
+  listCache.clear();
+  listWalkCount = 0;
+}
+
+/** Test-only: number of real tree walks performed since the last reset. */
+export function __getFsListWalkCountForTests(): number {
+  return listWalkCount;
+}
+
+/** Test-only: exercise the same cache-invalidation path the FS mutation
+ *  handlers (write/create/rename/delete/duplicate) use. */
+export function __invalidateFsListCacheForTests(mutatedPath: string): void {
+  invalidateListCacheFor(mutatedPath);
+}
+
 async function listFiles(cwd: string, maxFiles = 20_000): Promise<string[]> {
+  listWalkCount += 1;
   const results: string[] = [];
   async function walk(dir: string, rel: string): Promise<void> {
     if (results.length >= maxFiles) return;

@@ -293,6 +293,12 @@ const api = {
     ) =>
       ipcRenderer.invoke(IPC.SKILLS_DUPLICATE, filePath, targetScope, projectPath),
   },
+  designSeeding: {
+    status: () => ipcRenderer.invoke(IPC.DESIGN_SEEDING_STATUS),
+    setEnabled: (enabled: boolean) =>
+      ipcRenderer.invoke(IPC.DESIGN_SEEDING_SET_ENABLED, enabled),
+    reseed: () => ipcRenderer.invoke(IPC.DESIGN_SEEDING_RESEED),
+  },
   mcp: {
     list: (projectPath: string | null) =>
       ipcRenderer.invoke(IPC.MCP_LIST, projectPath),

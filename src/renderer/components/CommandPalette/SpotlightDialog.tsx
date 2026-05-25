@@ -6,6 +6,7 @@ import { api } from '@renderer/lib/api';
 import { cn } from '@renderer/lib/utils';
 import { useEditorStore } from '@renderer/state/editor';
 import { useSpotlightRecentStore } from '@renderer/state/spotlightRecent';
+import { buildFileIndex } from '@renderer/utils/fileIndex';
 import { getFileIcon } from '@renderer/utils/fileIcons';
 
 import {
@@ -94,9 +95,13 @@ export function SpotlightDialog({
   }, [open, projectPath]);
 
   const parsed = useMemo(() => parseSpotlightQuery(query), [query]);
+  // Precompute the lowercase file index ONCE per file-list change — keyed on
+  // `files`, NOT the query — so per-keystroke composition only re-scores
+  // against cached fields instead of re-lowercasing the whole tree.
+  const fileIndex = useMemo(() => buildFileIndex(files), [files]);
   const sections = useMemo(
-    () => composeSections({ parsed, files, commands, recents }),
-    [parsed, files, commands, recents],
+    () => composeSections({ parsed, files, commands, recents, fileIndex }),
+    [parsed, files, commands, recents, fileIndex],
   );
   const flat = useMemo(() => flattenSections(sections), [sections]);
 

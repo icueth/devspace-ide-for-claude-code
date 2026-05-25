@@ -23,6 +23,32 @@ interface Entry {
 
 const watchers = new Map<string, Entry>();
 
+// Lightweight observer hook so other main-process modules (e.g. the
+// FS_LIST_FILES walk cache in ipc/fs.ts) can invalidate per-root state when
+// the filesystem under a watched root changes. Intentionally minimal — does
+// NOT alter the watch config or the renderer broadcast. Each callback receives
+// the resolved root key whose contents changed.
+type ChangeListener = (rootKey: string) => void;
+const changeListeners = new Set<ChangeListener>();
+
+/** Subscribe to "something under a watched root changed" notifications. Fires
+ *  with the resolved root key on each debounced flush. Returns an unsubscribe
+ *  function. Never throws into the watcher loop — observers are isolated. */
+export function onAnyChange(cb: ChangeListener): () => void {
+  changeListeners.add(cb);
+  return () => changeListeners.delete(cb);
+}
+
+function notifyChange(rootKey: string): void {
+  for (const cb of changeListeners) {
+    try {
+      cb(rootKey);
+    } catch {
+      /* never let an observer crash the watcher */
+    }
+  }
+}
+
 // Single-shot destroy hook per WebContents — avoids the previous behavior
 // where every subscribeWatch call attached a fresh `wc.once('destroyed')`,
 // stacking N listeners and (worse) firing cleanup() N times so the SECOND
@@ -71,6 +97,9 @@ export function subscribeWatch(root: string, wc: WebContents): void {
       } catch {
         /* never let an observer crash the watcher */
       }
+      // Tell generic observers (e.g. FS_LIST_FILES walk cache) that this root
+      // changed so they can drop any cached snapshot of it.
+      notifyChange(key);
     };
 
     const queue = (changedPath: string) => {

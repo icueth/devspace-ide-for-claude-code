@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '@renderer/lib/api';
 import { cn } from '@renderer/lib/utils';
 import { useEditorStore } from '@renderer/state/editor';
+import { buildFileIndex, type IndexedFile } from '@renderer/utils/fileIndex';
 import { getFileIcon } from '@renderer/utils/fileIcons';
 
 interface QuickOpenDialogProps {
@@ -20,13 +21,14 @@ interface Candidate {
 }
 
 /**
- * Score a filename + path against a lowercase query. Higher is better.
- * 0 means no match.
+ * Score an already-lowercased filename + path against a lowercase query.
+ * Higher is better; 0 means no match. Ranking is identical to the original
+ * `scoreMatch` — the only change is the lowercase fields are precomputed
+ * (via buildFileIndex) instead of re-derived per file per keystroke.
  */
-function scoreMatch(rel: string, name: string, q: string): number {
+function scoreIndexed(f: IndexedFile, q: string): number {
   if (!q) return 1;
-  const relLower = rel.toLowerCase();
-  const nameLower = name.toLowerCase();
+  const { relLower, nameLower } = f;
   if (nameLower === q) return 1000;
   if (nameLower.startsWith(q)) return 600 - nameLower.length;
   const nameIdx = nameLower.indexOf(q);
@@ -40,11 +42,6 @@ function scoreMatch(rel: string, name: string, q: string): number {
   }
   if (i === q.length) return 50 - relLower.length;
   return 0;
-}
-
-function basename(p: string): string {
-  const idx = p.lastIndexOf('/');
-  return idx >= 0 ? p.slice(idx + 1) : p;
 }
 
 export function QuickOpenDialog({ open, onOpenChange, projectPath }: QuickOpenDialogProps) {
@@ -62,17 +59,23 @@ export function QuickOpenDialog({ open, onOpenChange, projectPath }: QuickOpenDi
     void api.fs.listFiles(projectPath).then(setFiles).catch(() => setFiles([]));
   }, [open, projectPath]);
 
+  // Precompute the lowercase index ONCE per file-list change (not per
+  // keystroke). For a 20k-file repo this is the bulk of the work; doing it
+  // here means each keystroke only re-scores against cached fields.
+  const fileIndex = useMemo(() => buildFileIndex(files), [files]);
+
   const candidates = useMemo<Candidate[]>(() => {
     const q = query.trim().toLowerCase();
-    const scored = files
-      .map((rel): Candidate => {
-        const name = basename(rel);
-        return { relPath: rel, fileName: name, score: scoreMatch(rel, name, q) };
-      })
-      .filter((c) => c.score > 0);
+    // Single loop pushing survivors — no per-keystroke `.map()` allocation
+    // across the whole file list.
+    const scored: Candidate[] = [];
+    for (const f of fileIndex) {
+      const score = scoreIndexed(f, q);
+      if (score > 0) scored.push({ relPath: f.rel, fileName: f.name, score });
+    }
     scored.sort((a, b) => b.score - a.score || a.relPath.localeCompare(b.relPath));
     return scored.slice(0, 100);
-  }, [query, files]);
+  }, [query, fileIndex]);
 
   const activate = useCallback(
     (idx: number) => {

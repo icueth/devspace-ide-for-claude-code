@@ -9,8 +9,18 @@ import {
   readSkill,
   saveSkill,
 } from '@main/services/SkillsService';
+import {
+  getSeedingEnabled,
+  readSeedManifest,
+  seedDesignSkills,
+  setSeedingEnabled,
+} from '@main/services/SkillSeedingService';
 import { IPC } from '@shared/ipc-channels';
-import type { SkillDef } from '@shared/types';
+import type {
+  DesignSeedingReseedResult,
+  DesignSeedingStatus,
+  SkillDef,
+} from '@shared/types';
 
 // Every handler that takes a caller-controlled `filePath` runs it through
 // `assertValidSkillPath` before forwarding to the service. Critically,
@@ -59,6 +69,54 @@ export function registerSkillsIpc(): void {
     ) => {
       assertValidSkillPath(filePath);
       return duplicateSkill(filePath, targetScope, projectPath);
+    },
+  );
+
+  // v0.31: bundled design-skill seeding controls. The seeder runs on boot
+  // (best-effort, default on); these handlers surface its status and let the
+  // user toggle on-launch seeding or re-seed manually from Settings.
+  ipcMain.handle(
+    IPC.DESIGN_SEEDING_STATUS,
+    async (): Promise<DesignSeedingStatus> => {
+      const [enabled, manifest] = await Promise.all([
+        getSeedingEnabled(),
+        readSeedManifest(),
+      ]);
+      return {
+        enabled,
+        packVersion: manifest?.packVersion ?? null,
+        seededAt: manifest?.seededAt ?? null,
+        skillCount: manifest?.managedSlugs.length ?? 0,
+        systemCount: manifest?.managedSystems.length ?? 0,
+      };
+    },
+  );
+
+  ipcMain.handle(
+    IPC.DESIGN_SEEDING_SET_ENABLED,
+    (_event, enabled: boolean) => {
+      if (typeof enabled !== 'boolean') {
+        throw new Error('design-seeding:set-enabled requires a boolean');
+      }
+      return setSeedingEnabled(enabled);
+    },
+  );
+
+  ipcMain.handle(
+    IPC.DESIGN_SEEDING_RESEED,
+    async (): Promise<DesignSeedingReseedResult> => {
+      // Manual re-seed forces a refresh regardless of the version stamp; we
+      // pass enabled:true so it seeds even if on-launch seeding is toggled
+      // off (the button is an explicit "do it now" action). The pref is left
+      // unchanged.
+      const r = await seedDesignSkills({ enabled: true, force: true });
+      return {
+        status: r.status,
+        seededSkills: r.seededSkills,
+        seededSystems: r.seededSystems,
+        skippedCollisions: r.skippedCollisions.length,
+        removedStale: r.removedStale,
+      };
     },
   );
 }

@@ -34,6 +34,7 @@ import {
 import {
   memo,
   useCallback,
+  useDeferredValue,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -48,9 +49,10 @@ import remarkGfm from 'remark-gfm';
 
 import {
   AtMentionPicker,
-  filterAtMentionFiles,
+  filterAtMentionIndexed,
   findAtMentionToken,
 } from '@renderer/components/Dock/AtMentionPicker';
+import { buildFileIndex } from '@renderer/utils/fileIndex';
 import {
   allAnswered as allQuestionsAnswered,
   type AnswerOutcome,
@@ -369,9 +371,16 @@ export function ChatPanel({ projectPath }: ChatPanelProps) {
   // open/close, so the scan fires exactly once per open.
   const atMentionOpen = atMention !== null;
   const atFiles = filesCache?.project === projectPath ? filesCache.files : [];
+  // Precompute the lowercase index ONCE when the project file list is set
+  // (keyed on `atFiles`, not the query). Per keystroke the @-mention filter
+  // only re-scores against cached fields.
+  const atFileIndex = useMemo(() => buildFileIndex(atFiles), [atFiles]);
+  // Single source of truth for the visible @-mention rows — computed here and
+  // passed down to AtMentionPicker as a prop. Previously this filter ran
+  // twice for identical inputs (once here, once inside the picker).
   const atVisible = useMemo(
-    () => (atMention ? filterAtMentionFiles(atFiles, atMention.query) : []),
-    [atMention, atFiles],
+    () => (atMention ? filterAtMentionIndexed(atFileIndex, atMention.query) : []),
+    [atMention, atFileIndex],
   );
   // Sticky scroll — same pattern Slack/Discord use. The container
   // auto-scrolls to bottom on every content change BUT only while the
@@ -1861,7 +1870,7 @@ export function ChatPanel({ projectPath }: ChatPanelProps) {
         {atMention && (
           <AtMentionPicker
             query={atMention.query}
-            files={atFiles}
+            filtered={atVisible}
             loading={filesLoading}
             highlight={atMention.highlight}
             onHighlight={(idx) =>
@@ -2209,7 +2218,7 @@ const MessageBubble = memo(function MessageBubble({
           // flattening). Empty text segments at the very tail of a
           // streaming turn — common between two tool calls — show nothing
           // and let the next event fall into a new segment.
-          <SegmentedBody message={message} />
+          <SegmentedBody message={message} streaming={message.status === 'streaming'} />
         ) : (
           <>
             {message.toolCalls.length > 0 && (
@@ -2224,7 +2233,7 @@ const MessageBubble = memo(function MessageBubble({
               // the wrapper means 100% of 0 = 0). Replies came back fine from
               // the model but visually clipped to a single line. Same fix we
               // applied to the Update dialog.
-              <TextSegmentCard text={message.content} />
+              <TextSegmentCard text={message.content} streaming={message.status === 'streaming'} />
             ) : message.status === 'streaming' && message.toolCalls.length === 0 ? (
               <WaitingPill message={message} vendorLabel={vendorLabel} />
             ) : null}
@@ -2256,16 +2265,33 @@ const MessageBubble = memo(function MessageBubble({
 // what users already know.
 function SegmentedBody({
   message,
+  streaming = false,
 }: {
   message: { segments?: ChatMessageSegment[]; toolCalls: ChatMessage['toolCalls'] };
+  // True while the parent turn/step is in flight. Only the LAST text segment
+  // is the live one whose markdown is still growing token-by-token, so only
+  // that segment gets deferred rendering (P9). All earlier text segments are
+  // finalized and render synchronously as before.
+  streaming?: boolean;
 }) {
   const segs = message.segments ?? [];
+  // Index of the last text segment with content — the one actively streaming.
+  let lastTextIdx = -1;
+  if (streaming) {
+    for (let i = segs.length - 1; i >= 0; i--) {
+      const s = segs[i]!;
+      if (s.kind === 'text' && s.text) {
+        lastTextIdx = i;
+        break;
+      }
+    }
+  }
   return (
     <>
-      {segs.map((seg) => {
+      {segs.map((seg, i) => {
         if (seg.kind === 'text') {
           if (!seg.text) return null;
-          return <TextSegmentCard key={seg.id} text={seg.text} />;
+          return <TextSegmentCard key={seg.id} text={seg.text} streaming={i === lastTextIdx} />;
         }
         return (
           <ToolGroupSegment
@@ -2357,16 +2383,30 @@ function isSegmentListEmpty(segments: ChatMessageSegment[]): boolean {
 // re-runs the (expensive) ReactMarkdown + rehype-highlight pipeline.
 const TextSegmentCard = memo(function TextSegmentCardInner({
   text,
+  streaming = false,
 }: {
   text: string;
+  // True only for the actively-streaming (last) text segment of an in-flight
+  // turn. Finalized segments pass false (the default) and render synchronously
+  // exactly as before.
+  streaming?: boolean;
 }) {
+  // Perf P9 (renderer): for the live segment only, defer the markdown SOURCE
+  // so the heavy ReactMarkdown + remark-gfm + rehype-highlight pipeline runs
+  // at React's deferred cadence instead of synchronously re-parsing +
+  // re-highlighting all accumulated text on every streamed token. Pure
+  // scheduling change — same plugins/options, identical final output once the
+  // deferred value catches up. Finalized segments (streaming=false) keep
+  // `deferred === text` so their render is unchanged.
+  const deferredText = useDeferredValue(text);
+  const source = streaming ? deferredText : text;
   return (
     <div className="prose prose-invert max-w-none break-words text-[12.5px] leading-relaxed prose-headings:mt-3 prose-headings:mb-1.5 prose-p:my-1.5 prose-ul:my-1.5 prose-ol:my-1.5 prose-li:my-0.5 prose-pre:my-2 prose-pre:overflow-x-auto prose-pre:rounded-md prose-pre:bg-surface-3 prose-pre:p-2.5 prose-pre:text-[11.5px] prose-code:rounded prose-code:bg-surface-3 prose-code:px-1 prose-code:py-0.5 prose-code:text-[11.5px] prose-code:before:content-none prose-code:after:content-none prose-a:text-accent prose-a:no-underline hover:prose-a:underline">
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         rehypePlugins={[[rehypeHighlight, { detect: true }]]}
       >
-        {text}
+        {source}
       </ReactMarkdown>
     </div>
   );
@@ -3320,12 +3360,15 @@ function StepDetail({ step, index }: { step: TeamStep; index: number }) {
         {step.segments && step.segments.length > 0 ? (
           // v0.11+ segmented step render — same chronological cards as
           // ChatMessage segments, scoped to this step's content/toolCalls.
-          <SegmentedBody message={{ segments: step.segments, toolCalls: step.toolCalls }} />
+          <SegmentedBody
+            message={{ segments: step.segments, toolCalls: step.toolCalls }}
+            streaming={isRunning}
+          />
         ) : (
           <>
             {step.toolCalls.length > 0 && <ToolCallList calls={step.toolCalls} />}
             {step.content ? (
-              <TextSegmentCard text={step.content} />
+              <TextSegmentCard text={step.content} streaming={isRunning} />
             ) : null}
           </>
         )}

@@ -146,6 +146,12 @@ export const IPC = {
   // global/project so the user can edit it.
   SKILLS_DUPLICATE: 'skills:duplicate',
 
+  // v0.31: bundled design-skill seeding into ~/.claude/skills — status,
+  // on-launch toggle, and manual re-seed.
+  DESIGN_SEEDING_STATUS: 'design-seeding:status',
+  DESIGN_SEEDING_SET_ENABLED: 'design-seeding:set-enabled',
+  DESIGN_SEEDING_RESEED: 'design-seeding:reseed',
+
   // Teams (.devspace/teams.json)
   TEAMS_LIST: 'teams:list',
   TEAMS_GET: 'teams:get',

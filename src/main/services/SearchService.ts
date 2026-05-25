@@ -13,7 +13,15 @@ const logger = createLogger('SearchService');
 
 const MAX_DEFAULT = 500;
 
+// Memoize the resolved rg binary path after the first successful lookup so we
+// don't run a synchronous fs.existsSync() sweep over every PATH directory on
+// EVERY search (that scan blocks the main JS thread). The resolved path is
+// stable for the process lifetime; a failed lookup is NOT cached so a later
+// search retries once rg becomes installed/available.
+let cachedRgPath: string | null = null;
+
 async function findRg(): Promise<string | null> {
+  if (cachedRgPath !== null) return cachedRgPath;
   const env = await resolveInteractiveShellEnv();
   const path = env.PATH ?? process.env.PATH ?? '';
   if (!path) return null;
@@ -23,10 +31,18 @@ async function findRg(): Promise<string | null> {
     if (!dir) continue;
     for (const ext of exts) {
       const candidate = `${dir}/rg${ext}`;
-      if (fs.existsSync(candidate)) return candidate;
+      if (fs.existsSync(candidate)) {
+        cachedRgPath = candidate;
+        return candidate;
+      }
     }
   }
   return null;
+}
+
+/** Test-only: reset the memoized rg path between cases. */
+export function __resetRgPathCacheForTests(): void {
+  cachedRgPath = null;
 }
 
 interface RgMatchRange {

@@ -94,6 +94,75 @@ async function readAgentFile(filePath: string): Promise<string> {
   return fs.promises.readFile(filePath, 'utf8');
 }
 
+// ─── result cache ────────────────────────────────────────────────────────────
+//
+// listAgents reads every agent .md across global+project+builtin roots. We
+// cache the assembled result per projectPath with a short TTL AND a cheap
+// directory snapshot (mtime + entry count per root, mirroring DevlogService /
+// SkillsService). On a hit with a matching snapshot we skip the N reads.
+const LIST_CACHE_TTL_MS = 4000;
+
+interface DirSnap {
+  mtimeMs: number;
+  count: number;
+}
+type RootsSnapshot = Record<string, DirSnap>;
+
+interface AgentsCacheEntry {
+  result: AgentDef[];
+  snapshot: RootsSnapshot;
+  expires: number;
+}
+
+const agentsListCache = new Map<string, AgentsCacheEntry>();
+
+async function snapshotDir(dir: string): Promise<DirSnap> {
+  try {
+    const st = await fs.promises.stat(dir);
+    const names = await fs.promises.readdir(dir);
+    return { mtimeMs: st.mtimeMs, count: names.length };
+  } catch {
+    return { mtimeMs: -1, count: 0 };
+  }
+}
+
+async function snapshotRoots(roots: string[]): Promise<RootsSnapshot> {
+  const snap: RootsSnapshot = {};
+  await Promise.all(
+    roots.map(async (r) => {
+      snap[r] = await snapshotDir(r);
+    }),
+  );
+  return snap;
+}
+
+function snapshotsEqual(a: RootsSnapshot, b: RootsSnapshot): boolean {
+  const ak = Object.keys(a);
+  const bk = Object.keys(b);
+  if (ak.length !== bk.length) return false;
+  for (const k of ak) {
+    const av = a[k];
+    const bv = b[k];
+    if (!bv || !av) return false;
+    if (av.mtimeMs !== bv.mtimeMs || av.count !== bv.count) return false;
+  }
+  return true;
+}
+
+/**
+ * Drop all cached listAgents results. MUST be called after every agent
+ * mutation (save/create/delete/duplicate) — an in-place edit to an agent .md
+ * changes neither the parent dir's mtime nor its entry count, so the
+ * snapshot-based TTL cache cannot detect it and would serve a stale
+ * name/description to the Settings list + agent pickers within the TTL.
+ */
+export function invalidateAgentsCache(): void {
+  agentsListCache.clear();
+}
+
+/** Test-only alias. */
+export const __resetAgentsCacheForTests = invalidateAgentsCache;
+
 // ─── public API ─────────────────────────────────────────────────────────────
 
 export async function listAgents(projectPath: string | null): Promise<AgentDef[]> {
@@ -111,6 +180,21 @@ export async function listAgents(projectPath: string | null): Promise<AgentDef[]
     dirs.push({ dir: getBuiltinAgentsDir(), scope: 'builtin' });
   }
 
+  const snapRoots = dirs.map((d) => path.resolve(d.dir));
+  const key = path.resolve(projectPath ?? '');
+  const now = Date.now();
+  const cached = agentsListCache.get(key);
+  if (cached && cached.expires > now) {
+    const fresh = await snapshotRoots(snapRoots);
+    if (snapshotsEqual(cached.snapshot, fresh)) {
+      // Fresh array so callers can't mutate the cached list; AgentDef
+      // entries themselves are treated as read-only.
+      return cached.result.slice();
+    }
+  }
+
+  const snapshot = await snapshotRoots(snapRoots);
+
   const out: AgentDef[] = [];
   for (const { dir, scope } of dirs) {
     let entries: fs.Dirent[];
@@ -123,19 +207,30 @@ export async function listAgents(projectPath: string | null): Promise<AgentDef[]
       }
       continue;
     }
-    for (const e of entries) {
-      if (!e.isFile() || !e.name.endsWith('.md')) continue;
-      const filePath = path.join(dir, e.name);
-      // Defense in depth — readdir might return a file with a slug that
-      // doesn't match our shape (extremely unusual on disk, but a hostile
-      // sibling could land via symlink). Skip rather than parse.
-      if (!isValidAgentPath(filePath)) continue;
-      try {
-        const raw = await readAgentFile(filePath);
-        out.push(parseAgent(filePath, scope, raw));
-      } catch (err) {
-        logger.warn(`failed to parse ${filePath}: ${(err as Error).message}`);
-      }
+    // Read every candidate agent file in parallel rather than awaiting each
+    // sequentially. The .md filter, isValidAgentPath gate (symlink/slug
+    // defense in depth), and lstat/size guards in readAgentFile are all
+    // preserved per file; parse failures still log + skip.
+    const candidates = entries.filter(
+      (e) =>
+        e.isFile() &&
+        e.name.endsWith('.md') &&
+        isValidAgentPath(path.join(dir, e.name)),
+    );
+    const parsed = await Promise.all(
+      candidates.map(async (e) => {
+        const filePath = path.join(dir, e.name);
+        try {
+          const raw = await readAgentFile(filePath);
+          return parseAgent(filePath, scope, raw);
+        } catch (err) {
+          logger.warn(`failed to parse ${filePath}: ${(err as Error).message}`);
+          return null;
+        }
+      }),
+    );
+    for (const a of parsed) {
+      if (a) out.push(a);
     }
   }
 
@@ -156,6 +251,14 @@ export async function listAgents(projectPath: string | null): Promise<AgentDef[]
   out.sort((a, b) => {
     if (a.scope !== b.scope) return scopeOrder[a.scope] - scopeOrder[b.scope];
     return a.slug.localeCompare(b.slug);
+  });
+
+  // Store a copy so a caller mutating the returned array can't corrupt the
+  // cached list (the cache hit path also returns a copy).
+  agentsListCache.set(key, {
+    result: out.slice(),
+    snapshot,
+    expires: now + LIST_CACHE_TTL_MS,
   });
   return out;
 }
@@ -187,6 +290,7 @@ export async function saveAgent(agent: AgentDef): Promise<AgentDef> {
   await fs.promises.mkdir(path.dirname(agent.path), { recursive: true });
   const text = serializeAgent(agent);
   await fs.promises.writeFile(agent.path, text);
+  invalidateAgentsCache();
   // Re-read to normalize (whitespace, key ordering) so the renderer sees
   // exactly what landed on disk.
   return readAgent(agent.path);
@@ -241,6 +345,7 @@ export async function deleteAgent(filePath: string): Promise<void> {
     throw new Error('refuse to delete bundled builtin agent');
   }
   await fs.promises.unlink(path.resolve(filePath));
+  invalidateAgentsCache();
 }
 
 // v0.11: duplicate a builtin (or any-scope) agent into global/project so
@@ -282,6 +387,7 @@ export async function duplicateAgent(
   }
 
   await fs.promises.writeFile(destPath, raw);
+  invalidateAgentsCache();
   return readAgent(destPath);
 }
 

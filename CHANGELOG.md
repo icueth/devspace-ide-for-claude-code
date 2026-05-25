@@ -5,6 +5,41 @@ All notable changes to DevSpace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.31.2] — 2026-05-25
+
+Performance pass + design-skill seeding controls.
+
+**Faster file reading + no hangs.** An evidence-based audit (main-process I/O +
+renderer interaction) found and fixed the real bottlenecks:
+
+- **`FS_LIST_FILES` is now cached** (per-resolved-cwd, 4s TTL) and invalidated
+  by filesystem mutations + the file watcher. Previously every Cmd+P / Cmd+K /
+  `@`-mention open re-walked the whole project tree (up to 20k entries),
+  flooding the libuv pool and making concurrent file reads sluggish on large
+  repos.
+- **Quick-open, Spotlight, and `@`-mention now use one precomputed lowercase
+  file index** instead of re-lowercasing up to 20k paths on every keystroke
+  (the `@`-mention list was also being filtered twice per render — deduped to
+  one computation passed down as a prop).
+- **`listSkills`/`listAgents` read files in parallel + cache results**
+  (mtime+count snapshot, with explicit invalidation on every save/create/
+  delete/duplicate so an in-place edit is reflected immediately). Previously
+  300+ SKILL.md/agent files were read sequentially, uncached, on every
+  Settings open / picker mount.
+- **`findRg` memoizes the ripgrep binary path** so each search no longer runs
+  synchronous `existsSync` over every PATH entry on the main thread.
+- **Editor cursor ticks re-render only the status bar**, not the whole editor
+  pane subtree; the live streaming chat segment defers its markdown/highlight
+  pipeline (`useDeferredValue`) instead of re-parsing on every token.
+- **`FS_READ_FILE` cap raised 5 MB → 25 MB** so larger files open instead of
+  erroring.
+
+**Design-skill seeding controls.** Settings → Skills now shows the bundled
+design-skill seeding status (skills + systems seeded into `~/.claude/skills`,
+pack version), with a "Seed on launch" toggle and a "Re-seed now" button. The
+seeder already ran on boot (best-effort, never clobbers user-authored skills);
+this surfaces and gives control over it.
+
 ## [0.31.1] — 2026-05-25
 
 Fix `@`-mention file picker lag in chat. The lazy file-load effect keyed its

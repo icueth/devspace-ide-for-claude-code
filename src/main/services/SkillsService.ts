@@ -149,25 +149,152 @@ async function readSkillFile(filePath: string): Promise<string> {
   return fs.promises.readFile(filePath, 'utf8');
 }
 
+// ─── result cache ────────────────────────────────────────────────────────────
+//
+// listSkills reads every SKILL.md across global+project+plugin+builtin+design
+// roots — 300+ files. We cache the assembled result per (projectPath,
+// includePlugins) key with a short TTL AND a cheap directory snapshot
+// (mtime + entry count per contributing root, mirroring DevlogService). On a
+// hit with a matching snapshot we skip the N reads + parses entirely.
+const LIST_CACHE_TTL_MS = 4000;
+
+interface DirSnap {
+  mtimeMs: number;
+  count: number;
+}
+type RootsSnapshot = Record<string, DirSnap>;
+
+interface SkillsCacheEntry {
+  result: SkillDef[];
+  snapshot: RootsSnapshot;
+  expires: number;
+}
+
+const skillsListCache = new Map<string, SkillsCacheEntry>();
+
+function skillsCacheKey(
+  projectPath: string | null,
+  includePlugins: boolean,
+): string {
+  return `${path.resolve(projectPath ?? '')}::plugins=${includePlugins}`;
+}
+
+// Cheap snapshot of one directory: its mtime + immediate entry count. A skill
+// added/removed (folder created/deleted) changes both; editing a SKILL.md in
+// place changes the *folder* mtime too on every platform we ship. Returns a
+// sentinel for missing dirs so creation later busts the snapshot.
+async function snapshotDir(dir: string): Promise<DirSnap> {
+  try {
+    const st = await fs.promises.stat(dir);
+    const names = await fs.promises.readdir(dir);
+    return { mtimeMs: st.mtimeMs, count: names.length };
+  } catch {
+    return { mtimeMs: -1, count: 0 };
+  }
+}
+
+async function snapshotRoots(roots: string[]): Promise<RootsSnapshot> {
+  const snap: RootsSnapshot = {};
+  await Promise.all(
+    roots.map(async (r) => {
+      snap[r] = await snapshotDir(r);
+    }),
+  );
+  return snap;
+}
+
+function snapshotsEqual(a: RootsSnapshot, b: RootsSnapshot): boolean {
+  const ak = Object.keys(a);
+  const bk = Object.keys(b);
+  if (ak.length !== bk.length) return false;
+  for (const k of ak) {
+    const av = a[k];
+    const bv = b[k];
+    if (!bv || !av) return false;
+    if (av.mtimeMs !== bv.mtimeMs || av.count !== bv.count) return false;
+  }
+  return true;
+}
+
+/**
+ * Drop all cached listSkills results. MUST be called after every skill
+ * mutation (save/create/delete/duplicate) — an in-place edit to a SKILL.md
+ * changes neither the root dir's mtime nor its entry count, so the
+ * snapshot-based TTL cache cannot detect it on its own and would serve a
+ * stale name/description to the Settings list + skill pickers for up to the
+ * TTL window. Explicit invalidation closes that gap.
+ */
+export function invalidateSkillsCache(): void {
+  skillsListCache.clear();
+}
+
+/** Test-only alias. */
+export const __resetSkillsCacheForTests = invalidateSkillsCache;
+
 // ─── public API ─────────────────────────────────────────────────────────────
 
 export async function listSkills(
   projectPath: string | null,
   options?: { includePlugins?: boolean },
 ): Promise<SkillDef[]> {
+  const includePlugins = options?.includePlugins ?? false;
+
+  // Resolve the contributing roots up front so we can both snapshot them for
+  // cache validation and collect from them. builtin/design inclusion depends
+  // on the bundle-existence + seeding gates, evaluated once here.
+  const builtinIncluded = await builtinPacksExist();
+  const designIncluded =
+    (await designPacksExist()) && !(await getSeedingEnabled());
+
+  const collectRoots: Array<{ dir: string; scope: SkillScope }> = [
+    { dir: globalSkillsDir(), scope: 'global' },
+  ];
+  if (projectPath) {
+    collectRoots.push({ dir: projectSkillsDir(projectPath), scope: 'project' });
+  }
+  if (builtinIncluded) {
+    collectRoots.push({ dir: getBuiltinSkillsDir(), scope: 'builtin' });
+  }
+  if (designIncluded) {
+    collectRoots.push({ dir: builtinDesignSkillsDir(), scope: 'builtin' });
+  }
+
+  // Snapshot roots (cheap stat+readdir) for cache validation. Include the
+  // plugin marketplaces root when plugins are requested so adding/removing a
+  // marketplace busts the cache.
+  const snapRoots = collectRoots.map((r) => path.resolve(r.dir));
+  if (includePlugins) snapRoots.push(path.resolve(pluginMarketplacesDir()));
+
+  const key = skillsCacheKey(projectPath, includePlugins);
+  const now = Date.now();
+  const cached = skillsListCache.get(key);
+  if (cached && cached.expires > now) {
+    const fresh = await snapshotRoots(snapRoots);
+    if (snapshotsEqual(cached.snapshot, fresh)) {
+      // Return a fresh array (shallow copy) so callers can't mutate the
+      // cached list; SkillDef entries themselves are treated as read-only.
+      return cached.result.slice();
+    }
+  }
+
+  const snapshot = await snapshotRoots(snapRoots);
+
   const out: SkillDef[] = [];
+  // collectFromDir parallelizes reads WITHIN a dir; do the dirs sequentially
+  // so push order stays deterministic (scope grouping below re-sorts anyway,
+  // but keeping the order stable avoids surprising callers that snapshot it).
   await collectFromDir(globalSkillsDir(), 'global', out);
   if (projectPath) {
     await collectFromDir(projectSkillsDir(projectPath), 'project', out);
   }
-  if (options?.includePlugins) {
+  if (includePlugins) {
     await collectPluginSkills(out);
   }
   // v0.11: bundled starter pack. Same per-slug folder layout as the
   // user-facing dirs, so collectFromDir handles it without modification.
   // Skip silently when the directory hasn't been curated yet (fresh
   // clone of the repo before assets are copied).
-  if (await builtinPacksExist()) {
+  if (builtinIncluded) {
     await collectFromDir(getBuiltinSkillsDir(), 'builtin', out);
   }
   // v0.31: bundled design-packs ship layout SKILL.md under
@@ -177,7 +304,7 @@ export async function listSkills(
   // (active-global + dimmed-builtin). We therefore only add the builtin root
   // as a *fallback* for visibility when seeding is disabled. Guarded by the
   // bundle existence check — a fresh clone without the design bundle skips it.
-  if ((await designPacksExist()) && !(await getSeedingEnabled())) {
+  if (designIncluded) {
     await collectFromDir(builtinDesignSkillsDir(), 'builtin', out);
   }
 
@@ -197,6 +324,14 @@ export async function listSkills(
       return order[a.scope] - order[b.scope];
     }
     return a.slug.localeCompare(b.slug);
+  });
+
+  // Store a copy so a caller mutating the returned array can't corrupt the
+  // cached list (the cache hit path also returns a copy).
+  skillsListCache.set(key, {
+    result: out.slice(),
+    snapshot,
+    expires: now + LIST_CACHE_TTL_MS,
   });
   return out;
 }
@@ -245,6 +380,7 @@ export async function saveSkill(skill: SkillDef): Promise<SkillDef> {
   await fs.promises.mkdir(path.dirname(skill.path), { recursive: true });
   const text = serializeSkill(skill);
   await fs.promises.writeFile(skill.path, text);
+  invalidateSkillsCache();
   return readSkill(skill.path);
 }
 
@@ -301,6 +437,7 @@ export async function deleteSkill(filePath: string): Promise<void> {
   }
   const dir = path.dirname(path.resolve(filePath));
   await fs.promises.rm(dir, { recursive: true, force: true });
+  invalidateSkillsCache();
 }
 
 // v0.11: duplicate any-scope skill (typically builtin) into global/project
@@ -352,6 +489,7 @@ export async function duplicateSkill(
   const srcDir = path.dirname(path.resolve(filePath));
   await fs.promises.mkdir(path.dirname(destDir), { recursive: true });
   await fs.promises.cp(srcDir, destDir, { recursive: true, errorOnExist: true });
+  invalidateSkillsCache();
 
   return readSkill(path.join(destDir, 'SKILL.md'));
 }
@@ -373,21 +511,32 @@ async function collectFromDir(
     }
     return;
   }
-  for (const e of entries) {
-    if (!e.isDirectory()) continue;
+  // Read every candidate SKILL.md in parallel. Sequential awaits in a
+  // for-loop serialized 300+ reads across global+builtin+design-pack roots —
+  // a needless main-process stall. The slug gate + lstat/size guards inside
+  // readSkillFile are preserved per file; failures are still swallowed.
+  const candidates = entries.filter(
     // Slug shape gate — defense in depth against unusual folder names
     // on disk (symlinks, leftover from manual edits). Folders that don't
     // match the slug regex are silently skipped rather than parsed.
-    if (!SLUG_RE.test(e.name)) continue;
-    const skillFile = path.join(baseDir, e.name, 'SKILL.md');
-    try {
-      const raw = await readSkillFile(skillFile);
-      out.push(parseSkill(skillFile, scope, e.name, raw));
-    } catch {
-      // No SKILL.md in that folder — skip silently. Some users keep stray
-      // folders here (e.g. archived skills) and warning per-skip would
-      // be noisy.
-    }
+    (e) => e.isDirectory() && SLUG_RE.test(e.name),
+  );
+  const parsed = await Promise.all(
+    candidates.map(async (e) => {
+      const skillFile = path.join(baseDir, e.name, 'SKILL.md');
+      try {
+        const raw = await readSkillFile(skillFile);
+        return parseSkill(skillFile, scope, e.name, raw);
+      } catch {
+        // No SKILL.md in that folder — skip silently. Some users keep stray
+        // folders here (e.g. archived skills) and warning per-skip would
+        // be noisy.
+        return null;
+      }
+    }),
+  );
+  for (const s of parsed) {
+    if (s) out.push(s);
   }
 }
 

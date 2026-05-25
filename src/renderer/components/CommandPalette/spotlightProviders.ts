@@ -8,6 +8,10 @@
 // (>commands, /settings, @symbols, #notes) so users coming from VS Code /
 // Linear / Slack don't have to relearn anything.
 
+import { buildFileIndex, type IndexedFile } from '@renderer/utils/fileIndex';
+
+export type { IndexedFile };
+
 export type SpotlightSource = 'file' | 'recent' | 'command' | 'settings' | 'symbol' | 'note';
 
 export type SpotlightMode = 'mixed' | 'commands' | 'settings' | 'symbols' | 'notes';
@@ -48,8 +52,19 @@ export function parseSpotlightQuery(raw: string): SpotlightParsed {
  */
 export function scoreFileMatch(rel: string, name: string, q: string): number {
   if (!q) return 1;
-  const relLower = rel.toLowerCase();
-  const nameLower = name.toLowerCase();
+  return scoreFileMatchLower(rel.toLowerCase(), name.toLowerCase(), q);
+}
+
+/**
+ * Core scoring against ALREADY-lowercased fields. Lets the file source
+ * match the live query against a precomputed index (buildFileIndex) instead
+ * of re-lowercasing every path on every keystroke. Ranking is byte-for-byte
+ * identical to scoreFileMatch — only the lowercase work is hoisted out.
+ *
+ * NOTE: assumes `q` is non-empty (callers handle the empty-query "match all"
+ * case before calling, matching scoreFileMatch's `if (!q) return 1`).
+ */
+function scoreFileMatchLower(relLower: string, nameLower: string, q: string): number {
   if (nameLower === q) return 1000;
   if (nameLower.startsWith(q)) return 600 - nameLower.length;
   const nameIdx = nameLower.indexOf(q);
@@ -127,12 +142,27 @@ export function filterFiles(
   term: string,
   limit: number,
 ): FileCandidate[] {
+  // Build the index inline for callers that only have a raw string list
+  // (e.g. the unit tests). The live dialog uses filterFilesIndexed with a
+  // memoized index so the lowercase work isn't repeated per keystroke.
+  return filterFilesIndexed(buildFileIndex(files), term, limit);
+}
+
+/**
+ * Same ranking/caps as filterFiles, but operates on a PRECOMPUTED lowercase
+ * index. Per keystroke this only re-scores against cached fields — no
+ * per-file `.toLowerCase()` and no basename re-derivation.
+ */
+export function filterFilesIndexed(
+  index: ReadonlyArray<IndexedFile>,
+  term: string,
+  limit: number,
+): FileCandidate[] {
   const q = term.toLowerCase();
   const scored: FileCandidate[] = [];
-  for (const rel of files) {
-    const name = basename(rel);
-    const score = scoreFileMatch(rel, name, q);
-    if (score > 0) scored.push({ source: 'file', relPath: rel, fileName: name, score });
+  for (const f of index) {
+    const score = q ? scoreFileMatchLower(f.relLower, f.nameLower, q) : 1;
+    if (score > 0) scored.push({ source: 'file', relPath: f.rel, fileName: f.name, score });
   }
   scored.sort((a, b) => b.score - a.score || a.relPath.localeCompare(b.relPath));
   return scored.slice(0, Math.max(0, limit));
@@ -248,8 +278,14 @@ export function composeSections(input: {
   files: ReadonlyArray<string>;
   commands: ReadonlyArray<SpotlightCommand>;
   recents: ReadonlyArray<RecentItem>;
+  // Optional precomputed lowercase index for `files`. The live dialog passes
+  // a memoized index (keyed on the file list) so the per-file lowercase work
+  // doesn't repeat on every keystroke. When omitted (e.g. unit tests) it's
+  // built once from `files` here.
+  fileIndex?: ReadonlyArray<IndexedFile>;
 }): SpotlightSection[] {
   const { parsed, files, commands, recents } = input;
+  const fileIndex = input.fileIndex ?? buildFileIndex(files);
 
   if (parsed.mode === 'commands') {
     return [{ label: 'Commands', items: filterCommands(commands, parsed.term, 50) }];
@@ -264,7 +300,7 @@ export function composeSections(input: {
     // Symbol indexing is Phase B. We still let the user search files via @
     // so the prefix isn't a dead-end — but the dialog will show a hint
     // explaining symbols proper are coming later.
-    return [{ label: 'Files (symbol indexing coming in v0.31)', items: filterFiles(files, parsed.term, 50) }];
+    return [{ label: 'Files (symbol indexing coming in v0.31)', items: filterFilesIndexed(fileIndex, parsed.term, 50) }];
   }
 
   if (parsed.mode === 'notes') {
@@ -276,7 +312,7 @@ export function composeSections(input: {
   const sections: SpotlightSection[] = [];
   const recentItems = filterRecents(recents, files, commands, parsed.term, 5);
   if (recentItems.length > 0) sections.push({ label: 'Recent', items: recentItems });
-  const fileItems = filterFiles(files, parsed.term, 30);
+  const fileItems = filterFilesIndexed(fileIndex, parsed.term, 30);
   if (fileItems.length > 0) sections.push({ label: 'Files', items: fileItems });
   const commandItems = filterCommands(commands, parsed.term, 10);
   if (commandItems.length > 0) sections.push({ label: 'Commands', items: commandItems });
