@@ -43,7 +43,6 @@ import * as path from 'node:path';
 
 import { createAgent, saveAgent } from '@main/services/AgentsService';
 import { resolveClaudeBinary } from '@main/services/ClaudeCliLauncher';
-import { buildProjectProfile } from '@main/services/ProjectProfileBuilder';
 import { createSkill, saveSkill } from '@main/services/SkillsService';
 import {
   type ChatRunHandle,
@@ -53,7 +52,6 @@ import {
 import { listWorkspaces } from '@main/services/WorkspaceService';
 import { resolveInteractiveShellEnv } from '@main/utils/shellEnv';
 import { createLogger } from '@shared/logger';
-import type { ProjectDesignProfile } from '@shared/design';
 import type {
   ForgeCatalogItem,
   ForgeDraft,
@@ -1230,15 +1228,31 @@ async function finalizeDraftError(draft: ForgeDraft, message: string): Promise<v
   });
 }
 
+// Minimal project profile used only to enrich the Forge generation prompt
+// with lightweight project signals. The richer auto-detected profile that
+// used to back this (ProjectProfileBuilder / Design Studio) was removed, so
+// the profile is now always absent — Forge generation simply runs without
+// the extra "Project Context" block.
+export interface ForgeProjectProfile {
+  projectPath: string;
+  framework: string;
+  styling: string;
+  packageManager: string;
+  typescript: boolean;
+  frameworkVariant?: string;
+  projectName?: string;
+  projectDescription?: string;
+  componentLibraries?: string[];
+  iconLibraries?: string[];
+  summary: string;
+  evidence: string[];
+  builtAt: number;
+}
+
 async function safeBuildProfile(
-  projectPath: string,
-): Promise<ProjectDesignProfile | null> {
-  try {
-    return await buildProjectProfile({ projectPath });
-  } catch (err) {
-    logger.warn(`profile build failed: ${(err as Error).message}`);
-    return null;
-  }
+  _projectPath: string,
+): Promise<ForgeProjectProfile | null> {
+  return null;
 }
 
 // Pure args builder — exported for tests. Mirrors DesignGenerator's
@@ -1257,7 +1271,7 @@ export function buildClaudeArgs(): string[] {
 // Compose the prompt: profile + skill/agent spec + user brief.
 function buildForgePrompt(
   draft: ForgeDraft,
-  profile: ProjectDesignProfile | null,
+  profile: ForgeProjectProfile | null,
 ): string {
   const sections: string[] = [];
   sections.push(
@@ -2458,7 +2472,7 @@ export function scoreCatalogItem(
 }
 
 export function profileToSignals(
-  profile: ProjectDesignProfile | null,
+  profile: ForgeProjectProfile | null,
 ): Set<string> {
   const out = new Set<string>();
   if (!profile) return out;

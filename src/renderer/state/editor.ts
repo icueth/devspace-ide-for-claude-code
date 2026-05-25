@@ -10,7 +10,6 @@ export type EditorTabKind =
   | 'diff'
   | 'pdf'
   | 'codeflow'
-  | 'design'
   | 'live-preview'
   | 'devlog';
 
@@ -37,18 +36,6 @@ export interface EditorTab {
   // analysis should run against. Stored separately from `path` because `path`
   // is the synthetic "codeflow:<projectPath>" key used for tab dedup.
   codeflowProjectPath?: string;
-  // Populated when kind === 'design' — drives DesignView with the project
-  // whose .devspace/design/ workspace should be shown. Tab `path` is the
-  // synthetic key "design:<projectPath>" used for tab dedup.
-  designProjectPath?: string;
-  // v0.15: optional pre-fill set by the Main chat → Design bridge. The
-  // DesignView reads these on first mount, drops them into the toolbar
-  // composer, then clears the fields so they don't re-apply on tab
-  // re-activation. `consumed` is a one-shot guard the view sets after
-  // hydrating — avoids a Zustand action just to clear the field.
-  designPrefillBrief?: string;
-  designPrefillSkillSlug?: string;
-  designPrefillConsumed?: boolean;
   // Populated when kind === 'live-preview' — drives LivePreviewView with
   // the project whose dev-server should be detected/started/observed.
   // Tab `path` is the synthetic key "live-preview:<projectPath>".
@@ -97,15 +84,6 @@ interface EditorState {
   open: (path: string, opts?: OpenOptions) => Promise<void>;
   openDiff: (cwd: string, relPath: string, absPath: string) => Promise<void>;
   openCodeflow: (projectPath: string, projectName: string) => void;
-  openDesign: (
-    projectPath: string,
-    projectName: string,
-    prefill?: { brief?: string; skillSlug?: string },
-  ) => void;
-  // v0.15: clears the one-shot prefill fields after the DesignView has
-  // hydrated them into local state. Needed because tab state can outlive
-  // the view (focus another tab + return).
-  consumeDesignPrefill: (tabPath: string) => void;
   openLivePreview: (projectPath: string, projectName: string) => void;
   // v0.24: per-project Devlog tab. Synthetic key `devlog:<projectPath>`.
   openDevlog: (projectPath: string, projectName: string) => void;
@@ -268,57 +246,6 @@ export const useEditorStore = create<
       codeflowProjectPath: projectPath,
     };
     set((s) => ({ tabs: [...s.tabs, tab], activeTabPath: tabPath }));
-  },
-
-  openDesign(projectPath, projectName, prefill) {
-    const tabPath = `design:${projectPath}`;
-    const existing = get().tabs.find((t) => t.path === tabPath);
-    if (existing) {
-      // Tab already exists. If a fresh prefill arrived (from a bridge
-      // action), update the existing tab so the view re-hydrates the
-      // composer next render.
-      if (prefill && (prefill.brief || prefill.skillSlug)) {
-        set((s) => ({
-          tabs: s.tabs.map((t) =>
-            t.path === tabPath
-              ? {
-                  ...t,
-                  designPrefillBrief: prefill.brief,
-                  designPrefillSkillSlug: prefill.skillSlug,
-                  designPrefillConsumed: false,
-                }
-              : t,
-          ),
-          activeTabPath: tabPath,
-        }));
-      } else {
-        set({ activeTabPath: tabPath });
-      }
-      return;
-    }
-    const tab: EditorTab = {
-      path: tabPath,
-      name: `${projectName} · Design`,
-      kind: 'design',
-      content: '',
-      savedContent: '',
-      loading: false,
-      designProjectPath: projectPath,
-      designPrefillBrief: prefill?.brief,
-      designPrefillSkillSlug: prefill?.skillSlug,
-      designPrefillConsumed: false,
-    };
-    set((s) => ({ tabs: [...s.tabs, tab], activeTabPath: tabPath }));
-  },
-
-  consumeDesignPrefill(tabPath) {
-    set((s) => ({
-      tabs: s.tabs.map((t) =>
-        t.path === tabPath && !t.designPrefillConsumed
-          ? { ...t, designPrefillConsumed: true }
-          : t,
-      ),
-    }));
   },
 
   openLivePreview(projectPath, projectName) {

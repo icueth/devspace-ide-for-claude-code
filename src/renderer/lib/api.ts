@@ -101,30 +101,11 @@ import type {
   SetupToolId,
 } from '@shared/setup';
 import type {
-  ApprovePlanInput,
-  CreateDesignInput,
-  DesignAdapterDetectResult,
-  DesignAppPlan,
-  DesignEvent,
-  DesignFollowUpInput,
-  DesignMessage,
-  DesignSaveEditsInput,
-  DesignScreen,
-  DesignSkill,
-  DesignSystem,
-  DesignWriteBackInput,
-  DesignWriteBackResult,
   DevServerEvent,
   DevServerInfo,
   DevServerInstallInput,
   DevServerInstallResult,
   DevServerStartInput,
-  ExtractProjectTokensInput,
-  PlanAppInput,
-  ProjectDesignProfile,
-  ProjectDesignTokens,
-  RegenerateDesignInput,
-  SetProjectTokensInput,
 } from '@shared/design';
 
 export interface DevspaceApi {
@@ -351,52 +332,6 @@ export interface DevspaceApi {
       server: McpServer,
     ) => Promise<McpServerEntry>;
   };
-  design: {
-    list: (projectPath: string) => Promise<DesignScreen[]>;
-    get: (projectPath: string, screenId: string) => Promise<DesignScreen | null>;
-    create: (input: CreateDesignInput) => Promise<DesignScreen>;
-    regenerate: (input: RegenerateDesignInput) => Promise<DesignScreen>;
-    saveEdits: (input: DesignSaveEditsInput) => Promise<DesignScreen>;
-    delete: (projectPath: string, screenId: string) => Promise<void>;
-    cancel: (projectPath: string, screenId: string) => Promise<void>;
-    listSkills: (projectPath: string | null) => Promise<DesignSkill[]>;
-    listSystems: (projectPath: string | null) => Promise<DesignSystem[]>;
-    readHtml: (projectPath: string, screenId: string, versionId?: string) => Promise<string>;
-    // v0.10: follow-up turn on an existing screen. Resolves once the
-    // generation has been queued — the actual streaming + final
-    // assistant message arrive via DesignEvent ('message_appended',
-    // 'message_updated', 'message_finalized', 'generation_complete').
-    followUp: (input: DesignFollowUpInput) => Promise<DesignScreen>;
-    // Eager read of the transcript for a screen. Backward-compat: when
-    // the persisted screen has no messages, returns the synthetic
-    // `[{role:'user', content: brief}]` seed so the UI can render
-    // without special-casing legacy screens.
-    listMessages: (projectPath: string, screenId: string) => Promise<DesignMessage[]>;
-    // v0.10: read the cached project profile. Returns null when no
-    // package.json is present. Lazily builds on first call.
-    getProfile: (projectPath: string) => Promise<ProjectDesignProfile | null>;
-    // Force-refresh the cached profile (user clicked "Refresh project
-    // context" in DesignSettings, or just edited package.json and wants
-    // the next generation to pick it up immediately).
-    rebuildProfile: (projectPath: string) => Promise<ProjectDesignProfile | null>;
-    subscribe: (projectPath: string) => Promise<void>;
-    onEvent: (
-      projectPath: string,
-      cb: (event: DesignEvent) => void,
-    ) => () => void;
-    // ── v0.15: Multi-screen app planning ────────────────────────────
-    planApp: (input: PlanAppInput) => Promise<DesignAppPlan>;
-    listApps: (projectPath: string) => Promise<DesignAppPlan[]>;
-    getApp: (projectPath: string, appId: string) => Promise<DesignAppPlan | null>;
-    updatePlan: (input: ApprovePlanInput) => Promise<DesignAppPlan>;
-    approvePlan: (input: ApprovePlanInput) => Promise<DesignAppPlan>;
-    deleteApp: (projectPath: string, appId: string) => Promise<void>;
-    runBatch: (projectPath: string, appId: string) => Promise<void>;
-    // ── v0.15: Project-wide design tokens ───────────────────────────
-    getTokens: (projectPath: string) => Promise<ProjectDesignTokens | null>;
-    setTokens: (input: SetProjectTokensInput) => Promise<ProjectDesignTokens | null>;
-    extractTokens: (input: ExtractProjectTokensInput) => Promise<ProjectDesignTokens>;
-  };
   devServer: {
     // Detect framework + script + package manager without starting anything.
     // Backend reads package.json + lockfiles; renderer uses the result to
@@ -434,18 +369,6 @@ export interface DevspaceApi {
       projectPath: string,
       cb: (event: DevServerEvent) => void,
     ) => () => void;
-  };
-  // Phase 0.8 write-back. The renderer captures user edits in the Live
-  // Preview Edit panel, calls `detect(projectPath)` on mount to learn
-  // which style adapter to default to, then `writeBack` with `dryRun:
-  // true` to preview the diff and `dryRun: false` to commit. The main
-  // process resolves each edit through the matching `StyleAdapter`
-  // (Tailwind in 0.8; vanilla CSS / styled-components / CSS Modules in
-  // 0.9). Mirrors the `devServer` namespace shape — detect + a single
-  // write call.
-  styleAdapter: {
-    detect: (projectPath: string) => Promise<DesignAdapterDetectResult>;
-    writeBack: (input: DesignWriteBackInput) => Promise<DesignWriteBackResult>;
   };
   codeflow: {
     getStatus: (projectPath: string) => Promise<CodeflowStatus>;
@@ -815,34 +738,6 @@ function makeStubApi(): DevspaceApi {
       save: notWired('teams.save'),
       delete: notWired('teams.delete'),
     },
-    design: {
-      list: () => Promise.resolve([]),
-      get: () => Promise.resolve(null),
-      create: notWired('design.create'),
-      regenerate: notWired('design.regenerate'),
-      saveEdits: notWired('design.saveEdits'),
-      delete: notWired('design.delete'),
-      cancel: notWired('design.cancel'),
-      listSkills: () => Promise.resolve([]),
-      listSystems: () => Promise.resolve([]),
-      readHtml: notWired('design.readHtml'),
-      followUp: notWired('design.followUp'),
-      listMessages: () => Promise.resolve([]),
-      getProfile: () => Promise.resolve(null),
-      rebuildProfile: () => Promise.resolve(null),
-      subscribe: notWired('design.subscribe'),
-      onEvent: () => () => undefined,
-      planApp: notWired('design.planApp'),
-      listApps: () => Promise.resolve([]),
-      getApp: () => Promise.resolve(null),
-      updatePlan: notWired('design.updatePlan'),
-      approvePlan: notWired('design.approvePlan'),
-      deleteApp: notWired('design.deleteApp'),
-      runBatch: notWired('design.runBatch'),
-      getTokens: () => Promise.resolve(null),
-      setTokens: notWired('design.setTokens'),
-      extractTokens: notWired('design.extractTokens'),
-    },
     devServer: {
       // Permissive idle stub so the LivePreview pane doesn't blow up
       // before the backend agent wires the preload binding.
@@ -876,19 +771,6 @@ function makeStubApi(): DevspaceApi {
         } as DevServerInfo),
       installDependencies: notWired('devServer.installDependencies'),
       onEvent: () => () => undefined,
-    },
-    styleAdapter: {
-      // Permissive idle stub so the EditPanel can render before the
-      // backend agent finishes wiring the preload binding. Returns an
-      // "unknown" adapter shape so the UI shows the "not yet detected"
-      // empty state instead of throwing.
-      detect: () =>
-        Promise.resolve({
-          preferred: 'unknown',
-          available: [],
-          evidence: [],
-        } as DesignAdapterDetectResult),
-      writeBack: notWired('styleAdapter.writeBack'),
     },
     codeflow: {
       getStatus: notWired('codeflow.getStatus'),

@@ -1,9 +1,7 @@
-// v0.15: Renderer-side bridge from the Design pane back to the Main chat.
-// The user right-clicks a screen header (or version) in DesignView and
-// picks "Discuss in main chat". DesignView formats a prefill string,
-// publishes it on this bridge, and ChatPanel — already mounted in App —
-// listens, opens itself if collapsed, and drops the text into the input
-// box for the user to review before sending.
+// Renderer-side pub/sub for dropping text (or `@file` attachments) into the
+// Main chat input. FileTree right-click "Add to Chat" and drag-and-drop
+// publish an event here; ChatPanel — already mounted in App — listens,
+// drops the text into the input box, and focuses it for the user.
 //
 // We use a tiny pub/sub instead of an IPC round trip because no backend
 // state changes; this is purely renderer UI choreography. The chat panel

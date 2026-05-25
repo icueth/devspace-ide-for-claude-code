@@ -152,31 +152,6 @@ export const IPC = {
   TEAMS_SAVE: 'teams:save',
   TEAMS_DELETE: 'teams:delete',
 
-  // Design Studio — Claude-driven HTML/JSX generation per project. State
-  // lives under <project>/.devspace/design/. Generation reuses
-  // TmuxChatRunner for the actual claude spawn so runs survive restart.
-  DESIGN_LIST: 'design:list',
-  DESIGN_GET: 'design:get',
-  DESIGN_CREATE: 'design:create',
-  DESIGN_REGENERATE: 'design:regenerate',
-  DESIGN_DELETE: 'design:delete',
-  DESIGN_CANCEL: 'design:cancel',
-  DESIGN_LIST_SKILLS: 'design:list-skills',
-  DESIGN_LIST_SYSTEMS: 'design:list-systems',
-  DESIGN_READ_HTML: 'design:read-html',
-  DESIGN_SUBSCRIBE: 'design:subscribe',
-  DESIGN_EVENT: 'design:event',
-  // Phase B: write-back of inline edits as a new version. Renderer sends
-  // the full edited HTML snapshot (already serialized from the iframe
-  // bridge) plus the op log for provenance. Main hardens + archives the
-  // previous index.html into history/ + writes the new one atomically.
-  DESIGN_SAVE_EDITS: 'design:save-edits',
-  // v0.10: chat-style transcript + project profile
-  DESIGN_FOLLOW_UP: 'design:follow-up',
-  DESIGN_LIST_MESSAGES: 'design:list-messages',
-  DESIGN_GET_PROFILE: 'design:get-profile',
-  DESIGN_REBUILD_PROFILE: 'design:rebuild-profile',
-
   // Phase C: Live preview against a real project dev-server. Main detects
   // the framework (Vite / Next / Astro / Remix), spawns the dev script
   // through PtyPool, parses the emitted URL, and exposes lifecycle events.
@@ -196,32 +171,6 @@ export const IPC = {
   // node_modules is missing (no other detection failure is recoverable
   // in-app without leaving devspace).
   DEVSERVER_INSTALL: 'devserver:install',
-
-  // Phase 0.8+: source-aware write-back. Main resolves each edit through
-  // the appropriate StyleAdapter (Tailwind / vanilla CSS / styled / CSS
-  // Modules) and writes atomically. Pre-flight `DETECT_ADAPTER` returns
-  // the preferred adapter for the project so the UI can label the
-  // confirmation toast accordingly.
-  DESIGN_DETECT_ADAPTER: 'design:detect-adapter',
-  DESIGN_WRITE_BACK: 'design:write-back',
-
-  // v0.15: Multi-screen app planning. Claude breaks a free-form brief
-  // into a JSON plan (screens + shared theme). User reviews/edits, then
-  // approves to materialize each screen as a normal DesignScreen + run
-  // batched generation with the shared theme injected.
-  DESIGN_PLAN_APP: 'design:plan-app',
-  DESIGN_APPROVE_PLAN: 'design:approve-plan',
-  DESIGN_LIST_APPS: 'design:list-apps',
-  DESIGN_GET_APP: 'design:get-app',
-  DESIGN_UPDATE_PLAN: 'design:update-plan',
-  DESIGN_DELETE_APP: 'design:delete-app',
-  DESIGN_RUN_BATCH: 'design:run-batch',
-  // v0.15: Project-wide design tokens. When `lockedAt` is set the prompt
-  // builder injects these into every generation regardless of per-screen
-  // reuseTheme. UI lives in DesignSettings → Project Tokens tab.
-  DESIGN_GET_TOKENS: 'design:get-tokens',
-  DESIGN_SET_TOKENS: 'design:set-tokens',
-  DESIGN_EXTRACT_TOKENS: 'design:extract-tokens',
 
   // Codeflow — codebase visualization + Claude-generated architecture docs
   CODEFLOW_GET_STATUS: 'codeflow:get-status',

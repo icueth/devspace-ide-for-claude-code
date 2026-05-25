@@ -6,7 +6,6 @@ import {
   Globe,
   Maximize2,
   Minimize2,
-  Paintbrush,
   PanelLeftClose,
   PanelLeftOpen,
   PanelRightClose,
@@ -68,7 +67,6 @@ function AppInner() {
   const openedProjectIds = useWorkspaceStore((s) => s.openedProjectIds);
   const openFile = useEditorStore((s) => s.open);
   const openCodeflow = useEditorStore((s) => s.openCodeflow);
-  const openDesign = useEditorStore((s) => s.openDesign);
   const openLivePreview = useEditorStore((s) => s.openLivePreview);
   const openDevlog = useEditorStore((s) => s.openDevlog);
 
@@ -82,17 +80,6 @@ function AppInner() {
   const rightCollapsed = useSidebarStore((s) => s.rightCollapsed);
   const toggleLeftSidebar = useSidebarStore((s) => s.toggleLeft);
   const toggleRightSidebar = useSidebarStore((s) => s.toggleRight);
-  const autoCollapseForDesign = useSidebarStore(
-    (s) => s.autoCollapseForDesignIfNarrow,
-  );
-  // The active tab kind drives the "auto-collapse left sidebar on first
-  // Design tab when viewport < 1400px" rule. Subscribed via the editor
-  // store so the effect re-fires on tab switches.
-  const activeTabKind = useEditorStore((s) => {
-    const path = s.activeTabPath;
-    if (!path) return null;
-    return s.tabs.find((t) => t.path === path)?.kind ?? null;
-  });
   // v0.30.5 — switching to a tab anchored to a different project should
   // move the sidebar (FileTree + ProjectList highlight + git store + chat
   // dock) to that project. One-way (tab → sidebar) — clicking the sidebar
@@ -145,7 +132,6 @@ function AppInner() {
     | 'memory'
     | 'skills'
     | 'teams'
-    | 'design'
   >('account');
 
   useEffect(() => {
@@ -163,7 +149,6 @@ function AppInner() {
       'memory',
       'skills',
       'teams',
-      'design',
     ] as const);
     type AllowedTab = typeof ALLOWED_TABS extends Set<infer T> ? T : never;
     const handler = (e: Event) => {
@@ -383,16 +368,6 @@ function AppInner() {
         },
       },
       {
-        id: 'nav.design',
-        title: 'Open Design Studio',
-        keywords: 'mockup ui html generate',
-        group: 'Navigate',
-        requiresProject: true,
-        run: () => {
-          if (activeProject) openDesign(activeProject.path, activeProject.name);
-        },
-      },
-      {
         id: 'nav.livepreview',
         title: 'Open Live Preview',
         keywords: 'dev server webview browser',
@@ -515,21 +490,10 @@ function AppInner() {
       { id: 'settings.memory', title: 'Open Memory settings', keywords: 'remember devlog notes', group: 'Settings', run: () => openSettings('memory') },
       { id: 'settings.skills', title: 'Open Skills settings', keywords: 'skill catalog forge', group: 'Settings', run: () => openSettings('skills') },
       { id: 'settings.teams', title: 'Open Teams settings', keywords: 'multi-agent team', group: 'Settings', run: () => openSettings('teams') },
-      { id: 'settings.design', title: 'Open Design settings', keywords: 'tokens designprofile', group: 'Settings', run: () => openSettings('design') },
     ];
     return cmds;
-  }, [activeProject, openCodeflow, openDesign, openLivePreview, openDevlog]);
+  }, [activeProject, openCodeflow, openLivePreview, openDevlog]);
 
-  // v0.14: when the user switches to a Design tab AND the viewport is
-  // narrow (< 1400px), auto-collapse the LEFT sidebar to give the design
-  // pane more room. Fires only on the rising edge of activeTabKind →
-  // 'design' so subsequent navigation within the tab doesn't keep
-  // re-collapsing. The store's `autoCollapseForDesignIfNarrow` no-ops
-  // when the user has already manually toggled the sidebar this session.
-  useEffect(() => {
-    if (activeTabKind !== 'design') return;
-    autoCollapseForDesign(window.innerWidth);
-  }, [activeTabKind, autoCollapseForDesign]);
   const dockVisible = openedProjectIds.length > 0;
   const showBottom = bottomOpen && activeProject;
 
@@ -594,22 +558,6 @@ function AppInner() {
           >
             <Workflow size={11} />
             <span>Codeflow</span>
-          </button>
-          <button
-            onClick={() => {
-              if (activeProject) openDesign(activeProject.path, activeProject.name);
-            }}
-            disabled={!activeProject}
-            className={cn(
-              'inline-flex h-[26px] items-center gap-1.5 rounded-[7px] border px-2.5 text-[11px] transition',
-              !activeProject
-                ? 'cursor-not-allowed border-border-subtle bg-surface-3 text-text-muted opacity-40'
-                : 'border-border-subtle bg-surface-3 text-text-secondary hover:border-border-hi hover:bg-surface-4 hover:text-text',
-            )}
-            title="Design Studio — Claude-powered HTML mockups per project"
-          >
-            <Paintbrush size={11} />
-            <span>Design</span>
           </button>
           <button
             onClick={() => {

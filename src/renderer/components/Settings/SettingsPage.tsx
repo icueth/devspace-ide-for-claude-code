@@ -28,7 +28,6 @@ import {
   FileText,
   KeyRound,
   Lightbulb,
-  Paintbrush,
   Plug,
   Save,
   Server,
@@ -41,7 +40,6 @@ import { createContext, useContext, useEffect, useRef, useState } from 'react';
 import { RouteErrorBoundary } from '@renderer/components/Layout/RouteErrorBoundary';
 import { AccountSettings } from '@renderer/components/Settings/AccountSettings';
 import { AgentsSettings } from '@renderer/components/Settings/AgentsSettings';
-import { DesignSettings } from '@renderer/components/Settings/DesignSettings';
 import { LlmSettings } from '@renderer/components/Settings/LlmSettings';
 import { McpSettings } from '@renderer/components/Settings/McpSettings';
 import { MemPalaceSettings } from '@renderer/components/Settings/MemPalaceSettings';
@@ -65,8 +63,7 @@ type Tab =
   | 'mcp'
   | 'memory'
   | 'skills'
-  | 'teams'
-  | 'design';
+  | 'teams';
 
 interface SettingsPageProps {
   onClose: () => void;
@@ -198,11 +195,6 @@ export function SettingsPage({ onClose, initialTab = 'account' }: SettingsPagePr
             <TeamsSettings />
           </RouteErrorBoundary>
         </TabContainer>
-        <TabContainer active={tab === 'design'}>
-          <RouteErrorBoundary label="Settings · design">
-            <DesignSettings />
-          </RouteErrorBoundary>
-        </TabContainer>
       </div>
     </section>
   );
@@ -257,7 +249,6 @@ function TabSwitch({ tab, onChange }: { tab: Tab; onChange: (t: Tab) => void }) 
     { id: 'agents', label: 'Agents', icon: <Bot size={11} /> },
     { id: 'teams', label: 'Teams', icon: <Users size={11} /> },
     { id: 'skills', label: 'Skills', icon: <Lightbulb size={11} /> },
-    { id: 'design', label: 'Design', icon: <Paintbrush size={11} /> },
     { id: 'mcp', label: 'MCP', icon: <Plug size={11} /> },
     { id: 'memory', label: 'Memory', icon: <Brain size={11} /> },
     { id: 'files', label: 'Files', icon: <FileText size={11} /> },
