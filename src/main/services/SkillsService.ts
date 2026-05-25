@@ -52,7 +52,7 @@ const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,63}$/i;
 //       - <homedir>/.claude/plugins/marketplaces/...     (plugin scope)
 //
 // Nesting inside `.claude/skills` is allowed because some skill
-// collections (incl. DesignService's design-skills/) sub-categorize.
+// collections (incl. the bundled design-packs) sub-categorize.
 // The boundary that matters is: writes/deletes never escape one of the
 // three known root subtrees and never name a file other than SKILL.md.
 function isValidSkillPath(filePath: string): boolean {
@@ -111,9 +111,9 @@ function isUnderPrefix(child: string, parent: string): boolean {
 
 // Re-exported so the IPC handler can enforce path validation BEFORE
 // dispatching to any service function. Service functions stay
-// validation-free so internal callers (e.g. DesignService) can use
-// `readSkill` against the design-packs tree which lives outside the
-// usual scope roots.
+// validation-free so internal callers (e.g. the design-skill seeder)
+// can use `readSkill` against the design-packs tree which lives outside
+// the usual scope roots.
 export function assertValidSkillPath(filePath: string): void {
   if (!isValidSkillPath(filePath)) {
     throw new Error(
@@ -203,8 +203,8 @@ export async function listSkills(
 
 export async function readSkill(filePath: string): Promise<SkillDef> {
   // Path validation lives at the IPC boundary (ipc/skills.ts) — internal
-  // callers like DesignService walk known directories themselves and
-  // shouldn't be subject to the IPC-shape rules.
+  // callers walk known directories themselves and shouldn't be subject to
+  // the IPC-shape rules.
   const raw = await readSkillFile(filePath);
   const slug = path.basename(path.dirname(filePath));
   // Scope inference uses resolved paths with directory boundaries so a

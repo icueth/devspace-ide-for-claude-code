@@ -1570,8 +1570,8 @@ interface ScriptSwitchConfirmDialogProps {
 
 /**
  * Confirms a destructive script switch. Stopping the running server
- * loses HMR state, so we make the user opt in. Pattern mirrors
- * `ConfirmDialog` in DesignView's discard-edits flow.
+ * loses HMR state, so we make the user opt in via a destructive-style
+ * confirm dialog.
  */
 function ScriptSwitchConfirmDialog({
   open,

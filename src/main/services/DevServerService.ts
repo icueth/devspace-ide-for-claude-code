@@ -2,7 +2,7 @@
 // and stops a project's local dev server (Vite / Next / Astro / Remix) so
 // the Live Preview tab can point a `<webview>` at it.
 //
-// Design parallels DesignService:
+// Shape (same as the other function-only services):
 //   * In-memory `Map<projectPath, DevServerInfo>` for current state.
 //   * `Map<projectPath, Set<WebContents>>` for streaming lifecycle events
 //     back to the renderer over IPC.

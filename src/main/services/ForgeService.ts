@@ -1255,9 +1255,9 @@ async function safeBuildProfile(
   return null;
 }
 
-// Pure args builder — exported for tests. Mirrors DesignGenerator's
-// hardening (no plan mode!) with our own disallow list. Skills/agents
-// are pure markdown so claude should never need Read/Write/Edit.
+// Pure args builder — exported for tests. Hardened (no plan mode!) with
+// our own disallow list. Skills/agents are pure markdown so claude should
+// never need Read/Write/Edit.
 export function buildClaudeArgs(): string[] {
   return [
     '--print',
