@@ -5,6 +5,43 @@ All notable changes to DevSpace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.31.4] — 2026-05-25
+
+Whole-shell re-render cascade eliminated — the systemic cause of tab-switch /
+Full-CLI / page-change lag, not another symptom patch.
+
+Root cause (deterministic, proven from code — not guessed): `AppInner` subscribes
+to high-frequency store slices (`activeTabPath`, the chat dock's `columns` /
+`activeColumnId` / `projectsById` / `dockedOrder`, and layout toggles like
+`dockFull` / `bottomOpen` / `teamMode` / sidebar-collapse), and **none of the six
+heavy view subsystems were wrapped in `React.memo`**. React re-renders an
+unmemoized child whenever its parent re-renders — so a single editor tab switch
+re-rendered the *entire* chat dock, file tree, bottom panel, agents rail and
+project list, even though only the editor changed. 0.31.3 isolated the *width*
+subscription; this isolates *everything else*.
+
+- **Memoized `EditorArea`, `ClaudeCliDock`, `FileTree`, `BottomPanel`,
+  `AgentsRail`, `ProjectList`.** Each still re-renders on its *own* Zustand
+  subscription (verified safe — e.g. `EditorArea`'s active-tab content lives in
+  the inner `EditorPane`, which owns the `activeTabPath` subscription), but no
+  longer re-renders just because an unrelated subsystem's state changed. A tab
+  switch now re-renders only the editor; a chat-dock change no longer touches the
+  file tree.
+- **Stabilized `FileTree`'s `onOpenFile`** with `useCallback` so a fresh inline
+  arrow each shell render doesn't defeat the new memo boundary.
+- **Added a dev-only render tracer** (`useRenderTrace`, wired into `AppInner` +
+  all six subsystems) so the cascade is *measurable*, not asserted. It works in
+  the packaged build too — flip it on from the devtools console
+  (`window.__setRenderTrace(true)` or `localStorage['devspace:renderTrace']='1'`),
+  perform an interaction, and watch which components actually re-render. Cost when
+  off is a ref increment + one boolean check per render.
+
+Honest scope: this fixes the cross-subsystem re-render *cascade*. The cost of
+*mounting* a heavy view for the first time (Settings/Codeflow/Live Preview) is a
+separate concern memo doesn't address — if page-switching still feels heavy after
+this, the render tracer will show whether it's residual re-render (it shouldn't
+be) or first-mount cost.
+
 ## [0.31.3] — 2026-05-25
 
 Layout interaction perf — sidebar drag, Full CLI, and fullscreen no longer jank.

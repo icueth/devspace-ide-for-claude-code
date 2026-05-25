@@ -1,8 +1,9 @@
 import { ChevronDown, Terminal as TerminalIcon, GitBranch, Search } from 'lucide-react';
-import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
+import { lazy, memo, Suspense, useEffect, useMemo, useState } from 'react';
 
 import { GitStatusPanel } from '@renderer/components/Bottom/GitStatusPanel';
 import { cn } from '@renderer/lib/utils';
+import { useRenderTrace } from '@renderer/lib/renderTrace';
 import { useLayoutStore } from '@renderer/state/layout';
 import { useShellTabsStore } from '@renderer/state/shellTabs';
 
@@ -32,12 +33,13 @@ interface BottomPanelProps {
 
 type Tab = 'terminal' | 'git' | 'search';
 
-export function BottomPanel({
+export const BottomPanel = memo(function BottomPanel({
   projectId,
   projectPath,
   initialTab,
   isVisible = true,
 }: BottomPanelProps) {
+  useRenderTrace('BottomPanel');
   const [active, setActive] = useState<Tab>(initialTab ?? 'terminal');
   const setBottomOpen = useLayoutStore((s) => s.setBottomOpen);
   const [mountedTabs, setMountedTabs] = useState<Set<Tab>>(
@@ -200,7 +202,7 @@ export function BottomPanel({
       </div>
     </div>
   );
-}
+});
 
 interface TabButtonProps {
   active: boolean;

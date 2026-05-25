@@ -1,8 +1,9 @@
 import * as Dialog from '@radix-ui/react-dialog';
 import { Columns2, Plus, RotateCcw, Trash2, X } from 'lucide-react';
-import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
+import { lazy, memo, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 
 import { cn } from '@renderer/lib/utils';
+import { useRenderTrace } from '@renderer/lib/renderTrace';
 import { useCliTabsStore } from '@renderer/state/cliTabs';
 import { useWorkspaceStore } from '@renderer/state/workspace';
 import type { CliTab, DockColumn, DockedProjectMeta } from '@shared/types';
@@ -23,7 +24,8 @@ const ClaudeCliPane = lazy(() =>
  * currently-active column. Panes stay mounted across pin changes so PTY
  * output keeps streaming and xterm scrollback survives.
  */
-export function ClaudeCliDock() {
+export const ClaudeCliDock = memo(function ClaudeCliDock() {
+  useRenderTrace('ClaudeCliDock');
   const projects = useWorkspaceStore((s) => s.projects);
   const openedProjectIds = useWorkspaceStore((s) => s.openedProjectIds);
   const activeProjectId = useWorkspaceStore((s) => s.activeProjectId);
@@ -328,7 +330,7 @@ export function ClaudeCliDock() {
       </div>
     </div>
   );
-}
+});
 
 interface CliTabBarProps {
   dockedProjects: DockedProjectMeta[];

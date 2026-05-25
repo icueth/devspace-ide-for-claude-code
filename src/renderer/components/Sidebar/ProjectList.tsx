@@ -1,7 +1,8 @@
 import { ChevronDown, ChevronRight, Loader2, X } from 'lucide-react';
-import { useMemo } from 'react';
+import { memo, useMemo } from 'react';
 
 import { cn } from '@renderer/lib/utils';
+import { useRenderTrace } from '@renderer/lib/renderTrace';
 import { useGitStore } from '@renderer/state/git';
 import { useWorkspaceStore } from '@renderer/state/workspace';
 import type { Project } from '@shared/types';
@@ -30,7 +31,8 @@ function initialsFor(name: string): string {
   return (parts[0][0] + parts[1][0]).toLowerCase();
 }
 
-export function ProjectList() {
+export const ProjectList = memo(function ProjectList() {
+  useRenderTrace('ProjectList');
   const projects = useWorkspaceStore((s) => s.projects);
   const active = useWorkspaceStore((s) => s.active);
   const scanning = useWorkspaceStore((s) => s.scanning);
@@ -168,7 +170,7 @@ export function ProjectList() {
       )}
     </div>
   );
-}
+});
 
 function SectionLabel({ label, count }: { label: string; count: number }) {
   return (

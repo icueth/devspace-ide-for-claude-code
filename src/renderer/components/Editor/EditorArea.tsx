@@ -1,5 +1,5 @@
 import { Code, Columns2, Eye } from 'lucide-react';
-import { lazy, Suspense, useEffect, useState } from 'react';
+import { lazy, memo, Suspense, useEffect, useState } from 'react';
 
 import { EditorTabs } from '@renderer/components/Editor/EditorTabs';
 import { ImagePreview } from '@renderer/components/Editor/ImagePreview';
@@ -52,12 +52,14 @@ const CodeMirrorPane = lazy(() =>
 );
 import { api } from '@renderer/lib/api';
 import { cn } from '@renderer/lib/utils';
+import { useRenderTrace } from '@renderer/lib/renderTrace';
 import { useEditorStore, type PaneId } from '@renderer/state/editor';
 import { useEditorViewStore } from '@renderer/state/editorView';
 import { useLayoutStore } from '@renderer/state/layout';
 import { getLanguageFromFileName } from '@renderer/utils/languageLabels';
 
-export function EditorArea() {
+export const EditorArea = memo(function EditorArea() {
+  useRenderTrace('EditorArea');
   const splitTabs = useEditorStore((s) => s.splitTabs);
   const isSplit = splitTabs.length > 0;
 
@@ -82,7 +84,7 @@ export function EditorArea() {
       )}
     </div>
   );
-}
+});
 
 interface EditorPaneProps {
   pane: PaneId;

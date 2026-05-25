@@ -15,7 +15,7 @@ import {
   Users,
   Workflow,
 } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { AgentsRail } from '@renderer/components/Agents/AgentsRail';
 import { BottomPanel } from '@renderer/components/Bottom/BottomPanel';
@@ -39,6 +39,7 @@ import { UpdateBadge } from '@renderer/components/UpdateBadge';
 import { Welcome } from '@renderer/components/Welcome/Welcome';
 import { api } from '@renderer/lib/api';
 import { cn } from '@renderer/lib/utils';
+import { useRenderTrace } from '@renderer/lib/renderTrace';
 import { pickLatestPreview } from '@renderer/components/Editor/HtmlPreviewView';
 import { useEditorStore } from '@renderer/state/editor';
 import { useCliTabsStore } from '@renderer/state/cliTabs';
@@ -62,6 +63,7 @@ export default function App() {
 }
 
 function AppInner() {
+  useRenderTrace('AppInner');
   const [version, setVersion] = useState<string>('');
   const load = useWorkspaceStore((s) => s.load);
   const projects = useWorkspaceStore((s) => s.projects);
@@ -72,6 +74,9 @@ function AppInner() {
   const openLivePreview = useEditorStore((s) => s.openLivePreview);
   const openDevlog = useEditorStore((s) => s.openDevlog);
   const openHtmlPreview = useEditorStore((s) => s.openHtmlPreview);
+  // Stable identity so the memoized <FileTree> isn't re-rendered every shell
+  // render by a fresh inline arrow. `open` is a stable store action.
+  const handleOpenFile = useCallback((path: string) => void openFile(path), [openFile]);
 
   // Width values are intentionally NOT read here — they live in the
   // SidebarSection / DockSection leaf wrappers so a resize tick re-renders
@@ -813,7 +818,7 @@ function AppInner() {
               <div className="flex-1 px-1 py-1">
                 <FileTree
                   rootPath={activeProject.path}
-                  onOpenFile={(path) => void openFile(path)}
+                  onOpenFile={handleOpenFile}
                 />
               </div>
             </div>

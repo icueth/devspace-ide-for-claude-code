@@ -1,8 +1,9 @@
 import * as ContextMenu from '@radix-ui/react-context-menu';
 import { FilePlus, FolderPlus, RefreshCw } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { api } from '@renderer/lib/api';
+import { useRenderTrace } from '@renderer/lib/renderTrace';
 import { addFileToChat } from '@renderer/lib/chatAttach';
 import { addFileToClaudeCli } from '@renderer/lib/claudeCli';
 import { useEditorStore } from '@renderer/state/editor';
@@ -50,7 +51,8 @@ interface FileTreeProps {
 
 const EMPTY_ENTRIES: DirEntry[] = [];
 
-export function FileTree({ rootPath, onOpenFile }: FileTreeProps) {
+export const FileTree = memo(function FileTree({ rootPath, onOpenFile }: FileTreeProps) {
+  useRenderTrace('FileTree');
   const [tree, setTree] = useState<Record<string, NodeState>>({});
   const askPrompt = usePromptStore((s) => s.ask);
   const editorClose = useEditorStore((s) => s.close);
@@ -576,7 +578,7 @@ export function FileTree({ rootPath, onOpenFile }: FileTreeProps) {
       </ContextMenu.Portal>
     </ContextMenu.Root>
   );
-}
+});
 
 interface RootMenuItemProps {
   onSelect: () => void;

@@ -1,8 +1,9 @@
 import { RefreshCw, Send, X } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { memo, useEffect, useMemo, useState } from 'react';
 
 import { api } from '@renderer/lib/api';
 import { cn } from '@renderer/lib/utils';
+import { useRenderTrace } from '@renderer/lib/renderTrace';
 import { useLayoutStore } from '@renderer/state/layout';
 import { useTmuxStore } from '@renderer/state/tmux';
 import { useWorkspaceStore } from '@renderer/state/workspace';
@@ -65,7 +66,8 @@ interface AgentsRailProps {
   slim?: boolean;
 }
 
-export function AgentsRail({ slim }: AgentsRailProps) {
+export const AgentsRail = memo(function AgentsRail({ slim }: AgentsRailProps) {
+  useRenderTrace('AgentsRail');
   const panes = useTmuxStore((s) => s.panes);
   const previews = useTmuxStore((s) => s.previews);
   const startPolling = useTmuxStore((s) => s.startPolling);
@@ -305,7 +307,7 @@ export function AgentsRail({ slim }: AgentsRailProps) {
       )}
     </div>
   );
-}
+});
 
 function StatusBadge({ status }: { status: 'run' | 'idle' | 'standby' }) {
   const cfg = {
