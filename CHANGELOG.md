@@ -5,6 +5,33 @@ All notable changes to DevSpace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.30.5] — 2026-05-23
+
+Sidebar auto-follows the active editor tab. (BRANCH BUILD —
+`feat/multi-cli`, NOT merged to main yet.)
+
+### Changed
+- **Sidebar tracks active tab's project.** Switching to a tab anchored to a
+  different project (text/image/diff/design/codeflow/devlog/live-preview)
+  now moves the FileTree, ProjectList highlight, git store, and CLI dock
+  to that project. Eliminates the confusion of editing a file in project B
+  while the sidebar still shows project A.
+- **One-way wiring** — tab → sidebar only. Clicking the sidebar never
+  moves any tab, so the loop is impossible. `setActiveProject` is the
+  same call ProjectList already uses, so chip docking + per-project
+  PTY/watcher lifecycle work identically.
+
+### Internal
+- New pure helper `deriveProjectIdFromTab(tabPath, projects)` in
+  `state/workspace.ts` handles all tab path conventions:
+  synthetic `<kind>:<projectPath>` for design/codeflow/devlog/live-preview
+  (exact-match), `diff:<absPath>` (prefix), plain absolute file paths
+  (longest-prefix). Longest-prefix match ensures nested workspaces resolve
+  to the deepest enclosing project.
+- 8 regression tests pin every branch — null/empty, no-enclosing-project,
+  longest-prefix, synthetic kinds, exact-match-for-synthetic, diff prefix,
+  false-prefix safety (`projAlpha` vs `projA`), empty-projects.
+
 ## [0.30.4] — 2026-05-22
 
 UX fix for the multi-runtime picker. (BRANCH BUILD — `feat/multi-cli`,

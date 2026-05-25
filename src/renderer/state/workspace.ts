@@ -8,6 +8,51 @@ import type { Project, Workspace } from '@shared/types';
 
 const LS_KEY = 'devspace:workspace:v1';
 
+// v0.30.5 — derive the project a tab belongs to. Returns the project id, or
+// null if the tab can't be attributed (e.g. settings page open, no tab, or a
+// file outside every known project root).
+//
+// Tab path conventions handled:
+//   • Synthetic `<kind>:<projectPath>` for design/codeflow/devlog/live-preview
+//   • `diff:<absPath>` for git diff tabs
+//   • Plain absolute file paths for text/image/pdf tabs
+//
+// Synthetic-kind matching takes precedence — exact equality is safest because
+// some users nest workspaces inside one another (project A's path is a
+// prefix of project B's path). For file/diff tabs we use longest-prefix
+// match so the deepest enclosing project wins.
+export function deriveProjectIdFromTab(
+  tabPath: string | null | undefined,
+  projects: ReadonlyArray<Pick<Project, 'id' | 'path'>>,
+): string | null {
+  if (!tabPath) return null;
+  // Synthetic kinds: <kind>:<projectPath>
+  const SYNTHETIC_KINDS = ['design', 'codeflow', 'devlog', 'live-preview'];
+  for (const kind of SYNTHETIC_KINDS) {
+    const prefix = `${kind}:`;
+    if (tabPath.startsWith(prefix)) {
+      const projectPath = tabPath.slice(prefix.length);
+      const p = projects.find((x) => x.path === projectPath);
+      return p?.id ?? null;
+    }
+  }
+  // git diff: diff:<absPath>
+  let pathForMatch = tabPath;
+  if (tabPath.startsWith('diff:')) {
+    pathForMatch = tabPath.slice('diff:'.length);
+  }
+  // Longest-prefix match wins (nested workspace safety).
+  let best: { id: string; pathLen: number } | null = null;
+  for (const p of projects) {
+    const isInside =
+      pathForMatch === p.path || pathForMatch.startsWith(`${p.path}/`);
+    if (isInside && (!best || p.path.length > best.pathLen)) {
+      best = { id: p.id, pathLen: p.path.length };
+    }
+  }
+  return best?.id ?? null;
+}
+
 // Free PTY sessions tied to a project so closing / evicting releases memory
 // and the claude/shell processes don't linger in the background. undockProject
 // walks every Claude CLI tab the project has spawned plus the per-project

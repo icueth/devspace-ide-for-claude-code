@@ -43,7 +43,7 @@ import { useGitStore } from '@renderer/state/git';
 import { useLayoutStore } from '@renderer/state/layout';
 import { usePromptStore } from '@renderer/state/prompt';
 import { useSidebarStore } from '@renderer/state/sidebar';
-import { useWorkspaceStore } from '@renderer/state/workspace';
+import { deriveProjectIdFromTab, useWorkspaceStore } from '@renderer/state/workspace';
 
 export default function App() {
   return (
@@ -86,6 +86,19 @@ function AppInner() {
     if (!path) return null;
     return s.tabs.find((t) => t.path === path)?.kind ?? null;
   });
+  // v0.30.5 — switching to a tab anchored to a different project should
+  // move the sidebar (FileTree + ProjectList highlight + git store + chat
+  // dock) to that project. One-way (tab → sidebar) — clicking the sidebar
+  // never moves any tab, so this can't loop. Uses the pure helper from the
+  // workspace store so the routing rules are testable in isolation.
+  const activeTabPathRaw = useEditorStore((s) => s.activeTabPath);
+  useEffect(() => {
+    if (!activeTabPathRaw) return;
+    const derived = deriveProjectIdFromTab(activeTabPathRaw, projects);
+    if (derived && derived !== activeProjectId) {
+      useWorkspaceStore.getState().setActiveProject(derived);
+    }
+  }, [activeTabPathRaw, projects, activeProjectId]);
   const [bottomInitialTab, setBottomInitialTab] = useState<'terminal' | 'git' | 'search'>(
     'terminal',
   );
