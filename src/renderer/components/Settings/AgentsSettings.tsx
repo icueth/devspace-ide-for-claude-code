@@ -33,6 +33,7 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } fro
 
 import { api } from '@renderer/lib/api';
 import { cn } from '@renderer/lib/utils';
+import { useTabActive } from '@renderer/components/Settings/SettingsPage';
 import { useForgePrefillStore } from '@renderer/state/forgePrefill';
 import { useWorkspaceStore } from '@renderer/state/workspace';
 import { baseEditorTheme } from '@renderer/utils/codemirrorTheme';
@@ -627,7 +628,11 @@ function AgentEditor({
     [agent.tools, update],
   );
 
+  // R1 keep-mounted (v0.30.7): gate window listener on tab visibility —
+  // without this, ⌘S in another Settings tab would save agent edits invisibly.
+  const tabActive = useTabActive();
   useEffect(() => {
+    if (!tabActive) return;
     const handler = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === 's') {
         e.preventDefault();
@@ -636,7 +641,7 @@ function AgentEditor({
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [dirty, readOnly, onSave]);
+  }, [tabActive, dirty, readOnly, onSave]);
 
   return (
     <>

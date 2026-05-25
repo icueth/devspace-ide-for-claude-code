@@ -293,8 +293,15 @@ function EditorBody({ tab, onChange, onSave, onNavDone, mdMode }: EditorBodyProp
               )}
             >
               <Suspense fallback={<LazyFallback label="Loading editor…" />}>
+                {/*
+                  Perf R2 (v0.30.7): no `key={tab.path}`. CodeMirrorPane
+                  already destroys+recreates its EditorView inside a
+                  `useEffect(..., [path])`, so the React host div stays
+                  mounted continuously — the Suspense fallback only fires
+                  once (first text-tab open) instead of flashing on every
+                  text-tab switch.
+                */}
                 <CodeMirrorPane
-                  key={tab.path}
                   path={tab.path}
                   value={tab.content}
                   onChange={onChange}
@@ -317,8 +324,8 @@ function EditorBody({ tab, onChange, onSave, onNavDone, mdMode }: EditorBodyProp
         </div>
       ) : (
         <Suspense fallback={<LazyFallback label="Loading editor…" />}>
+          {/* Perf R2 (v0.30.7): no `key={tab.path}` — see comment above. */}
           <CodeMirrorPane
-            key={tab.path}
             path={tab.path}
             value={tab.content}
             onChange={onChange}

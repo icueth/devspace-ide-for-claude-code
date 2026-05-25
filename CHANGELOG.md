@@ -5,6 +5,96 @@ All notable changes to DevSpace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.30.7] — 2026-05-24
+
+Tier 1 performance pass — the 4 highest-felt-impact items from the
+v0.30.6 system audit. (BRANCH BUILD — `feat/multi-cli`, NOT merged to
+main yet.)
+
+### Changed
+
+- **R1: Settings tab switching is instant.** Removed
+  `<RouteErrorBoundary key={tab}>` in `SettingsPage.tsx`. All 11 tab
+  subtrees now mount once and visibility is toggled via the HTML
+  `hidden` attribute + `display: none`. Pre-fix: every tab click
+  unmounted the active subtree and remounted the next one — AgentsSettings
+  alone runs ~10 useEffects + embeds CodeMirror, so the switch was
+  visibly laggy. Trade-off: first SettingsPage open mounts everything
+  once; subsequent switches are instant. Each tab now has its own
+  RouteErrorBoundary so a crash in one tab can't blank its siblings.
+- **R2: CodeMirrorPane no longer remounts per text tab.** Removed
+  `key={tab.path}` from both `<CodeMirrorPane>` sites in
+  `EditorArea.tsx`. The pane's own `useEffect([path])` already
+  destroys+recreates the EditorView in place; removing the React key
+  means the lazy chunk's Suspense fallback only fires once instead of
+  flashing on every tab switch.
+- **R3: FileTree per-project LRU cache (cap 8).** New
+  `src/renderer/state/fileTreeCache.ts`. Switching back to a
+  previously-viewed project restores the cached tree snapshot
+  instantly + fires a background refresh of root + previously-expanded
+  dirs via `Promise.all` to catch external changes. Pre-fix:
+  `setTree({})` + re-fetch every expanded dir via IPC on every
+  project switch.
+- **M1: MemoryService lazy + parallel hydration.** `init()` now
+  enumerates project manifests in parallel (`Promise.all`) and defers
+  per-project markdown walks to first access. New
+  `loadedProjects: Set` + `loadingProjects: Map` with in-flight
+  promise sharing for race protection. Public read methods
+  (`listEntries`, `getEntry`, `search`, `getStats`, `listThreads`,
+  `getThread`, `createEntry`) transparently
+  `await ensureProjectLoaded(hash)` before returning. Concurrent
+  callers for the same project share one walk — `indexAdd` runs
+  exactly once per entry id.
+
+### Wave-2 review hardening (pre-commit fixes)
+
+- **SEC-LOW-1**: `ensureProjectLoaded` now ignores unknown hashes. A
+  hostile renderer can no longer pump arbitrary 12-hex ids through
+  `MEMORY_GET_ENTRY` to unbounded-grow `loadedProjects` /
+  `loadingProjects`. Gate added at the helper level.
+- **SEC-MED-1**: `sanitizeForRestore` helper (extracted to
+  `fileTreeCache.ts`) drops `entries` from folded dirs on cache
+  restore. Pre-fix: stale folded-dir listings could be presented via
+  right-click context menu and trigger destructive ops (rename /
+  delete / duplicate) against paths that may no longer exist on disk.
+  Folded dirs keep their `expanded: false` flag so collapsed/expanded
+  UI state survives; next expand triggers a fresh `load()` instead of
+  rendering stale data.
+- **SEC-MED-2**: `LlmSettings` + `McpSettings` now defer their config
+  fetch (which carries API keys / parsed config + draft buffers in
+  renderer memory) until the user actually visits the tab. New
+  `useTabActive()` hook reads the `TabActiveContext` provided by
+  `TabContainer`. First-active gate avoids holding credential drafts
+  in memory whenever Settings is open but the LLM/MCP tab hasn't
+  been viewed.
+- **CR-H1**: Window-level ⌘S listeners in `FilesSettings`,
+  `McpSettings`, `AgentsSettings` are now gated on `useTabActive()`.
+  Without this, after R1 keep-mounted, pressing ⌘S anywhere in
+  Settings could save the wrong tab's buffer (a data hazard, since
+  the listener is registered on `window`).
+- **CR-H2**: `ensureProjectLoaded` now catches walk failures
+  (EACCES / EIO from `walkEntries`/`walkThreads`) and marks the
+  project as loaded with a logged warn, matching pre-M1 `init()`
+  semantics. Pre-fix: a flaky disk on one project's `memory/` dir
+  would surface as an error from every subsequent `listEntries` /
+  `search` / `getStats` IPC.
+- **CR-H3**: `getThread(threadId)` now probes per-project
+  `threads/<id>.md` on disk in parallel and only hydrates the owning
+  project — instead of `ensureAllProjectsLoaded()` which negated the
+  lazy-load win every time a user opened a thread from the chat
+  sidebar.
+- **CR-M1**: `load()` in `FileTree.tsx` now captures the active root
+  at start and discards results if the root flipped mid-flight. Pre-fix:
+  A → B → A switching could commit B's in-flight directory listing
+  under A's cached snapshot, slowly leaking memory across switches.
+
+### Tests
+- +6 regression tests (was 1009 → 1015): SEC-LOW-1 unknown-hash
+  guard, CR-H2 partial-walk recovery, sanitizeForRestore (4 cases
+  covering expanded preservation, folded sanitization, mixed
+  snapshots, immutability).
+- All 60 test files pass.
+
 ## [0.30.6] — 2026-05-23
 
 Sidebar follows active chat tab too — extending v0.30.5's editor-tab rule

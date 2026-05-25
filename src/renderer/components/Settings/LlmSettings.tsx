@@ -22,6 +22,7 @@ import {
 } from '@renderer/components/Settings/llmProfileForm';
 import { api } from '@renderer/lib/api';
 import { cn } from '@renderer/lib/utils';
+import { useTabActive } from '@renderer/components/Settings/SettingsPage';
 import type { LlmChatProfile, LlmConfig, LlmTestResult } from '@shared/types';
 
 /**
@@ -34,6 +35,16 @@ import type { LlmChatProfile, LlmConfig, LlmTestResult } from '@shared/types';
  * URL/key/model combo before saving.
  */
 export function LlmSettings() {
+  // R1 keep-mounted (v0.30.7): defer fetching the config (which contains an
+  // API key) until the user actually opens the LLM tab — otherwise the
+  // unsaved-draft state would sit in renderer memory whenever Settings is
+  // open, even if the user never visits this tab.
+  const tabActive = useTabActive();
+  const [hasBeenActive, setHasBeenActive] = useState(false);
+  useEffect(() => {
+    if (tabActive && !hasBeenActive) setHasBeenActive(true);
+  }, [tabActive, hasBeenActive]);
+
   const [config, setConfig] = useState<LlmConfig | null>(null);
   const [draft, setDraft] = useState<LlmConfig | null>(null);
   const [showKey, setShowKey] = useState(false);
@@ -43,11 +54,12 @@ export function LlmSettings() {
   const [savedAt, setSavedAt] = useState<number | null>(null);
 
   useEffect(() => {
+    if (!hasBeenActive) return;
     void api.llm.getConfig().then((c) => {
       setConfig(c);
       setDraft(c);
     });
-  }, []);
+  }, [hasBeenActive]);
 
   const dirty = !!config && !!draft && JSON.stringify(config) !== JSON.stringify(draft);
 

@@ -368,6 +368,19 @@ interface IndexState {
   initPromise: Promise<void>;
   initialized: boolean;
   subscribers: Set<WebContents>;
+  // ─── lazy-load tracking (M1, v0.30.7) ───────────────────────────────────
+  // Per-project hash that has had its memory + threads dirs walked. init()
+  // only enumerates manifests (cheap); the actual file-content walk happens
+  // on first access via ensureProjectLoaded().
+  loadedProjects: Set<string>;
+  // In-flight walk promises keyed by hash. A second concurrent caller for
+  // the same hash awaits the same promise instead of double-walking and
+  // double-indexing (which would leak entries into state.tokens).
+  loadingProjects: Map<string, Promise<void>>;
+  // Tracks whether the global scope has been walked. Global is walked
+  // during init() but kept as a flag for symmetry with per-project lazy
+  // loading and test reset.
+  globalLoaded: boolean;
 }
 
 const state: IndexState = {
@@ -381,6 +394,9 @@ const state: IndexState = {
   initPromise: Promise.resolve(),
   initialized: false,
   subscribers: new Set(),
+  loadedProjects: new Set(),
+  loadingProjects: new Map(),
+  globalLoaded: false,
 };
 
 function defaultSettings(): MemorySettings {
@@ -406,7 +422,21 @@ export function __resetForTests(root?: string): void {
   state.settings = defaultSettings();
   state.initialized = false;
   state.initPromise = Promise.resolve();
+  state.loadedProjects.clear();
+  state.loadingProjects.clear();
+  state.globalLoaded = false;
 }
+
+// Test-only inspectors for the M1 lazy-load refactor (v0.30.7). These
+// let regression tests verify load tracking + race protection without
+// reaching into the IndexState singleton. Production code must not
+// import these.
+export const __testHooks = {
+  ensureProjectLoaded: (hash: string): Promise<void> => ensureProjectLoaded(hash),
+  loadedProjects: (): ReadonlySet<string> => state.loadedProjects,
+  loadingProjects: (): ReadonlyMap<string, Promise<void>> => state.loadingProjects,
+  globalLoaded: (): boolean => state.globalLoaded,
+};
 
 // Renderer/IPC code may call this after setSettings to align with the
 // previous public surface — the new setSettings already keeps the cache
@@ -737,6 +767,11 @@ async function countDir(dir: string, extension: string): Promise<number> {
   return n;
 }
 
+// Enumerate project manifests in parallel WITHOUT walking entry/thread
+// files. The actual file-content walk for each project is deferred until
+// the first read/write touches it (see ensureProjectLoaded). This keeps
+// init() boot-time fast even with many projects, since file walks are
+// the dominant cost (each entry parses frontmatter + markdown).
 async function loadProjects(): Promise<void> {
   let dirs: fs.Dirent[];
   try {
@@ -744,17 +779,64 @@ async function loadProjects(): Promise<void> {
   } catch {
     return;
   }
-  for (const d of dirs) {
-    if (!d.isDirectory()) continue;
-    if (!/^[0-9a-f]{12}$/.test(d.name)) continue;
-    const hash = d.name;
-    const manifest = await readManifest(hash);
-    if (!manifest) continue;
-    manifest.pathExists = await dirExists(manifest.path);
-    state.projects.set(`project:${hash}`, manifest);
-    await walkEntries('project', hash);
-    await walkThreads(hash);
+  const hashDirs = dirs.filter(
+    (d) => d.isDirectory() && /^[0-9a-f]{12}$/.test(d.name),
+  );
+  await Promise.all(
+    hashDirs.map(async (d) => {
+      const hash = d.name;
+      const manifest = await readManifest(hash);
+      if (!manifest) return;
+      manifest.pathExists = await dirExists(manifest.path);
+      state.projects.set(`project:${hash}`, manifest);
+    }),
+  );
+}
+
+// On-demand walker. Idempotent + race-safe: concurrent callers for the
+// same hash share a single in-flight walk promise, so indexAdd never
+// runs twice for the same entry id (which would double-insert tokens).
+async function ensureProjectLoaded(hash: string): Promise<void> {
+  if (!hash) return;
+  if (state.loadedProjects.has(hash)) return;
+  // SEC-LOW-1 hardening (v0.30.7): only hydrate hashes that correspond to a
+  // known project. Without this guard, a hostile renderer could pump
+  // arbitrary 12-hex ids through MEMORY_GET_ENTRY and unbounded-grow
+  // loadedProjects + loadingProjects.
+  if (!state.projects.has(`project:${hash}`)) return;
+  const inflight = state.loadingProjects.get(hash);
+  if (inflight) return inflight;
+  const promise = (async () => {
+    try {
+      // walkEntries + walkThreads touch disjoint dirs; safe to run in
+      // parallel for a single project.
+      // CR-H2 hardening (v0.30.7): match pre-M1 init() behavior — log and
+      // continue on walk failures (EACCES / EIO) instead of throwing. A
+      // flaky disk on one project's memory/ dir should NOT cause every
+      // listEntries / search / getStats IPC to error out.
+      try {
+        await Promise.all([walkEntries('project', hash), walkThreads(hash)]);
+      } catch (err) {
+        console.warn(`[MemoryService] walk failed for project ${hash}:`, err);
+      }
+      state.loadedProjects.add(hash);
+    } finally {
+      state.loadingProjects.delete(hash);
+    }
+  })();
+  state.loadingProjects.set(hash, promise);
+  return promise;
+}
+
+// Helper for code paths that need every known project's data hydrated
+// (e.g. stats, cross-project search). Parallel by design.
+async function ensureAllProjectsLoaded(): Promise<void> {
+  const hashes: string[] = [];
+  for (const sk of state.projects.keys()) {
+    if (sk.startsWith('project:')) hashes.push(sk.slice('project:'.length));
   }
+  if (hashes.length === 0) return;
+  await Promise.all(hashes.map((h) => ensureProjectLoaded(h)));
 }
 
 async function dirExists(absPath: string): Promise<boolean> {
@@ -776,8 +858,16 @@ export function init(): Promise<void> {
       await fs.promises.mkdir(globalRoot(), { recursive: true });
       await fs.promises.mkdir(projectsRoot(), { recursive: true });
       await loadSettings();
-      await walkEntries('global', '');
-      await loadProjects();
+      // PERF (M1, v0.30.7): run global walk + project enumeration in
+      // parallel. Per-project file walks are deferred to
+      // ensureProjectLoaded() — boot only enumerates manifests now.
+      await Promise.all([
+        (async () => {
+          await walkEntries('global', '');
+          state.globalLoaded = true;
+        })(),
+        loadProjects(),
+      ]);
       await refreshProjectCounts();
       state.initialized = true;
       setImmediate(() =>
@@ -857,6 +947,9 @@ async function ensureProjectHash(absPath: string): Promise<string> {
       diaryCount: 0,
       pathExists: true,
     });
+    // First time we see this hash → mark as loaded (no on-disk state to
+    // walk yet). Skips a wasted readdir on the just-created empty dirs.
+    state.loadedProjects.add(hash);
   } else {
     const project = state.projects.get(sk)!;
     project.lastAccessedAt = Date.now();
@@ -865,6 +958,11 @@ async function ensureProjectHash(absPath: string): Promise<string> {
     project.pathExists = true;
     await writeManifest(hash, project.path, project.name);
   }
+  // Hydrate this project's entry + thread indices before write paths
+  // proceed — otherwise a freshly-booted process would dedupe slugs
+  // against an empty bucket and createEntry could clobber an existing
+  // on-disk entry written in a previous session.
+  await ensureProjectLoaded(hash);
   return hash;
 }
 
@@ -1005,6 +1103,9 @@ export async function listEntries(input: {
   if (input.scope === 'project') {
     if (!input.projectPath) return [];
     hash = projectHashFor(input.projectPath);
+    // Lazy-load: hydrate this project's entries if init() only enumerated
+    // it. Only loads once thanks to ensureProjectLoaded's in-flight map.
+    await ensureProjectLoaded(hash);
   }
   const sk = scopeKey(input.scope, hash);
   const ids = state.byScope.get(sk) ?? new Set<string>();
@@ -1028,6 +1129,16 @@ export async function listEntries(input: {
 
 export async function getEntry(id: string): Promise<MemoryEntry | null> {
   await ensureInit();
+  // Lazy-load: parse the scope prefix out of the id and hydrate the
+  // owning project if needed. id form is "project:<hash>/<slug>" or
+  // "global/<slug>".
+  if (typeof id === 'string' && id.startsWith('project:')) {
+    const slash = id.indexOf('/');
+    if (slash > 'project:'.length) {
+      const hash = id.slice('project:'.length, slash);
+      if (/^[0-9a-f]{12}$/.test(hash)) await ensureProjectLoaded(hash);
+    }
+  }
   const entry = state.entries.get(id);
   return entry ? { ...entry } : null;
 }
@@ -1312,6 +1423,21 @@ export async function search(input: {
   limit?: number;
 }): Promise<MemorySearchHit[]> {
   await ensureInit();
+  // Lazy-load: hydrate exactly the project(s) this search can hit before
+  // we consult the in-memory index. Without this a freshly-booted process
+  // would return zero hits for a project that exists on disk but hasn't
+  // been touched yet this session.
+  if (input.scope === 'project') {
+    if (input.projectPath) await ensureProjectLoaded(projectHashFor(input.projectPath));
+  } else if (input.scope === 'global') {
+    // global walked during init() — nothing to do
+  } else if (input.projectPath) {
+    await ensureProjectLoaded(projectHashFor(input.projectPath));
+  } else {
+    // Caller did not constrain scope at all → must search across every
+    // project we know about. Load them all in parallel.
+    await ensureAllProjectsLoaded();
+  }
   // SEC: cap query length to prevent CPU DoS via huge query strings.
   const rawQuery = (input.query ?? '').slice(0, 256);
   const limit = Math.max(1, Math.min(100, input.limit ?? 25));
@@ -1424,6 +1550,9 @@ export async function search(input: {
 
 export async function getStats(): Promise<MemoryStats> {
   await ensureInit();
+  // Stats aggregate tags across all entries + thread counts → need every
+  // project hydrated. Parallel load via ensureAllProjectsLoaded.
+  await ensureAllProjectsLoaded();
   let totalDiaryDays = 0;
   for (const [sk] of state.projects) {
     if (!sk.startsWith('project:')) continue;
@@ -1842,6 +1971,7 @@ export async function writeDiary(input: {
 export async function listThreads(projectPath: string): Promise<ThreadSummary[]> {
   await ensureInit();
   const hash = projectHashFor(projectPath);
+  await ensureProjectLoaded(hash);
   return [...state.threads.values()]
     .filter((t) => t.projectHash === hash)
     .sort((a, b) => b.updatedAt - a.updatedAt);
@@ -1849,6 +1979,30 @@ export async function listThreads(projectPath: string): Promise<ThreadSummary[]>
 
 export async function getThread(threadId: string): Promise<ThreadSummary | null> {
   await ensureInit();
+  // CR-H3 (v0.30.7): probe per-project threads/<id>.md on disk to find the
+  // owning project — only hydrate THAT one. Pre-fix called
+  // ensureAllProjectsLoaded() which negated the lazy-load win every time a
+  // user opened a thread from the chat sidebar.
+  if (!THREAD_ID_RE.test(threadId)) return null;
+  const hashes: string[] = [];
+  for (const sk of state.projects.keys()) {
+    if (sk.startsWith('project:')) hashes.push(sk.slice('project:'.length));
+  }
+  if (hashes.length === 0) return null;
+  // Probe each project's threads dir in parallel — cheap stat per project.
+  const probes = await Promise.all(
+    hashes.map(async (h) => {
+      try {
+        await fs.promises.stat(path.join(threadsDir(h), `${threadId}.md`));
+        return h;
+      } catch {
+        return null;
+      }
+    }),
+  );
+  const ownerHash = probes.find((h): h is string => h !== null);
+  if (!ownerHash) return null;
+  await ensureProjectLoaded(ownerHash);
   return state.threads.get(threadId) ?? null;
 }
 

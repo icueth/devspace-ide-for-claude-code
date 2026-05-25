@@ -12,6 +12,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { api } from '@renderer/lib/api';
 import { cn } from '@renderer/lib/utils';
+import { useTabActive } from '@renderer/components/Settings/SettingsPage';
 import { useWorkspaceStore } from '@renderer/state/workspace';
 import type {
   McpHttpServer,
@@ -30,6 +31,16 @@ import type {
  * 100KB of unrelated state living alongside.
  */
 export function McpSettings() {
+  // R1 keep-mounted (v0.30.7): with all tabs alive, this component's reload
+  // effect would fire on every `activeProject` change regardless of which tab
+  // the user is looking at. Gate first-load on visibility to avoid polling
+  // (and holding parsed config + any draft buffer) when the user is elsewhere.
+  const tabActive = useTabActive();
+  const [hasBeenActive, setHasBeenActive] = useState(false);
+  useEffect(() => {
+    if (tabActive && !hasBeenActive) setHasBeenActive(true);
+  }, [tabActive, hasBeenActive]);
+
   const activeProject = useWorkspaceStore((s) => {
     const id = s.activeProjectId;
     return s.projects.find((p) => p.id === id) ?? null;
@@ -62,9 +73,10 @@ export function McpSettings() {
   }, [activeProject?.path]);
 
   useEffect(() => {
+    if (!hasBeenActive) return;
     void reload();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeProject?.path]);
+  }, [hasBeenActive, activeProject?.path]);
 
   // Re-load the draft whenever the selection key changes. Key = scope+name
   // so renames flow naturally.
@@ -367,7 +379,11 @@ function ServerEditor({
     [entry, onChange],
   );
 
+  // R1 keep-mounted (v0.30.7): gate window listener on tab visibility —
+  // without this, ⌘S in another Settings tab would save MCP edits invisibly.
+  const tabActive = useTabActive();
   useEffect(() => {
+    if (!tabActive) return;
     const handler = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === 's') {
         e.preventDefault();
@@ -376,7 +392,7 @@ function ServerEditor({
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [dirty, onSave]);
+  }, [tabActive, dirty, onSave]);
 
   const transport = entry.server.transport;
 

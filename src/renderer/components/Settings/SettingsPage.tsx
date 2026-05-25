@@ -36,7 +36,7 @@ import {
   Users,
   Wrench,
 } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import { createContext, useContext, useEffect, useRef, useState } from 'react';
 
 import { RouteErrorBoundary } from '@renderer/components/Layout/RouteErrorBoundary';
 import { AccountSettings } from '@renderer/components/Settings/AccountSettings';
@@ -132,22 +132,121 @@ export function SettingsPage({ onClose, initialTab = 'account' }: SettingsPagePr
         <TabSwitch tab={tab} onChange={setTab} />
       </div>
 
+      {/*
+        Perf R1 (v0.30.7): keep ALL 11 tab subtrees mounted and toggle visibility
+        via the HTML `hidden` attribute instead of mounting/unmounting via
+        `tab === ...` guards + a `key={tab}` boundary.
+
+        Why: previously every tab click destroyed the active subtree and
+        recreated the next one — AgentsSettings alone runs ~10 useEffects and
+        embeds CodeMirror instances, so the switch was visibly laggy. Each
+        boundary is now per-tab so a crash in one tab cannot blank its
+        siblings.
+
+        Trade-off: first SettingsPage open pays the price for mounting all
+        tabs once. Subsequent switches are instant. Acceptable since Settings
+        is a one-time-per-session destination, not a hot path.
+      */}
       <div className="min-h-0 flex-1 overflow-hidden">
-        <RouteErrorBoundary key={tab} label={`Settings · ${tab}`}>
-          {tab === 'setup' && <SetupSettings />}
-          {tab === 'account' && <AccountSettings />}
-          {tab === 'files' && <FilesSettings />}
-          {tab === 'tmux' && <TmuxSection />}
-          {tab === 'llm' && <LlmSettings />}
-          {tab === 'agents' && <AgentsSettings />}
-          {tab === 'mcp' && <McpSettings />}
-          {tab === 'memory' && <MemPalaceSettings />}
-          {tab === 'skills' && <SkillsSettings />}
-          {tab === 'teams' && <TeamsSettings />}
-          {tab === 'design' && <DesignSettings />}
-        </RouteErrorBoundary>
+        <TabContainer active={tab === 'setup'}>
+          <RouteErrorBoundary label="Settings · setup">
+            <SetupSettings />
+          </RouteErrorBoundary>
+        </TabContainer>
+        <TabContainer active={tab === 'account'}>
+          <RouteErrorBoundary label="Settings · account">
+            <AccountSettings />
+          </RouteErrorBoundary>
+        </TabContainer>
+        <TabContainer active={tab === 'files'}>
+          <RouteErrorBoundary label="Settings · files">
+            <FilesSettings />
+          </RouteErrorBoundary>
+        </TabContainer>
+        <TabContainer active={tab === 'tmux'}>
+          <RouteErrorBoundary label="Settings · tmux">
+            <TmuxSection />
+          </RouteErrorBoundary>
+        </TabContainer>
+        <TabContainer active={tab === 'llm'}>
+          <RouteErrorBoundary label="Settings · llm">
+            <LlmSettings />
+          </RouteErrorBoundary>
+        </TabContainer>
+        <TabContainer active={tab === 'agents'}>
+          <RouteErrorBoundary label="Settings · agents">
+            <AgentsSettings />
+          </RouteErrorBoundary>
+        </TabContainer>
+        <TabContainer active={tab === 'mcp'}>
+          <RouteErrorBoundary label="Settings · mcp">
+            <McpSettings />
+          </RouteErrorBoundary>
+        </TabContainer>
+        <TabContainer active={tab === 'memory'}>
+          <RouteErrorBoundary label="Settings · memory">
+            <MemPalaceSettings />
+          </RouteErrorBoundary>
+        </TabContainer>
+        <TabContainer active={tab === 'skills'}>
+          <RouteErrorBoundary label="Settings · skills">
+            <SkillsSettings />
+          </RouteErrorBoundary>
+        </TabContainer>
+        <TabContainer active={tab === 'teams'}>
+          <RouteErrorBoundary label="Settings · teams">
+            <TeamsSettings />
+          </RouteErrorBoundary>
+        </TabContainer>
+        <TabContainer active={tab === 'design'}>
+          <RouteErrorBoundary label="Settings · design">
+            <DesignSettings />
+          </RouteErrorBoundary>
+        </TabContainer>
       </div>
     </section>
+  );
+}
+
+/**
+ * Wrapper that keeps its children mounted but hides them when `active` is
+ * false. Uses both the HTML `hidden` attribute (for assistive tech) and a
+ * `display: none` style so layout is fully suppressed for inactive tabs.
+ *
+ * Exported so __tests__ can assert tab visibility without rendering the full
+ * Settings tree.
+ */
+// Context lets tab subtrees know whether they're currently visible. R1 keeps
+// every tab mounted, so any window-level listener (⌘S) or polling effect must
+// gate on `useTabActive()` to avoid firing while the user is looking at a
+// different tab — without this, a cross-tab ⌘S can save the wrong tab's
+// buffer, and credentialed effects (LLM/MCP) keep refetching invisibly.
+const TabActiveContext = createContext<boolean>(true);
+export function useTabActive(): boolean {
+  return useContext(TabActiveContext);
+}
+
+export function TabContainer({
+  active,
+  children,
+}: {
+  active: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <TabActiveContext.Provider value={active}>
+      <div
+        hidden={!active}
+        // `hidden` alone is enough in modern browsers but Tailwind utilities can
+        // override it (`display: flex` etc. has higher specificity). Forcing
+        // display via style guarantees the inactive subtree contributes zero
+        // height while still keeping React state intact.
+        style={active ? { height: '100%' } : { display: 'none' }}
+        data-tab-active={active ? 'true' : 'false'}
+      >
+        {children}
+      </div>
+    </TabActiveContext.Provider>
   );
 }
 
@@ -188,6 +287,7 @@ function TabSwitch({ tab, onChange }: { tab: Tab; onChange: (t: Tab) => void }) 
 }
 
 function FilesSettings() {
+  const tabActive = useTabActive();
   const activeProject = useWorkspaceStore((s) => {
     const id = s.activeProjectId;
     return s.projects.find((p) => p.id === id) ?? null;
@@ -271,7 +371,12 @@ function FilesSettings() {
   };
 
   // Cmd+S at the page level (in addition to CodeMirror's own keymap).
+  // R1 keep-mounted (v0.30.7): gate on `tabActive` so the listener is only
+  // live while the Files tab is visible. Without this guard, pressing ⌘S
+  // anywhere in Settings would save the FilesSettings selection — including
+  // while the user is viewing a different tab — which is a data hazard.
   useEffect(() => {
+    if (!tabActive) return;
     const handler = (e: KeyboardEvent): void => {
       if ((e.metaKey || e.ctrlKey) && e.key === 's') {
         e.preventDefault();
@@ -281,7 +386,7 @@ function FilesSettings() {
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selected, content, saving]);
+  }, [tabActive, selected, content, saving]);
 
   return (
     <div className="flex h-full">
