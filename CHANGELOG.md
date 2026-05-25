@@ -5,6 +5,77 @@ All notable changes to DevSpace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.30.6] — 2026-05-23
+
+Sidebar follows active chat tab too — extending v0.30.5's editor-tab rule
+to the chat dock. (BRANCH BUILD — `feat/multi-cli`, NOT merged to main
+yet.)
+
+### Changed
+- **Chat dock active column → sidebar sync.** Clicking inside a chat
+  pane body, adding/removing a column, or restoring persisted dock state
+  now also moves FileTree/ProjectList/git store/etc. to that pane's
+  pinned project. v0.30.5 fixed editor tabs but missed chat tabs — this
+  closes that gap.
+- **One-way wiring kept.** Dock active column → sidebar only. The
+  reverse mirror (sidebar → dock active column) is the existing
+  `lastMirroredActiveRef` in `ClaudeCliDock`, which guards against firing
+  again when the new effect just set `activeProjectId` — so no ping-pong.
+
+### Why two paths existed
+Before this fix, `ClaudeCliDock.handleSelect` (the tab chip click)
+already called `setActiveProject` explicitly — but the other paths that
+change `activeColumnId` bypassed it:
+
+- Pane mousedown — only `setActiveColumn`, no project switch
+- `addColumn`/`removeColumn` — copy/drop pin, change active column
+- Persisted-state restore on boot
+
+Each one of those would leave sidebar pointing at the wrong project.
+The new App-level effect derives the project from the active column's
+pin and syncs sidebar uniformly, regardless of how the column changed.
+
+### Implementation
+- Pure helper `deriveProjectIdFromDockColumn(columns, activeColumnId,
+  projects)` in `state/workspace.ts`. Returns the pinned project id if
+  it still exists in `projects`, else null. Guards against stale
+  `activeColumnId` (column removed) and ghost projects (column pins a
+  project that was removed from workspace).
+- `App.tsx` effect subscribes to `(columns, activeColumnId, projects,
+  activeProjectId)` and calls `setActiveProject(derived)` when the
+  derived id differs from the current sidebar selection.
+
+### Tests
+- **988 vitest tests pass** (was 982 → **+6 regression**):
+  - Returns null for missing `activeColumnId`
+  - Returns pinned project for the active column
+  - Returns null for unpinned active column
+  - Returns null for stale `activeColumnId` (column removed)
+  - Returns null for ghost project (pin references removed project)
+  - Returns null for empty columns list
+- Typecheck clean.
+
+### Verification (before merge)
+Same as v0.30.5 — install the dmg, then specifically:
+
+1. Open 2 projects, split into 2 columns side-by-side
+2. Sidebar shows project A active → click inside column 2's pane body
+   (NOT the chip at top) → sidebar should switch to project B
+3. Click ProjectList → activates project, dock follows; tab doesn't
+   move (sidebar→tab is still one-way)
+4. Click chat tab chip in column 2 → sidebar follows (path was
+   already working pre-fix, regression check)
+5. Add a column → split copies pin → sidebar follows the new active
+   column (which inherits the previous pin, so this is a no-op for the
+   sidebar in practice)
+6. Remove a column → active falls back to col-0 → sidebar follows
+
+### Limits (still defer)
+- Same as v0.30.x line — text-only OpenCode streaming, no AskUserQuestion,
+  Qwen tool fidelity depends on model. See v0.30.2-v0.30.5 entries.
+
+---
+
 ## [0.30.5] — 2026-05-23
 
 Sidebar auto-follows the active editor tab. (BRANCH BUILD —

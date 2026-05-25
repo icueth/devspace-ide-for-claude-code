@@ -53,6 +53,28 @@ export function deriveProjectIdFromTab(
   return best?.id ?? null;
 }
 
+// v0.30.6 — derive the project a chat dock column belongs to via its pinned
+// tab. Returns the pinned projectId if it still exists in `projects`, else
+// null. Used to sync sidebar selection when the user clicks within a chat
+// pane body or splits/closes columns — paths that bypass the tab chip's
+// explicit `setActiveProject` call.
+//
+// One-way only: dock-active-column → sidebar. The reverse mirror
+// (sidebar → dock active column) lives in ClaudeCliDock's effect, so this
+// helper must NOT introduce a sidebar→dock dependency, or the two effects
+// will ping-pong.
+export function deriveProjectIdFromDockColumn(
+  columns: ReadonlyArray<{ id: string; pin: { projectId: string } | null }>,
+  activeColumnId: string | null | undefined,
+  projects: ReadonlyArray<Pick<Project, 'id'>>,
+): string | null {
+  if (!activeColumnId) return null;
+  const col = columns.find((c) => c.id === activeColumnId);
+  if (!col?.pin) return null;
+  const exists = projects.some((p) => p.id === col.pin!.projectId);
+  return exists ? col.pin.projectId : null;
+}
+
 // Free PTY sessions tied to a project so closing / evicting releases memory
 // and the claude/shell processes don't linger in the background. undockProject
 // walks every Claude CLI tab the project has spawned plus the per-project

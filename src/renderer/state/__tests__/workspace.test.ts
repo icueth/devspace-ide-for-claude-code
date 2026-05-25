@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
-import { deriveProjectIdFromTab } from '../workspace';
+import {
+  deriveProjectIdFromDockColumn,
+  deriveProjectIdFromTab,
+} from '../workspace';
 
 describe('deriveProjectIdFromTab', () => {
   const projects = [
@@ -102,5 +105,50 @@ describe('deriveProjectIdFromTab', () => {
     expect(
       deriveProjectIdFromTab('design:/Users/x/Code/projA', []),
     ).toBeNull();
+  });
+});
+
+describe('deriveProjectIdFromDockColumn', () => {
+  const projects = [
+    { id: 'a' },
+    { id: 'b' },
+    { id: 'c' },
+  ];
+  const columns = [
+    { id: 'col-0', pin: { projectId: 'a' } },
+    { id: 'col-1', pin: { projectId: 'b' } },
+    { id: 'col-2', pin: null },
+  ];
+
+  it('returns null when activeColumnId is missing', () => {
+    expect(deriveProjectIdFromDockColumn(columns, null, projects)).toBeNull();
+    expect(deriveProjectIdFromDockColumn(columns, undefined, projects)).toBeNull();
+    expect(deriveProjectIdFromDockColumn(columns, '', projects)).toBeNull();
+  });
+
+  it('returns the pinned project for the active column', () => {
+    expect(deriveProjectIdFromDockColumn(columns, 'col-0', projects)).toBe('a');
+    expect(deriveProjectIdFromDockColumn(columns, 'col-1', projects)).toBe('b');
+  });
+
+  it('returns null when the active column has no pin', () => {
+    expect(deriveProjectIdFromDockColumn(columns, 'col-2', projects)).toBeNull();
+  });
+
+  it('returns null when activeColumnId points to a non-existent column', () => {
+    // Stale activeColumnId after a removeColumn — guard against firing
+    // setActiveProject with garbage.
+    expect(deriveProjectIdFromDockColumn(columns, 'col-99', projects)).toBeNull();
+  });
+
+  it('returns null when the pinned project no longer exists', () => {
+    // Project was removed from workspace but column still pins it. Don't
+    // route the sidebar to a ghost project.
+    const stale = [{ id: 'col-0', pin: { projectId: 'ghost' } }];
+    expect(deriveProjectIdFromDockColumn(stale, 'col-0', projects)).toBeNull();
+  });
+
+  it('returns null when columns list is empty', () => {
+    expect(deriveProjectIdFromDockColumn([], 'col-0', projects)).toBeNull();
   });
 });

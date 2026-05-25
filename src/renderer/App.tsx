@@ -43,7 +43,11 @@ import { useGitStore } from '@renderer/state/git';
 import { useLayoutStore } from '@renderer/state/layout';
 import { usePromptStore } from '@renderer/state/prompt';
 import { useSidebarStore } from '@renderer/state/sidebar';
-import { deriveProjectIdFromTab, useWorkspaceStore } from '@renderer/state/workspace';
+import {
+  deriveProjectIdFromDockColumn,
+  deriveProjectIdFromTab,
+  useWorkspaceStore,
+} from '@renderer/state/workspace';
 
 export default function App() {
   return (
@@ -99,6 +103,27 @@ function AppInner() {
       useWorkspaceStore.getState().setActiveProject(derived);
     }
   }, [activeTabPathRaw, projects, activeProjectId]);
+  // v0.30.6 — parallel rule for the chat dock. Clicking the chat tab chip
+  // already calls setActiveProject explicitly (ClaudeCliDock.handleSelect),
+  // but other paths that change the active column don't:
+  //   • Pane mousedown — only sets activeColumnId
+  //   • addColumn / removeColumn / persisted-state restore
+  // This effect derives the project from the active column's pin and syncs
+  // sidebar. One-way (dock → sidebar). The reverse mirror lives in
+  // ClaudeCliDock as `lastMirroredActiveRef`, which guards against firing
+  // again when this effect just set activeProjectId — so no ping-pong loop.
+  const dockColumns = useCliTabsStore((s) => s.columns);
+  const dockActiveColumnId = useCliTabsStore((s) => s.activeColumnId);
+  useEffect(() => {
+    const derived = deriveProjectIdFromDockColumn(
+      dockColumns,
+      dockActiveColumnId,
+      projects,
+    );
+    if (derived && derived !== activeProjectId) {
+      useWorkspaceStore.getState().setActiveProject(derived);
+    }
+  }, [dockColumns, dockActiveColumnId, projects, activeProjectId]);
   const [bottomInitialTab, setBottomInitialTab] = useState<'terminal' | 'git' | 'search'>(
     'terminal',
   );
