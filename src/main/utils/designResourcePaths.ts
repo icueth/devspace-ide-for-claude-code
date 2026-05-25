@@ -27,6 +27,16 @@ export function getBuiltinDesignPacksDir(): string {
   return cachedDesignPacksDir;
 }
 
+/** `<design-packs>/skills` — the bundled SKILL.md collection (nexu-io 0.8.0). */
+export function getBuiltinDesignSkillsDir(): string {
+  return path.join(getBuiltinDesignPacksDir(), 'skills');
+}
+
+/** `<design-packs>/design-systems` — bundled brand DESIGN.md reference docs. */
+export function getBuiltinDesignSystemsDir(): string {
+  return path.join(getBuiltinDesignPacksDir(), 'design-systems');
+}
+
 /**
  * Returns true if the bundled design-packs directory is present on disk.
  *

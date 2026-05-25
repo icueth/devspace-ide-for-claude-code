@@ -107,6 +107,7 @@ import type {
   DevServerInstallResult,
   DevServerStartInput,
 } from '@shared/design';
+import type { PreviewChangedEvent, PreviewFileInfo } from '@shared/preview';
 
 export interface DevspaceApi {
   app: {
@@ -368,6 +369,23 @@ export interface DevspaceApi {
     onEvent: (
       projectPath: string,
       cb: (event: DevServerEvent) => void,
+    ) => () => void;
+  };
+  // v0.31: HTML preview files Claude writes under `<project>/.devspace/preview/`.
+  preview: {
+    // List existing .html preview files (path-contained to .devspace/preview).
+    list: (projectPath: string) => Promise<PreviewFileInfo[]>;
+    // Read one preview file's HTML for the renderer's sandboxed Blob URL.
+    // Path-contained + symlink-guarded in the main process.
+    readHtml: (projectPath: string, htmlPath: string) => Promise<string>;
+    // Begin watching this project's preview dir (idempotent). Required
+    // before onChanged fires.
+    subscribe: (projectPath: string) => Promise<void>;
+    // Streamed add/change/unlink events for the project's preview dir.
+    // Returns an unsubscribe handle.
+    onChanged: (
+      projectPath: string,
+      cb: (event: PreviewChangedEvent) => void,
     ) => () => void;
   };
   codeflow: {
@@ -771,6 +789,12 @@ function makeStubApi(): DevspaceApi {
         } as DevServerInfo),
       installDependencies: notWired('devServer.installDependencies'),
       onEvent: () => () => undefined,
+    },
+    preview: {
+      list: () => Promise.resolve([] as PreviewFileInfo[]),
+      readHtml: notWired('preview.readHtml'),
+      subscribe: () => Promise.resolve(),
+      onChanged: () => () => undefined,
     },
     codeflow: {
       getStatus: notWired('codeflow.getStatus'),

@@ -44,9 +44,9 @@ describe('deriveProjectIdFromTab', () => {
     ).toBe('a');
   });
 
-  it('handles synthetic kinds: design / codeflow / devlog / live-preview', () => {
+  it('handles synthetic kinds: codeflow / devlog / live-preview', () => {
     expect(
-      deriveProjectIdFromTab('design:/Users/x/Code/projA', projects),
+      deriveProjectIdFromTab('codeflow:/Users/x/Code/projA', projects),
     ).toBe('a');
     expect(
       deriveProjectIdFromTab('codeflow:/Users/x/Code/projB', projects),
@@ -63,12 +63,12 @@ describe('deriveProjectIdFromTab', () => {
   });
 
   it('synthetic match is exact equality, NOT prefix', () => {
-    // A design tab whose embedded path doesn't equal any project root must
-    // resolve to null — guards against the (theoretical) case where a
+    // A synthetic tab whose embedded path doesn't equal any project root
+    // must resolve to null — guards against the (theoretical) case where a
     // synthetic key points at a subfolder of a project; falling back to
     // prefix match would route the sidebar to the wrong project.
     expect(
-      deriveProjectIdFromTab('design:/Users/x/Code/projA/extra', projects),
+      deriveProjectIdFromTab('codeflow:/Users/x/Code/projA/extra', projects),
     ).toBeNull();
   });
 
@@ -103,7 +103,7 @@ describe('deriveProjectIdFromTab', () => {
       deriveProjectIdFromTab('/Users/x/Code/projA/index.ts', []),
     ).toBeNull();
     expect(
-      deriveProjectIdFromTab('design:/Users/x/Code/projA', []),
+      deriveProjectIdFromTab('codeflow:/Users/x/Code/projA', []),
     ).toBeNull();
   });
 });

@@ -39,6 +39,7 @@ import { registerMcpIpc } from '@main/ipc/mcp';
 import { registerMemoryIpc } from '@main/ipc/memory';
 import { registerMempalaceIpc } from '@main/ipc/mempalace';
 import { registerMempalaceDataIpc } from '@main/ipc/mempalaceData';
+import { registerPreviewIpc } from '@main/ipc/preview';
 import { registerSetupIpc } from '@main/ipc/setup';
 import { registerSkillsIpc } from '@main/ipc/skills';
 import { registerTeamsIpc } from '@main/ipc/teams';
@@ -54,11 +55,16 @@ import {
 import { shutdownAllOpenCode } from '@main/services/OpenCodeRunner';
 import { shutdownAll as shutdownDevServers } from '@main/services/DevServerService';
 import { shutdownWatchers } from '@main/services/FileWatcherService';
+import { shutdownPreviewWatchers } from '@main/services/PreviewService';
 import { preloadLlmConfig } from '@main/services/LlmConfigService';
 import { preloadProfiles } from '@main/services/LlmChatProfilesService';
 import { preloadProfiles as preloadCliProfiles } from '@main/services/CliProfilesService';
 import { init as initMemory } from '@main/services/MemoryService';
 import { shutdownAll as shutdownPtyPool } from '@main/services/PtyPool';
+import {
+  getSeedingEnabled,
+  seedDesignSkills,
+} from '@main/services/SkillSeedingService';
 import { pruneStaleSessions as pruneStaleTmuxSessions } from '@main/services/TmuxChatRunner';
 import { getTmuxConfigSync } from '@main/services/TmuxConfigService';
 import { resolveInteractiveShellEnv } from '@main/utils/shellEnv';
@@ -271,6 +277,7 @@ app.whenReady().then(async () => {
   registerSkillsIpc();
   registerTeamsIpc();
   registerDevServerIpc();
+  registerPreviewIpc();
   registerMemoryIpc();
   registerDevlogIpc();
   registerForgeIpc();
@@ -285,6 +292,27 @@ app.whenReady().then(async () => {
   void initMemory().catch((err) => {
     console.error('[main] memory init failed:', (err as Error).message);
   });
+
+  // Seed bundled design skills (132) + design-systems (150) into
+  // ~/.claude/skills so the Claude Code CLI can DISCOVER them — it only
+  // looks under ~/.claude + project, never inside the .app bundle.
+  // Idempotent + version-stamped + never clobbers user-authored skills.
+  // Background + best-effort: never blocks boot, never throws.
+  void getSeedingEnabled()
+    .then((enabled) => seedDesignSkills({ enabled }))
+    .then((r) => {
+      if (r.status === 'seeded') {
+        console.log(
+          `[main] design skills seeded: ${r.seededSkills} skills + ${r.seededSystems} systems` +
+            (r.skippedCollisions.length
+              ? ` (kept ${r.skippedCollisions.length} user skills)`
+              : ''),
+        );
+      }
+    })
+    .catch((err) => {
+      console.error('[main] design skill seeding failed:', (err as Error).message);
+    });
 
   // Pre-warm LLM config + chat profile caches so the first autocomplete
   // tick / chat-panel mount doesn't pay the I/O cost. Both are
@@ -348,6 +376,11 @@ app.on('before-quit', (event) => {
     }
     try {
       shutdownWatchers();
+    } catch {
+      /* best-effort */
+    }
+    try {
+      shutdownPreviewWatchers();
     } catch {
       /* best-effort */
     }

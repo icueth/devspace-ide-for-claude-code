@@ -172,6 +172,17 @@ export const IPC = {
   // in-app without leaving devspace).
   DEVSERVER_INSTALL: 'devserver:install',
 
+  // v0.31: HTML Preview. After the Design Studio teardown, design work is
+  // done by Claude itself (via bundled design skills) writing standalone
+  // HTML to `<project>/.devspace/preview/<name>.html`. The main process
+  // watches that dir and emits PREVIEW_CHANGED; the renderer opens/refreshes
+  // a sandboxed iframe tab. READ_HTML returns file contents (path-contained
+  // to .devspace/preview/) for the renderer's Blob URL.
+  PREVIEW_LIST: 'preview:list',
+  PREVIEW_READ_HTML: 'preview:read-html',
+  PREVIEW_SUBSCRIBE: 'preview:subscribe',
+  PREVIEW_CHANGED: 'preview:changed',
+
   // Codeflow — codebase visualization + Claude-generated architecture docs
   CODEFLOW_GET_STATUS: 'codeflow:get-status',
   CODEFLOW_ANALYZE: 'codeflow:analyze',

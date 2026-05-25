@@ -7,6 +7,11 @@ import {
   builtinPacksExist,
   getBuiltinSkillsDir,
 } from '@main/utils/builtinPackPaths';
+import {
+  designPacksExist,
+  getBuiltinDesignPacksDir,
+} from '@main/utils/designResourcePaths';
+import { getSeedingEnabled } from '@main/services/SkillSeedingService';
 import type { SkillDef, SkillScope } from '@shared/types';
 
 const logger = createLogger('Skills');
@@ -21,6 +26,15 @@ function projectSkillsDir(projectPath: string): string {
 
 function pluginMarketplacesDir(): string {
   return path.join(homedir(), '.claude', 'plugins', 'marketplaces');
+}
+
+// Second builtin skills root: the bundled design-packs ship 100+ design
+// SKILL.md (layouts) under `design-packs/skills/`. These surface as the
+// SAME `builtin` scope as the main builtin pack — listed in Settings →
+// Skills, read-only, duplicate-to-use. Containment/scope checks below treat
+// BOTH `builtin-packs/skills` and `design-packs/skills` as builtin roots.
+function builtinDesignSkillsDir(): string {
+  return path.join(getBuiltinDesignPacksDir(), 'skills');
 }
 
 // Same caps + slug regex as AgentsService — skills are markdown +
@@ -52,11 +66,20 @@ function isValidSkillPath(filePath: string): boolean {
   // known absolute roots. Cap the walk at 12 levels so a pathological
   // input can't spin.
   const builtinDir = path.resolve(getBuiltinSkillsDir());
+  const designSkillsDir = path.resolve(builtinDesignSkillsDir());
   const marketplacesDir = path.resolve(pluginMarketplacesDir());
 
   if (
     resolved === path.join(builtinDir, slug, 'SKILL.md') ||
     isUnderPrefix(resolved, builtinDir)
+  ) {
+    return true;
+  }
+  // The bundled design-packs skills are a second builtin root — accept them
+  // so duplication + reading works exactly like the main builtin pack.
+  if (
+    resolved === path.join(designSkillsDir, slug, 'SKILL.md') ||
+    isUnderPrefix(resolved, designSkillsDir)
   ) {
     return true;
   }
@@ -102,7 +125,11 @@ export function assertValidSkillPath(filePath: string): void {
 function isInBuiltinSkillsDir(filePath: string): boolean {
   const resolved = path.resolve(filePath);
   const builtinDir = path.resolve(getBuiltinSkillsDir()) + path.sep;
-  return resolved.startsWith(builtinDir);
+  const designDir = path.resolve(builtinDesignSkillsDir()) + path.sep;
+  // BOTH bundled roots are read-only builtins — save/delete must refuse to
+  // mutate either, so the design-packs skills behave like every other
+  // builtin (duplicate-to-edit only).
+  return resolved.startsWith(builtinDir) || resolved.startsWith(designDir);
 }
 
 function isInPluginMarketplacesDir(filePath: string): boolean {
@@ -143,6 +170,16 @@ export async function listSkills(
   if (await builtinPacksExist()) {
     await collectFromDir(getBuiltinSkillsDir(), 'builtin', out);
   }
+  // v0.31: bundled design-packs ship layout SKILL.md under
+  // `design-packs/skills/`. When seeding is ENABLED (the default), those same
+  // slugs are copied into `~/.claude/skills` and collected above as `global`
+  // — so surfacing the builtin root too would list every design skill twice
+  // (active-global + dimmed-builtin). We therefore only add the builtin root
+  // as a *fallback* for visibility when seeding is disabled. Guarded by the
+  // bundle existence check — a fresh clone without the design bundle skips it.
+  if ((await designPacksExist()) && !(await getSeedingEnabled())) {
+    await collectFromDir(builtinDesignSkillsDir(), 'builtin', out);
+  }
 
   // Precedence: project > global > plugin > builtin. Lower-priority
   // entries with a shadowed slug get `overridden = true`; the winner is
@@ -174,9 +211,10 @@ export async function readSkill(filePath: string): Promise<SkillDef> {
   // sibling like `~/.claude/skills-other/` can't masquerade as global.
   const resolved = path.resolve(filePath);
   const builtinPrefix = path.resolve(getBuiltinSkillsDir()) + path.sep;
+  const designPrefix = path.resolve(builtinDesignSkillsDir()) + path.sep;
   const globalPrefix = path.resolve(globalSkillsDir()) + path.sep;
   let scope: SkillScope;
-  if (resolved.startsWith(builtinPrefix)) {
+  if (resolved.startsWith(builtinPrefix) || resolved.startsWith(designPrefix)) {
     scope = 'builtin';
   } else if (isInPluginMarketplacesDir(resolved)) {
     scope = 'plugin';

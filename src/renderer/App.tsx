@@ -38,6 +38,7 @@ import { UpdateBadge } from '@renderer/components/UpdateBadge';
 import { Welcome } from '@renderer/components/Welcome/Welcome';
 import { api } from '@renderer/lib/api';
 import { cn } from '@renderer/lib/utils';
+import { pickLatestPreview } from '@renderer/components/Editor/HtmlPreviewView';
 import { useEditorStore } from '@renderer/state/editor';
 import { useCliTabsStore } from '@renderer/state/cliTabs';
 import { useEditorViewStore } from '@renderer/state/editorView';
@@ -69,6 +70,7 @@ function AppInner() {
   const openCodeflow = useEditorStore((s) => s.openCodeflow);
   const openLivePreview = useEditorStore((s) => s.openLivePreview);
   const openDevlog = useEditorStore((s) => s.openDevlog);
+  const openHtmlPreview = useEditorStore((s) => s.openHtmlPreview);
 
   const sidebarWidth = useLayoutStore((s) => s.sidebarWidth);
   const dockWidth = useLayoutStore((s) => s.dockWidth);
@@ -226,6 +228,51 @@ function AppInner() {
       window.removeEventListener('focus', onFocus);
     };
   }, [activeProject, refreshGit]);
+
+  // v0.31 — HTML preview auto-open / auto-refresh. For the ACTIVE project we
+  // watch `<project>/.devspace/preview/` and react to PREVIEW_CHANGED events:
+  //   • add    → open a fresh html-preview tab (the "magic" auto-open).
+  //   • change → if a tab for that file is already open, reopen it (bumps
+  //              reloadKey → iframe re-reads). If NOT open, do nothing — we
+  //              never steal focus on a write the user isn't watching.
+  //   • unlink → leave any open tab in place so it shows the "no longer
+  //              exists" error on its next manual refresh. Simpler + non-
+  //              destructive (we don't yank the user out of a tab they may
+  //              still be reading), and avoids a close() call racing the
+  //              watcher when the file is rewritten quickly.
+  // Cleanup mirrors the git-refresh effect: the onChanged unsubscribe handle
+  // is torn down whenever the active project changes or the app unmounts, so
+  // we never carry a stale listener (and never double-subscribe a project).
+  useEffect(() => {
+    if (!activeProject) return;
+    const projectPath = activeProject.path;
+    let disposed = false;
+    let off: (() => void) | undefined;
+
+    void api.preview.subscribe(projectPath).catch(() => undefined);
+    off = api.preview.onChanged(projectPath, (event) => {
+      if (disposed) return;
+      // Defensive: the channel is per-project, but guard against any
+      // cross-project leakage before mutating editor state.
+      if (event.projectPath !== projectPath) return;
+      const { file, kind } = event;
+      if (kind === 'add') {
+        openHtmlPreview(projectPath, file.path, file.name);
+      } else if (kind === 'change') {
+        const tabKey = `html-preview:${file.path}`;
+        const isOpen = useEditorStore
+          .getState()
+          .tabs.some((t) => t.path === tabKey);
+        if (isOpen) openHtmlPreview(projectPath, file.path, file.name);
+      }
+      // kind === 'unlink' → intentionally no-op (see comment above).
+    });
+
+    return () => {
+      disposed = true;
+      off?.();
+    };
+  }, [activeProject, openHtmlPreview]);
 
   // Global shortcuts: Cmd+Shift+F = search, Cmd+P = quick open, Cmd+G = go-to-line,
   // Cmd+N = new file, Cmd+Shift+L = send editor selection to active Claude CLI pane.
@@ -387,6 +434,28 @@ function AppInner() {
           if (activeProject) openDevlog(activeProject.path, activeProject.name);
         },
       },
+      {
+        // v0.31 — opens the most-recently-modified HTML preview Claude wrote
+        // under `.devspace/preview/`. Scoped small per the brief: a single
+        // "latest" entry point rather than a full file picker. Lists + picks
+        // async on activation so the command list stays cheap to build.
+        id: 'nav.htmlpreview',
+        title: 'Open latest HTML preview',
+        keywords: 'html preview design claude generated page',
+        group: 'Navigate',
+        requiresProject: true,
+        run: () => {
+          if (!activeProject) return;
+          const projectPath = activeProject.path;
+          void api.preview
+            .list(projectPath)
+            .then((files) => {
+              const latest = pickLatestPreview(files);
+              if (latest) openHtmlPreview(projectPath, latest.path, latest.name);
+            })
+            .catch(() => undefined);
+        },
+      },
       // Editor toggles
       {
         id: 'layout.bottom',
@@ -492,7 +561,7 @@ function AppInner() {
       { id: 'settings.teams', title: 'Open Teams settings', keywords: 'multi-agent team', group: 'Settings', run: () => openSettings('teams') },
     ];
     return cmds;
-  }, [activeProject, openCodeflow, openLivePreview, openDevlog]);
+  }, [activeProject, openCodeflow, openLivePreview, openDevlog, openHtmlPreview]);
 
   const dockVisible = openedProjectIds.length > 0;
   const showBottom = bottomOpen && activeProject;

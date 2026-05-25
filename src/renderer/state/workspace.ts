@@ -13,7 +13,7 @@ const LS_KEY = 'devspace:workspace:v1';
 // file outside every known project root).
 //
 // Tab path conventions handled:
-//   • Synthetic `<kind>:<projectPath>` for design/codeflow/devlog/live-preview
+//   • Synthetic `<kind>:<projectPath>` for codeflow/devlog/live-preview
 //   • `diff:<absPath>` for git diff tabs
 //   • Plain absolute file paths for text/image/pdf tabs
 //
@@ -27,7 +27,7 @@ export function deriveProjectIdFromTab(
 ): string | null {
   if (!tabPath) return null;
   // Synthetic kinds: <kind>:<projectPath>
-  const SYNTHETIC_KINDS = ['design', 'codeflow', 'devlog', 'live-preview'];
+  const SYNTHETIC_KINDS = ['codeflow', 'devlog', 'live-preview'];
   for (const kind of SYNTHETIC_KINDS) {
     const prefix = `${kind}:`;
     if (tabPath.startsWith(prefix)) {
@@ -330,7 +330,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
           const owned =
             t.path === root ||
             t.path.startsWith(`${root}/`) ||
-            t.path.endsWith(`:${root}`); // design:<root>, codeflow:<root>, etc.
+            t.path.endsWith(`:${root}`); // codeflow:<root>, devlog:<root>, etc.
           if (owned) {
             editor.close(t.path, 'left');
             editor.close(t.path, 'right');

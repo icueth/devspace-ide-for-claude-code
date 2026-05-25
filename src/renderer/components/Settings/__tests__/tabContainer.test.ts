@@ -94,8 +94,8 @@ describe('SettingsPage · TabContainer contract (Perf R1)', () => {
     expect(visible.children).toBe(hidden.children);
   });
 
-  it('renders all 11 Settings tabs simultaneously with exactly one visible', () => {
-    // Models the actual SettingsPage layout: 11 wrappers, one active.
+  it('renders all 10 Settings tabs simultaneously with exactly one visible', () => {
+    // Models the actual SettingsPage layout: 10 wrappers, one active.
     const TABS: string[] = [
       'setup',
       'account',
@@ -107,19 +107,18 @@ describe('SettingsPage · TabContainer contract (Perf R1)', () => {
       'memory',
       'skills',
       'teams',
-      'design',
     ];
     const active = 'agents';
     const wrappers = TABS.map((id) =>
       tabContainer(id === active, createElement('section', { 'data-tab-id': id })),
     );
-    expect(wrappers).toHaveLength(11);
+    expect(wrappers).toHaveLength(10);
     const visibleCount = wrappers.filter(
       (w) => propsOf(w)['data-tab-active'] === 'true',
     ).length;
     expect(visibleCount).toBe(1);
     // Every other wrapper must still mount its child — proves the "keep
-    // mounted" invariant for the 10 hidden tabs.
+    // mounted" invariant for the 9 hidden tabs.
     for (const w of wrappers) {
       expect(propsOf(w).children).toBeDefined();
     }

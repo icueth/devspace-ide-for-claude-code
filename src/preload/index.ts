@@ -355,6 +355,30 @@ const api = {
       return () => ipcRenderer.off(IPC.DEVSERVER_EVENT, listener);
     },
   },
+  preview: {
+    list: (projectPath: string) =>
+      ipcRenderer.invoke(IPC.PREVIEW_LIST, projectPath),
+    readHtml: (projectPath: string, htmlPath: string) =>
+      ipcRenderer.invoke(IPC.PREVIEW_READ_HTML, projectPath, htmlPath),
+    subscribe: (projectPath: string) =>
+      ipcRenderer.invoke(IPC.PREVIEW_SUBSCRIBE, projectPath),
+    onChanged: (
+      projectPath: string,
+      cb: (event: import('@shared/preview').PreviewChangedEvent) => void,
+    ) => {
+      const listener = (
+        _e: unknown,
+        ev: {
+          projectPath: string;
+          event: import('@shared/preview').PreviewChangedEvent;
+        },
+      ) => {
+        if (ev.projectPath === projectPath) cb(ev.event);
+      };
+      ipcRenderer.on(IPC.PREVIEW_CHANGED, listener);
+      return () => ipcRenderer.off(IPC.PREVIEW_CHANGED, listener);
+    },
+  },
   codeflow: {
     getStatus: (projectPath: string) =>
       ipcRenderer.invoke(IPC.CODEFLOW_GET_STATUS, projectPath),

@@ -4,10 +4,7 @@ import {
   ChevronDown,
   CircleDot,
   Copy,
-  Eye,
   Loader2,
-  MousePointer,
-  Pencil,
   Play,
   RotateCw,
   Square,
@@ -16,7 +13,6 @@ import { useState } from 'react';
 
 import { cn } from '@renderer/lib/utils';
 import type {
-  DesignWebviewMode,
   DevServerInfo,
   DevServerKind,
   DevServerStatus,
@@ -37,8 +33,6 @@ export interface LivePreviewToolbarProps {
    * value asks the host to confirm + restart with the new script.
    */
   onScriptChange?: (scriptName: string) => void;
-  mode: DesignWebviewMode;
-  onModeChange: (mode: DesignWebviewMode) => void;
   /** Disable start/stop while a transition is in flight. */
   busy?: boolean;
 }
@@ -62,10 +56,8 @@ const FRAMEWORK_LABEL: Record<DevServerKind, string> = {
 };
 
 /**
- * Top bar for the Live Preview pane. Mirrors `DesignToolbar` visual
- * language: a gradient strip with a status pill on one side, a URL
- * chip + action button cluster on the other, and a mode toggle that
- * gates inspection in the webview.
+ * Top bar for the Live Preview pane: a gradient strip with a status pill
+ * on one side and a URL chip + action button cluster on the other.
  */
 export function LivePreviewToolbar({
   info,
@@ -75,18 +67,12 @@ export function LivePreviewToolbar({
   onRefresh,
   refreshing,
   onScriptChange,
-  mode,
-  onModeChange,
   busy,
 }: LivePreviewToolbarProps) {
   const running = info.status === 'running';
   const starting = info.status === 'starting';
   const canStop = running || starting;
   const canStart = !canStop;
-  // Mode controls only matter once the webview can host the bridge.
-  // Disabling them in other states avoids users wondering why clicks
-  // don't do anything.
-  const modeDisabled = !running;
   // Refresh is unsafe mid-spawn: the detection mutation would race with
   // the PTY URL parser. Block it.
   const refreshDisabled = starting || !!busy;
@@ -120,12 +106,6 @@ export function LivePreviewToolbar({
           disabled={!!busy}
         />
       )}
-
-      <ModeToggle
-        mode={mode}
-        onChange={onModeChange}
-        disabled={modeDisabled}
-      />
 
       <div className="flex-1" />
 
@@ -339,35 +319,6 @@ function StatusPill({ status, errorMessage }: StatusPillProps) {
   );
 }
 
-// ─── Mode toggle (View / Inspect / Edit) ─────────────────────────────
-
-interface ModeToggleProps {
-  mode: DesignWebviewMode;
-  onChange: (mode: DesignWebviewMode) => void;
-  disabled?: boolean;
-}
-
-const MODE_OPTIONS: Array<{
-  value: DesignWebviewMode;
-  icon: React.ReactNode;
-  label: string;
-  title: string;
-}> = [
-  { value: 'view', icon: <Eye size={11} />, label: 'View', title: 'View only' },
-  {
-    value: 'inspect',
-    icon: <MousePointer size={11} />,
-    label: 'Inspect',
-    title: 'Hover to highlight, click to inspect element',
-  },
-  {
-    value: 'edit',
-    icon: <Pencil size={11} />,
-    label: 'Edit',
-    title: 'Inline style edits (read-only preview in Phase C — write-back lands in 0.8)',
-  },
-];
-
 // ─── Refresh button (re-runs detection only) ─────────────────────────
 
 interface RefreshButtonProps {
@@ -452,41 +403,4 @@ function ToolbarScriptPicker({
 function truncate(s: string, n: number): string {
   if (s.length <= n) return s;
   return `${s.slice(0, n - 1)}…`;
-}
-
-function ModeToggle({ mode, onChange, disabled }: ModeToggleProps) {
-  return (
-    <div
-      className={cn(
-        'inline-flex overflow-hidden rounded-[6px] border border-border-subtle bg-surface-3',
-        disabled && 'opacity-50',
-      )}
-      role="group"
-      aria-label="Preview mode"
-    >
-      {MODE_OPTIONS.map((opt) => {
-        const active = mode === opt.value;
-        return (
-          <button
-            key={opt.value}
-            type="button"
-            title={opt.title}
-            disabled={disabled}
-            onClick={() => onChange(opt.value)}
-            aria-pressed={active}
-            className={cn(
-              'inline-flex h-[26px] items-center gap-1 px-2 text-[10.5px] font-medium transition',
-              active
-                ? 'bg-[rgba(76,141,255,0.18)] text-accent'
-                : 'text-text-muted hover:bg-surface-4 hover:text-text',
-              disabled && 'pointer-events-none',
-            )}
-          >
-            {opt.icon}
-            {opt.label}
-          </button>
-        );
-      })}
-    </div>
-  );
 }

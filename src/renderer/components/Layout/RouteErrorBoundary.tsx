@@ -14,7 +14,7 @@ interface RouteErrorBoundaryState {
  * editor-tab view so a single broken pane can't blank the whole app.
  *
  * Without this, an uncaught render error inside a lazy-loaded view
- * (DesignView, CodeflowView, MarkdownPreview, etc.) bubbles all the
+ * (CodeflowView, LivePreviewView, MarkdownPreview, etc.) bubbles all the
  * way up past the Suspense fallback and React unmounts the root tree
  * — the user sees a black screen with no way to recover.
  */

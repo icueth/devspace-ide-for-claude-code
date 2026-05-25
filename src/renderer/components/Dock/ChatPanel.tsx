@@ -88,9 +88,7 @@ import {
   useChatQueueStore,
   type QueuedMessage,
 } from '@renderer/state/chatQueue';
-import { useEditorStore } from '@renderer/state/editor';
 import { useForgePrefillStore } from '@renderer/state/forgePrefill';
-import { suggestSkillSlugs, type DesignSkill } from '@shared/design';
 import type {
   ChatEvent,
   ChatMessage,
@@ -389,16 +387,8 @@ export function ChatPanel({ projectPath }: ChatPanelProps) {
   // Sits just above the input area so it doesn't fight the message scroll
   // region and stays in the user's eyeline as they review the prefill.
   const [notice, setNotice] = useState<string | null>(null);
-  // Available design skills, fetched once on mount and cached for the
-  // life of the panel. Used by the right-click menu to enable / disable
-  // the "Generate landing page" / "Generate dashboard" entries based on
-  // what the user actually has installed (built-in + project + global).
-  // We use a ref instead of state so re-fetching doesn't ripple through
-  // re-renders — the menu reads the latest snapshot at click time.
-  const skillsRef = useRef<DesignSkill[]>([]);
   // Floating context-menu state for assistant message bubbles. `target`
-  // captures the message + the user's text selection at right-click time
-  // so the menu actions know what brief to send to the Design pane.
+  // captures the message + the user's text selection at right-click time.
   const [menu, setMenu] = useState<{
     x: number;
     y: number;
@@ -755,27 +745,6 @@ export function ChatPanel({ projectPath }: ChatPanelProps) {
     };
   }, [loadCliProfiles]);
 
-  // Pull the design skills catalog once on mount + whenever the project
-  // changes. Cached in skillsRef so the bubble right-click menu can build
-  // accurate enabled/disabled state without an IPC round trip per click.
-  // Failure is non-fatal: an empty skills list just disables the
-  // skill-specific menu entries (heuristic-based "Generate design" still
-  // works because openDesign accepts an undefined skillSlug).
-  useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      try {
-        const list = await api.design.listSkills(projectPath);
-        if (!cancelled) skillsRef.current = list;
-      } catch (err) {
-        console.error('[chat] failed to load skills for context menu', err);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [projectPath]);
-
   // Auto-dismiss the inline prefill toast after 2s. Using setTimeout +
   // clearing on unmount / replacement prevents a stale timer from
   // closing a fresh notice early.
@@ -806,16 +775,17 @@ export function ChatPanel({ projectPath }: ChatPanelProps) {
     };
   }, []);
 
-  // Subscribe to Design → Chat prefill bridge events. When an event for
-  // OUR project arrives: optionally spin up a fresh thread, drop the
-  // composed text into the input box, focus the textarea, and surface a
-  // brief inline confirmation so the user knows where the text came from.
+  // Subscribe to chat prefill bridge events (FileTree "Add to Chat" +
+  // drag-and-drop file attach). When an event for OUR project arrives:
+  // optionally spin up a fresh thread, drop the composed text into the
+  // input box, focus the textarea, and surface a brief inline
+  // confirmation so the user knows where the text came from.
   useEffect(() => {
     return onChatPrefill((event) => {
       if (event.projectPath !== projectPath) return;
       // Attach mode: append `@<rel> ` via insertAttachment instead of
-      // replacing the input. Skips thread creation + the "Design context"
-      // toast — those are wrong for a file attach.
+      // replacing the input. Skips thread creation + the toast — those
+      // are wrong for a file attach.
       if (event.attachPath) {
         insertAttachment(event.attachPath);
         requestAnimationFrame(() => {
@@ -858,7 +828,7 @@ export function ChatPanel({ projectPath }: ChatPanelProps) {
           }
           el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
         });
-        setNotice('Design context loaded — review and send.');
+        setNotice('Context loaded — review and send.');
       })();
     });
   }, [projectPath, insertAttachment]);
@@ -1440,60 +1410,11 @@ export function ChatPanel({ projectPath }: ChatPanelProps) {
     [openBubbleMenu],
   );
 
-  // Resolve "what brief should we send to Design?" from a right-click
-  // target. Selection wins when the user highlighted text inside the
-  // bubble; otherwise we fall back to message.content, then to the
-  // joined prose-segment text. Markdown code fences are stripped so
-  // pasted code blocks don't bias the planner toward "code", and the
-  // result is capped at 4KB to stay well under the design composer's
-  // input limits.
-  const extractBrief = useCallback(
-    (message: ChatMessage, selection: string): string => {
-      const raw = selection || message.content || joinProseSegments(message);
-      const stripped = stripMarkdownFences(raw).trim();
-      return stripped.length > MAX_BRIEF_CHARS
-        ? stripped.slice(0, MAX_BRIEF_CHARS)
-        : stripped;
-    },
-    [],
-  );
-
-  // Send the brief over to the Design pane: pick a skill (heuristic or
-  // explicit override), then route through useEditorStore.openDesign,
-  // which either opens a new design tab pre-filled or updates the
-  // existing tab's prefill so DesignView re-hydrates the composer.
-  const sendToDesign = useCallback(
-    (
-      message: ChatMessage,
-      selection: string,
-      override: 'auto' | string,
-    ): void => {
-      const brief = extractBrief(message, selection);
-      if (!brief) return;
-      const slugs = skillsRef.current.map((s) => s.slug);
-      const resolved =
-        override === 'auto'
-          ? (suggestSkillSlugs(brief, slugs)[0] ?? undefined)
-          : slugs.includes(override)
-            ? override
-            : undefined;
-      const projectName = basename(projectPath);
-      useEditorStore.getState().openDesign(projectPath, projectName, {
-        brief,
-        ...(resolved ? { skillSlug: resolved } : {}),
-      });
-    },
-    [extractBrief, projectPath],
-  );
-
   // Build the menu items snapshot for the floating menu. Memo not
   // strictly needed — this fn runs at most once per right-click — but
   // keeping it inline makes the disabled-state logic obvious.
   const buildMenuItems = useCallback(
-    (message: ChatMessage, selection: string): TerminalMenuItem[] => {
-      const slugs = new Set(skillsRef.current.map((s) => s.slug));
-      const brief = extractBrief(message, selection);
-      const hasBrief = brief.length > 0;
+    (message: ChatMessage): TerminalMenuItem[] => {
       // User messages get a minimal menu — memory capture lives in MemPalace
       // now, populated automatically by the SessionStop hook, so we don't
       // surface a "save to memory" item here anymore.
@@ -1511,29 +1432,6 @@ export function ChatPanel({ projectPath }: ChatPanelProps) {
       }
       return [
         {
-          id: 'gen-design',
-          label: selection
-            ? 'Generate design from selection'
-            : 'Generate design from this',
-          disabled: !hasBrief,
-          onSelect: () => sendToDesign(message, selection, 'auto'),
-        },
-        {
-          id: 'gen-landing',
-          label: 'Generate landing page from this',
-          disabled: !hasBrief || !slugs.has('landing'),
-          hint: slugs.has('landing') ? undefined : 'no skill',
-          onSelect: () => sendToDesign(message, selection, 'landing'),
-        },
-        {
-          id: 'gen-dashboard',
-          label: 'Generate dashboard from this',
-          disabled: !hasBrief || !slugs.has('dashboard'),
-          hint: slugs.has('dashboard') ? undefined : 'no skill',
-          onSelect: () => sendToDesign(message, selection, 'dashboard'),
-        },
-        { id: 'sep-1', label: '', separator: true },
-        {
           id: 'copy',
           label: 'Copy text',
           disabled: !message.content && !joinProseSegments(message),
@@ -1544,7 +1442,7 @@ export function ChatPanel({ projectPath }: ChatPanelProps) {
         },
       ];
     },
-    [extractBrief, sendToDesign],
+    [],
   );
 
   // Execute a parsed slash command. Returns true if the input should be
@@ -2217,17 +2115,13 @@ export function ChatPanel({ projectPath }: ChatPanelProps) {
         <TerminalContextMenu
           x={menu.x}
           y={menu.y}
-          items={buildMenuItems(menu.message, menu.selection)}
+          items={buildMenuItems(menu.message)}
           onClose={() => setMenu(null)}
         />
       )}
     </div>
   );
 }
-
-// Cap for briefs piped into the Design composer via right-click. 4KB
-// is well under the design pane's input limit and matches the spec.
-const MAX_BRIEF_CHARS = 4 * 1024;
 
 // Joins all prose-kind segments of a (possibly segmented) assistant
 // message into a single plaintext blob. Used as a fallback when
@@ -2241,23 +2135,6 @@ function joinProseSegments(message: ChatMessage): string {
     if (s.kind === 'text' && s.text) out.push(s.text);
   }
   return out.join('\n').trim();
-}
-
-// Strips ```lang ... ``` fences (and their language tags) from a chunk
-// of markdown so the Design planner gets the user-readable prose, not a
-// dump of code that biases skill suggestion. Inline `code` is left
-// alone — the noise cost is small and stripping it would mangle words.
-function stripMarkdownFences(text: string): string {
-  return text.replace(/```[\w-]*\n?[\s\S]*?```/g, '').replace(/\n{3,}/g, '\n\n');
-}
-
-// Project name from absolute path. ChatPanel only receives the path —
-// openDesign needs a friendly tab label, so we derive it from the last
-// non-empty path segment.
-function basename(p: string): string {
-  const trimmed = p.replace(/[\\/]+$/, '');
-  const idx = Math.max(trimmed.lastIndexOf('/'), trimmed.lastIndexOf('\\'));
-  return idx === -1 ? trimmed : trimmed.slice(idx + 1);
 }
 
 const MessageBubble = memo(function MessageBubble({

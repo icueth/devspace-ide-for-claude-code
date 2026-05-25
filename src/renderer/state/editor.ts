@@ -11,7 +11,8 @@ export type EditorTabKind =
   | 'pdf'
   | 'codeflow'
   | 'live-preview'
-  | 'devlog';
+  | 'devlog'
+  | 'html-preview';
 
 export interface EditorTab {
   path: string;
@@ -43,6 +44,15 @@ export interface EditorTab {
   // Populated when kind === 'devlog' — points the Devlog tab at the project
   // whose `.devspace/devlog/` should be shown. Tab `path` = `devlog:<projectPath>`.
   devlogProjectPath?: string;
+  // Populated when kind === 'html-preview' (v0.31) — the project root and the
+  // absolute path of the HTML file Claude wrote under `.devspace/preview/`.
+  // Tab `path` is the synthetic key `html-preview:<htmlPreviewPath>` so each
+  // preview file gets its own tab (mirrors text-tab keying).
+  htmlPreviewProjectPath?: string;
+  htmlPreviewPath?: string;
+  // Cache-buster bumped on PREVIEW_CHANGED so the iframe reloads even when
+  // the tab path (the file path) is unchanged.
+  htmlPreviewReloadKey?: number;
 }
 
 export interface OpenOptions {
@@ -87,6 +97,14 @@ interface EditorState {
   openLivePreview: (projectPath: string, projectName: string) => void;
   // v0.24: per-project Devlog tab. Synthetic key `devlog:<projectPath>`.
   openDevlog: (projectPath: string, projectName: string) => void;
+  // v0.31: HTML preview tab for a file Claude wrote under .devspace/preview/.
+  // Keyed by the html file path; reopening the same file refreshes (bumps
+  // reloadKey) instead of duplicating the tab.
+  openHtmlPreview: (
+    projectPath: string,
+    htmlPath: string,
+    name?: string,
+  ) => void;
   close: (path: string, pane?: PaneId) => void;
   closeOthers: (path: string, pane?: PaneId) => void;
   closeToRight: (path: string, pane?: PaneId) => void;
@@ -282,6 +300,36 @@ export const useEditorStore = create<
       savedContent: '',
       loading: false,
       devlogProjectPath: projectPath,
+    };
+    set((s) => ({ tabs: [...s.tabs, tab], activeTabPath: tabPath }));
+  },
+
+  openHtmlPreview(projectPath, htmlPath, name) {
+    const tabPath = `html-preview:${htmlPath}`;
+    const existing = get().tabs.find((t) => t.path === tabPath);
+    if (existing) {
+      // Reopen = focus + force the iframe to reload latest contents.
+      set((s) => ({
+        tabs: s.tabs.map((t) =>
+          t.path === tabPath
+            ? { ...t, htmlPreviewReloadKey: (t.htmlPreviewReloadKey ?? 0) + 1 }
+            : t,
+        ),
+        activeTabPath: tabPath,
+      }));
+      return;
+    }
+    const base = name ?? htmlPath.split('/').pop() ?? 'preview.html';
+    const tab: EditorTab = {
+      path: tabPath,
+      name: `${base} · Preview`,
+      kind: 'html-preview',
+      content: '',
+      savedContent: '',
+      loading: false,
+      htmlPreviewProjectPath: projectPath,
+      htmlPreviewPath: htmlPath,
+      htmlPreviewReloadKey: 0,
     };
     set((s) => ({ tabs: [...s.tabs, tab], activeTabPath: tabPath }));
   },

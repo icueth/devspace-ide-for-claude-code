@@ -26,11 +26,6 @@ const CodeflowView = lazy(() =>
     default: m.CodeflowView,
   })),
 );
-const DesignView = lazy(() =>
-  import('@renderer/components/Design/DesignView').then((m) => ({
-    default: m.DesignView,
-  })),
-);
 const LivePreviewView = lazy(() =>
   import('@renderer/components/LivePreview/LivePreviewView').then((m) => ({
     default: m.LivePreviewView,
@@ -39,6 +34,11 @@ const LivePreviewView = lazy(() =>
 const DevlogView = lazy(() =>
   import('@renderer/components/Editor/DevlogView').then((m) => ({
     default: m.DevlogView,
+  })),
+);
+const HtmlPreviewView = lazy(() =>
+  import('@renderer/components/Editor/HtmlPreviewView').then((m) => ({
+    default: m.HtmlPreviewView,
   })),
 );
 // CodeMirror engine (cm-core 1.9MB + 16 grammar packs) is the heaviest single
@@ -246,12 +246,6 @@ function EditorBody({ tab, onChange, onSave, onNavDone, mdMode }: EditorBodyProp
             <CodeflowView projectPath={tab.codeflowProjectPath ?? ''} />
           </Suspense>
         </RouteErrorBoundary>
-      ) : tab.kind === 'design' ? (
-        <RouteErrorBoundary label="Design Studio">
-          <Suspense fallback={<LazyFallback label="Loading design studio…" />}>
-            <DesignView projectPath={tab.designProjectPath ?? ''} />
-          </Suspense>
-        </RouteErrorBoundary>
       ) : tab.kind === 'live-preview' ? (
         <RouteErrorBoundary label="Live Preview">
           <Suspense fallback={<LazyFallback label="Loading live preview…" />}>
@@ -262,6 +256,16 @@ function EditorBody({ tab, onChange, onSave, onNavDone, mdMode }: EditorBodyProp
         <RouteErrorBoundary label="Devlog">
           <Suspense fallback={<LazyFallback label="Loading devlog…" />}>
             <DevlogView tab={tab} />
+          </Suspense>
+        </RouteErrorBoundary>
+      ) : tab.kind === 'html-preview' ? (
+        <RouteErrorBoundary label="HTML Preview">
+          <Suspense fallback={<LazyFallback label="Loading preview…" />}>
+            <HtmlPreviewView
+              projectPath={tab.htmlPreviewProjectPath!}
+              htmlPath={tab.htmlPreviewPath!}
+              reloadKey={tab.htmlPreviewReloadKey}
+            />
           </Suspense>
         </RouteErrorBoundary>
       ) : tab.kind === 'image' ? (

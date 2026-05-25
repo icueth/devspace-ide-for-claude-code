@@ -5,6 +5,47 @@ All notable changes to DevSpace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.31.0] — 2026-05-25
+
+Design Studio teardown → design-as-skills + HTML preview. The bespoke
+~29K-LOC Design Studio (DesignService, DesignGenerator, AppPlanner, the 4
+style-adapter write-back engines, ProjectProfileBuilder, ThemeExtractor, and
+all `components/Design/*`) is removed. Design work is now done by Claude
+itself using bundled design skills, with a sandboxed HTML preview.
+
+### Removed
+- Entire Design Studio surface: generation pipeline, version history,
+  multi-screen App Planner, project tokens, and the Tailwind / vanilla-CSS /
+  styled-components / CSS-Modules write-back adapters (v0.8–0.9 work).
+- 28 `DESIGN_*` IPC channels + style-adapter channels, design types,
+  `api.design` / `api.styleAdapter` surfaces, the `design` editor tab.
+- Live Preview's inspect/edit/write-back overlay (EditPanel, element
+  inspector). **Kept** as a pure dev-server viewer (webview + navigation +
+  DevServerService lifecycle + log pane).
+
+### Added
+- **Design-as-skills**: the bundled `design-packs/` (132 layout SKILL.md +
+  150 brand design-systems) now reaches Claude. A `SkillSeedingService`
+  copies them into `~/.claude/skills` on boot so the Claude Code CLI
+  discovers + uses them natively — manifest-tracked, version-upgrade aware,
+  never clobbers user-authored skills, idempotent, containment-guarded, and
+  opt-out via `~/.devspace/design-seeding.json` (default on). Symlink entries
+  in a bundle are never materialized into the home dir.
+- New `ui-design` orchestrator skill (pick layout + brand → write
+  self-contained HTML to `<project>/.devspace/preview/<name>.html`) and a
+  `brand-design-systems` reference skill.
+- **HTML Preview tab**: `PreviewService` watches `<project>/.devspace/preview/`;
+  the renderer auto-opens (on add) / refreshes (on change) a sandboxed iframe
+  (`html-preview` tab kind). Blob URL + `sandbox="allow-scripts"` only (opaque
+  origin, no same-origin/popups). `preview:read-html` is workspace-scoped +
+  containment- + symlink- + size-guarded. Spotlight "Open latest HTML preview".
+
+### Notes
+- Design skills are surfaced once: as seeded-global (default) so Claude uses
+  them; the builtin design-packs root is a listing fallback only when seeding
+  is disabled (avoids double-listing 132 skills).
+- 849 tests (was 1055 pre-teardown → 807 after removal → +42 rebuild/review).
+
 ## [0.30.8] — 2026-05-25
 
 Spotlight (⌘K) — multi-source search palette with prefix routing.

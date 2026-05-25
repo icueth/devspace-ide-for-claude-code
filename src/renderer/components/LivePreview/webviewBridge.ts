@@ -1,10 +1,16 @@
-// Phase C live-preview bridge.
+// Live-preview bridge (pure viewer).
 //
 // This script is injected INSIDE the `<webview>` via
 // `webview.executeJavaScript(BRIDGE_SCRIPT)` after the `dom-ready` event.
 // It runs in the dev-server's renderer-process origin — same JS realm as
-// the user's React app — so it can read React fiber internals to recover
-// `_debugSource` file/line pointers for inspected elements.
+// the user's React app.
+//
+// The viewer no longer inspects or edits the page; the bridge's only job
+// is a one-shot handshake so the host can (a) learn the framework the page
+// reports for the status pill, and (b) cross-check the bridge is running
+// inside the expected dev-server origin. The handshake is stamped with a
+// per-injection secret so a malicious page cannot forge bridge envelopes
+// via its own `console.log`.
 //
 // ─── Message-passing approach (read me, you'll wonder later) ─────────
 //
@@ -19,21 +25,17 @@
 //      the host renderer's child window. The webview's top window is
 //      itself; `window.parent === window`.
 //   3. `webContents.send(...)` — host → webview only, wrong direction.
-//   4. `console.log('__devspace_bridge__:' + JSON.stringify(payload))`
+//   4. `console.log('__devspace_dev_bridge__:' + JSON.stringify(payload))`
 //      and have the host parse `webview.addEventListener(
 //      'console-message', ev => ...)`. This works without a preload,
 //      survives cross-origin boundaries, and Electron already exposes
-//      console events on the webview tag. The trade-off is that the
-//      payload becomes visible in the dev-server console — for a local
-//      live preview that's a feature (the user can debug what the
-//      bridge is shipping), not a leak.
+//      console events on the webview tag.
 //
-// We chose #4. Host → webview uses `webview.executeJavaScript(...)`
-// against a function the bridge exposes on `window` (`__devspaceSetMode`
-// etc.), which IS available since the bridge itself was injected via
-// executeJavaScript and shares the same realm.
+// We chose #4.
 
-import { DESIGN_BRIDGE_PROTOCOL_VERSION } from '@shared/design';
+// Bridge handshake protocol version. Bumped only if the handshake shape
+// changes; kept local now that the Design Studio shared types are gone.
+export const LIVE_PREVIEW_BRIDGE_PROTOCOL_VERSION = 1;
 
 // The console-message sentinel prefix the host filters on. Long enough
 // to make collision with user console logs unlikely; short enough that
@@ -55,22 +57,17 @@ export const BRIDGE_LOG_PREFIX = '__devspace_dev_bridge__:';
  * places to update.
  */
 export function buildBridgeScript(
-  protocolVersion: number = DESIGN_BRIDGE_PROTOCOL_VERSION,
+  protocolVersion: number = LIVE_PREVIEW_BRIDGE_PROTOCOL_VERSION,
   secret: string = '',
 ): string {
   // The secret-key handshake is the defense against a malicious page
   // forging bridge envelopes via its own `console.log`. The host injects
   // a fresh random secret on every `dom-ready`; the bridge keeps it in
-  // a closure (not on `window`); every outbound envelope includes it.
-  // The host checks `parsed.__k === expectedSecret` and drops anything
-  // else. User code can still call `console.log(PREFIX + JSON.stringify({...}))`
-  // but it cannot guess the secret, so its forged payload is rejected.
+  // a closure (not on `window`); the outbound envelope includes it. The
+  // host checks `parsed.__k === expectedSecret` and drops anything else.
   // NOTE: the body below is serialized as-is. Keep it dependency-free
   // and ES2020-compatible — it runs in whatever JS realm the dev server
-  // ships (Vite usually targets modern Chromium, but Next on legacy
-  // pages can be older). No optional chaining nested with `??` chains
-  // beyond what we need. No template literals containing `${` that
-  // shadow outer ones — we use single quotes inside the body.
+  // ships.
   return `
 (function devspaceLivePreviewBridge() {
   if (window.__devspaceLivePreviewBridgeInstalled) return;
@@ -91,64 +88,9 @@ export function buildBridgeScript(
     return 'unknown';
   })();
 
-  // ─── Outline style for inspect mode ─────────────────────────────
-  // Injected once; toggled via the body class \`devspace-inspect-on\`.
-  var style = document.createElement('style');
-  style.setAttribute('data-devspace-bridge', 'true');
-  style.textContent =
-    '.devspace-inspect-on *[data-devspace-hover] {' +
-    '  outline: 2px solid rgba(76,141,255,0.85) !important;' +
-    '  outline-offset: 1px !important;' +
-    '  cursor: crosshair !important;' +
-    '}' +
-    '.devspace-inspect-on { cursor: crosshair !important; }';
-  // Append once DOM is ready — script may load before <head> exists if
-  // injection raced something weird; defer to be safe.
-  if (document.head) document.head.appendChild(style);
-  else document.addEventListener('DOMContentLoaded', function () {
-    document.head.appendChild(style);
-  });
-
-  // ─── Source-pointer extraction via React Fiber internals ────────
-  //
-  // React 17+ stores the fiber for a DOM node under a key beginning
-  // with \`__reactFiber\$\`. Walking up the return-pointer chain finds
-  // the host fiber; its \`_debugSource\` (when present — dev builds
-  // only) carries { fileName, lineNumber, columnNumber }.
-  //
-  // Production builds strip _debugSource. We return undefined and the
-  // host's element-info panel hides the field — no crash.
-  function getReactSourceRef(el) {
-    try {
-      var fiberKey = null;
-      var keys = Object.keys(el);
-      for (var i = 0; i < keys.length; i++) {
-        if (keys[i].indexOf('__reactFiber\$') === 0) {
-          fiberKey = keys[i];
-          break;
-        }
-      }
-      if (!fiberKey) return undefined;
-      var fiber = el[fiberKey];
-      var hops = 0;
-      while (fiber && hops < 24) {
-        if (fiber._debugSource) {
-          var s = fiber._debugSource;
-          var f = s.fileName || '';
-          var line = s.lineNumber || 0;
-          var col = s.columnNumber || 0;
-          if (f) return f + ':' + line + (col ? ':' + col : '');
-        }
-        fiber = fiber.return;
-        hops++;
-      }
-    } catch (_err) {}
-    return undefined;
-  }
-
   function send(payload) {
     // console.log is the chosen webview→host channel — see the source
-    // header for the design rationale. The SECRET key stamped on every
+    // header for the design rationale. The SECRET key stamped on the
     // envelope is the host's anti-forgery check; user page code can
     // see neither this closure nor the secret string.
     try {
@@ -157,132 +99,11 @@ export function buildBridgeScript(
     } catch (_err) {}
   }
 
-  function buildElementInfo(el) {
-    if (!el || el.nodeType !== 1) return null;
-    var rect = el.getBoundingClientRect();
-    var styles = window.getComputedStyle(el);
-    var classes = [];
-    if (el.classList && el.classList.length) {
-      for (var i = 0; i < el.classList.length; i++) classes.push(el.classList[i]);
-    }
-    var text = (el.innerText || el.textContent || '')
-      .replace(/\\s+/g, ' ')
-      .trim()
-      .slice(0, 80);
-
-    // Phase C: every element gets an opaque transient id so the host
-    // panel can reference it without us serializing a full selector.
-    // We don't persist it — write-back lives in 0.8 against sourceRef.
-    var id = el.getAttribute('data-devspace-id');
-    if (!id) {
-      id = 'dev-' + Math.random().toString(36).slice(2, 9);
-      el.setAttribute('data-devspace-id', id);
-    }
-
-    var ref = getReactSourceRef(el);
-
-    return {
-      elementId: id,
-      tagName: el.tagName || 'unknown',
-      classes: classes,
-      innerTextPreview: text,
-      rect: {
-        x: rect.x,
-        y: rect.y,
-        width: rect.width,
-        height: rect.height,
-      },
-      source: ref ? { kind: 'user-jsx', ref: ref } : { kind: 'user-jsx' },
-      computedStyles: {
-        color: styles.color,
-        backgroundColor: styles.backgroundColor,
-        fontSize: styles.fontSize,
-        fontFamily: styles.fontFamily,
-        fontWeight: styles.fontWeight,
-        padding: styles.padding,
-        margin: styles.margin,
-        borderRadius: styles.borderRadius,
-        border: styles.border,
-        display: styles.display,
-        textAlign: styles.textAlign,
-      },
-    };
-  }
-
-  // ─── Mode state + interaction gating ────────────────────────────
-  var currentMode = 'view';
-  var lastHoverEl = null;
-
-  function clearHover() {
-    if (lastHoverEl) {
-      try { lastHoverEl.removeAttribute('data-devspace-hover'); } catch (_e) {}
-      lastHoverEl = null;
-    }
-  }
-
-  function setHover(el) {
-    if (el === lastHoverEl) return;
-    clearHover();
-    if (el && el.nodeType === 1) {
-      try { el.setAttribute('data-devspace-hover', 'true'); } catch (_e) {}
-      lastHoverEl = el;
-    }
-  }
-
-  function onMouseMove(ev) {
-    if (currentMode === 'view') return;
-    var el = ev.target;
-    setHover(el);
-    var info = buildElementInfo(el);
-    send({ type: 'devspace:dev:elementHover', info: info });
-  }
-
-  function onMouseOut() {
-    if (currentMode === 'view') return;
-    clearHover();
-    send({ type: 'devspace:dev:elementHover', info: null });
-  }
-
-  function onClick(ev) {
-    if (currentMode === 'view') return;
-    // Block the dev-server app's own click handler while inspecting —
-    // otherwise clicking a <button> would fire its real onClick.
-    try {
-      ev.preventDefault();
-      ev.stopPropagation();
-      if (ev.stopImmediatePropagation) ev.stopImmediatePropagation();
-    } catch (_e) {}
-    var info = buildElementInfo(ev.target);
-    if (info) send({ type: 'devspace:dev:elementSelect', info: info });
-  }
-
-  document.addEventListener('mousemove', onMouseMove, true);
-  document.addEventListener('mouseout', onMouseOut, true);
-  document.addEventListener('click', onClick, true);
-
-  // ─── Host → bridge: mode setter exposed on window ───────────────
-  // The host calls this via webview.executeJavaScript("window.__devspaceSetMode('inspect')")
-  // — a stable JS function in this realm avoids needing postMessage
-  // plumbing for the only outbound channel we have.
-  window.__devspaceSetMode = function (mode) {
-    if (mode !== 'view' && mode !== 'inspect' && mode !== 'edit') return;
-    currentMode = mode;
-    try {
-      if (mode === 'view') {
-        document.body.classList.remove('devspace-inspect-on');
-        clearHover();
-      } else {
-        document.body.classList.add('devspace-inspect-on');
-      }
-    } catch (_e) {}
-  };
-
-  // Final handshake — host listens for this to know the bridge is live
-  // and may re-pin the current mode. The origin field lets the host
-  // cross-check that the bridge is running inside the expected dev
-  // server origin (not a page that navigated us off-route mid-load).
-  // Defense-in-depth: will-navigate already blocks non-localhost
-  // navigation, so this is the second gate, not the first.
+  // Handshake — host listens for this to know the bridge is live. The
+  // origin field lets the host cross-check that the bridge is running
+  // inside the expected dev server origin (not a page that navigated us
+  // off-route mid-load). Defense-in-depth: will-navigate already blocks
+  // non-localhost navigation, so this is the second gate, not the first.
   send({
     type: 'devspace:dev:bridgeReady',
     version: VERSION,

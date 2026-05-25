@@ -115,13 +115,6 @@ vi.mock('@main/services/AgentsService', () => ({
   },
 }));
 
-// Avoid the real ProjectProfileBuilder doing filesystem walks against
-// the temp dirs (no package.json there). Stub it to return null so the
-// generation prompt path skips the section.
-vi.mock('@main/services/ProjectProfileBuilder', () => ({
-  buildProjectProfile: async () => null,
-}));
-
 // Stub TmuxChatRunner — generateDraft is exercised by the cancel test
 // only; we never want to spawn claude during tests.
 vi.mock('@main/services/TmuxChatRunner', () => ({
@@ -824,8 +817,9 @@ describe('ForgeService.catalog', () => {
   });
 
   it('discoverMatches returns 8 fallbacks when no profile is detectable', async () => {
-    // ProjectProfileBuilder is mocked to return null, so signals is empty;
-    // the fallback path returns the top-8 by matches.length.
+    // safeBuildProfile always returns null now (the rich profile builder was
+    // removed), so signals is empty; the fallback path returns the top-8 by
+    // matches.length.
     const matches = await discoverMatches(projectAbs);
     expect(matches.length).toBe(8);
   });

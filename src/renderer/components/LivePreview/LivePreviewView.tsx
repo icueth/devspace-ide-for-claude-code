@@ -3,7 +3,6 @@ import {
   AlertCircle,
   ChevronRight,
   Download,
-  FileCode2,
   FolderOpen,
   Globe,
   Loader2,
@@ -24,13 +23,10 @@ import {
 import { api } from '@renderer/lib/api';
 import { cn } from '@renderer/lib/utils';
 import type {
-  DesignElementInfo,
-  DesignWebviewMode,
   DevServerEvent,
   DevServerInfo,
 } from '@shared/design';
 
-import { EditPanel } from './EditPanel';
 import { LivePreviewLogPane } from './LivePreviewLogPane';
 import { LivePreviewToolbar } from './LivePreviewToolbar';
 import {
@@ -83,8 +79,10 @@ interface ScriptSwitchConfirm {
 }
 
 /**
- * Top-level Live Preview pane. Owns the `DevServerInfo` snapshot, the
- * webview ref + bridge handshake, and the inspect/edit mode state.
+ * Top-level Live Preview pane. Owns the `DevServerInfo` snapshot and the
+ * webview ref + bridge handshake. The bridge is a pure viewer — it only
+ * performs the secret-key handshake so the host can verify the page's
+ * origin; there is no inspect/edit overlay.
  *
  * Lifecycle:
  *   1. On mount we call `detect` + `status` in parallel — detect gives
@@ -92,19 +90,14 @@ interface ScriptSwitchConfirm {
  *      status tells us if a server is already running (cross-tab).
  *   2. `subscribe` arms the IPC event channel; `onEvent` rolls each
  *      `DevServerEvent` into local state. We hold an event ref to keep
- *      the listener stable across renders (same pattern DesignView uses).
+ *      the listener stable across renders.
  *   3. When status flips to `running` and the webview has fired
- *      `dom-ready`, we inject the bridge script.
- *   4. Mode changes are pushed into the bridge via executeJavaScript
- *      calling the `window.__devspaceSetMode` shim the bridge exposes.
+ *      `dom-ready`, we inject the bridge handshake script.
  */
 export function LivePreviewView({ projectPath }: LivePreviewViewProps) {
   const [info, setInfo] = useState<DevServerInfo>(INITIAL_INFO);
   const [logTail, setLogTail] = useState<string[]>([]);
   const [logCollapsed, setLogCollapsed] = useState(true);
-  const [mode, setMode] = useState<DesignWebviewMode>('view');
-  const [selectedElement, setSelectedElement] =
-    useState<DesignElementInfo | null>(null);
   const [busy, setBusy] = useState(false);
   // ── v0.16 state ────────────────────────────────────────────────────
   // Refresh re-runs detection; UI disables refresh + start during the call.
@@ -135,13 +128,6 @@ export function LivePreviewView({ projectPath }: LivePreviewViewProps) {
   // next start — otherwise the previous URL stays in DOM.
   const [webviewKey, setWebviewKey] = useState(0);
   const webviewRef = useRef<WebviewTag | null>(null);
-  // Latest mode value, read inside the bridge `console-message` handler
-  // so it stays stable across mode changes (same trick DesignView uses
-  // with `modeRef` to avoid re-subscribing the listener).
-  const modeRef = useRef<DesignWebviewMode>('view');
-  useEffect(() => {
-    modeRef.current = mode;
-  }, [mode]);
   // Anti-forgery secrets for the bridge handshake. Fresh on every
   // dom-ready (see onDomReady below). The bridge stamps each envelope
   // with the current value; we drop anything else.
@@ -328,8 +314,6 @@ export function LivePreviewView({ projectPath }: LivePreviewViewProps) {
         // Backend immediately echoes the transition; merge defensively in
         // case `subscribe` hasn't completed before this resolves.
         setInfo((prev) => ({ ...prev, ...next }));
-        setMode('view');
-        setSelectedElement(null);
       } catch (err) {
         setLocalError((err as Error).message);
       } finally {
@@ -440,8 +424,6 @@ export function LivePreviewView({ projectPath }: LivePreviewViewProps) {
       });
       setInfo((prev) => ({ ...prev, ...next }));
       setSelectedScript(target);
-      setMode('view');
-      setSelectedElement(null);
       setWebviewKey((k) => k + 1);
     } catch (err) {
       setLocalError((err as Error).message);
@@ -462,8 +444,6 @@ export function LivePreviewView({ projectPath }: LivePreviewViewProps) {
         url: null,
         status: next.status === 'idle' ? 'stopped' : next.status,
       }));
-      setMode('view');
-      setSelectedElement(null);
       setWebviewKey((k) => k + 1);
     } catch (err) {
       setLocalError((err as Error).message);
@@ -480,7 +460,7 @@ export function LivePreviewView({ projectPath }: LivePreviewViewProps) {
     }
   }, []);
 
-  // ─── Webview lifecycle: attach, bridge inject, mode pushing ───────
+  // ─── Webview lifecycle: attach + bridge handshake inject ───────
   //
   // Refs as callbacks let us register the listeners without depending
   // on a render cycle — and React 19 supports returning a cleanup
@@ -530,16 +510,7 @@ export function LivePreviewView({ projectPath }: LivePreviewViewProps) {
       // (window.__devspaceLivePreviewBridgeInstalled gate), so HMR
       // reloads that re-fire dom-ready are safe.
       el.executeJavaScript(script, false).then(
-        () => {
-          // After install, re-pin the current mode — survives reloads.
-          const m = modeRef.current;
-          if (m !== 'view') {
-            void el.executeJavaScript(
-              `window.__devspaceSetMode && window.__devspaceSetMode(${JSON.stringify(m)})`,
-              false,
-            );
-          }
-        },
+        () => undefined,
         (err: unknown) => {
           // eslint-disable-next-line no-console
           console.warn('[live-preview] bridge inject failed:', err);
@@ -595,21 +566,8 @@ export function LivePreviewView({ projectPath }: LivePreviewViewProps) {
           bridgeSecretsRef.current = [];
           return;
         }
-        // Bridge confirmed live — re-pin mode (covers race where
-        // dom-ready fires before bridge initialization completes its
-        // own setup).
-        const m = modeRef.current;
-        if (m !== 'view') {
-          void el.executeJavaScript(
-            `window.__devspaceSetMode && window.__devspaceSetMode(${JSON.stringify(m)})`,
-            false,
-          );
-        }
-        return;
-      }
-      if (type === 'devspace:dev:elementSelect') {
-        const info = (parsed as { info?: DesignElementInfo }).info;
-        if (info) setSelectedElement(info);
+        // Bridge confirmed live + origin verified. Nothing else to do —
+        // the viewer doesn't push any state into the page.
         return;
       }
       if (type === 'devspace:dev:bridgeError') {
@@ -617,9 +575,6 @@ export function LivePreviewView({ projectPath }: LivePreviewViewProps) {
         if (message) setLocalError(`Preview bridge error: ${message}`);
         return;
       }
-      // Hover messages are noisy; we keep them off the host state to
-      // avoid a re-render on every mousemove. Add a hovered-element
-      // pill later if the UX demands it.
     };
 
     // Guard against the user navigating the webview to an arbitrary
@@ -737,22 +692,6 @@ export function LivePreviewView({ projectPath }: LivePreviewViewProps) {
     }
   }, [info.url]);
 
-  // Push mode changes into the bridge whenever they happen. No-op when
-  // the webview isn't mounted yet (`executeJavaScript` would throw).
-  useEffect(() => {
-    const el = webviewRef.current;
-    if (!el) return;
-    if (info.status !== 'running') return;
-    el.executeJavaScript(
-      `window.__devspaceSetMode && window.__devspaceSetMode(${JSON.stringify(mode)})`,
-      false,
-    ).catch(() => {
-      // Swallow — bridge may not be installed yet (between dom-ready
-      // race + handshake). The next bridgeReady will re-pin.
-    });
-    if (mode === 'view') setSelectedElement(null);
-  }, [mode, info.status]);
-
   // ─── Derived render decisions ──────────────────────────────────────
   const stageContent = useMemo(() => {
     if (info.status === 'error') {
@@ -858,8 +797,6 @@ export function LivePreviewView({ projectPath }: LivePreviewViewProps) {
         onRefresh={() => void handleRefresh()}
         refreshing={refreshing}
         onScriptChange={handleScriptPickFromToolbar}
-        mode={mode}
-        onModeChange={setMode}
         busy={busy}
       />
 
@@ -888,21 +825,6 @@ export function LivePreviewView({ projectPath }: LivePreviewViewProps) {
             onToggle={() => setLogCollapsed((v) => !v)}
           />
         </main>
-
-        {mode === 'inspect' && (
-          <ElementInfoPanel
-            info={selectedElement}
-            onClose={() => setMode('view')}
-            mode={mode}
-          />
-        )}
-        {mode === 'edit' && (
-          <EditPanel
-            selectedElement={selectedElement}
-            projectPath={projectPath}
-            onClose={() => setMode('view')}
-          />
-        )}
       </div>
 
       <ScriptSwitchConfirmDialog
@@ -1558,179 +1480,6 @@ function ErrorState({ message, onRetry }: ErrorStateProps) {
           Retry
         </button>
       </div>
-    </div>
-  );
-}
-
-interface ElementInfoPanelProps {
-  info: DesignElementInfo | null;
-  onClose: () => void;
-  mode: DesignWebviewMode;
-}
-
-/**
- * Right-rail panel showing inspected element details. Source ref is
- * the Phase C value — it tells the user which file:line emitted the
- * element they clicked, even though write-back (0.8) can't yet touch
- * it. Layout mirrors `ElementInspector` in Design Studio so users feel
- * at home.
- */
-function ElementInfoPanel({ info, onClose, mode }: ElementInfoPanelProps) {
-  const title = mode === 'edit' ? 'Edit element' : 'Inspect element';
-  return (
-    <aside
-      className="flex h-full w-[320px] shrink-0 flex-col border-l border-border bg-surface-2"
-      aria-label={title}
-    >
-      <div className="flex h-9 shrink-0 items-center gap-2 border-b border-border px-3">
-        <span className="text-[11px] font-semibold text-text">{title}</span>
-        <div className="flex-1" />
-        <button
-          type="button"
-          onClick={onClose}
-          title="Close panel (return to view mode)"
-          className="rounded p-1 text-text-muted transition hover:bg-surface-3 hover:text-text"
-        >
-          <ChevronRight size={11} />
-        </button>
-      </div>
-
-      {!info ? (
-        <div className="flex flex-1 flex-col items-center justify-center px-4 text-center">
-          <FileCode2 size={14} className="mb-1.5 text-text-dim" />
-          <div className="text-[11px] text-text-muted">
-            Click an element to inspect
-          </div>
-          <div className="mt-1 text-[10px] text-text-dim">
-            Hover the preview to highlight, click to lock the selection.
-          </div>
-        </div>
-      ) : (
-        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
-          <section className="flex flex-col gap-2 border-b border-border-subtle px-3 py-3">
-            <Label>Element</Label>
-            <div className="flex flex-wrap items-center gap-1.5">
-              <span className="inline-flex items-center rounded-[4px] bg-[rgba(76,141,255,0.18)] px-1.5 py-0.5 font-mono text-[10.5px] text-accent">
-                &lt;{info.tagName.toLowerCase()}&gt;
-              </span>
-              {info.classes.length > 0 && (
-                <div className="flex flex-wrap gap-1">
-                  {info.classes.slice(0, 6).map((cls) => (
-                    <span
-                      key={cls}
-                      className="inline-flex items-center rounded-[4px] border border-border-subtle bg-surface-3 px-1.5 py-0.5 font-mono text-[10px] text-text-secondary"
-                      title={cls}
-                    >
-                      .{cls}
-                    </span>
-                  ))}
-                  {info.classes.length > 6 && (
-                    <span className="text-[10px] text-text-dim">
-                      +{info.classes.length - 6} more
-                    </span>
-                  )}
-                </div>
-              )}
-            </div>
-            {info.innerTextPreview && (
-              <p className="whitespace-pre-wrap rounded-[6px] border border-border-subtle bg-surface-3 px-2 py-1.5 text-[11px] leading-snug text-text-secondary">
-                {info.innerTextPreview}
-              </p>
-            )}
-          </section>
-
-          {/* Source ref — the headline Phase C feature. Write-back isn't
-              live yet, but seeing which JSX file the user clicked is the
-              0.7 win we want to surface prominently. */}
-          <section className="flex flex-col gap-1.5 border-b border-border-subtle px-3 py-3">
-            <Label>Source</Label>
-            {info.source?.ref ? (
-              <div className="flex items-start gap-1.5 rounded-[6px] border border-accent/30 bg-[rgba(76,141,255,0.08)] px-2 py-1.5">
-                <FileCode2
-                  size={11}
-                  className="mt-0.5 shrink-0 text-accent"
-                />
-                <span
-                  className="min-w-0 break-all font-mono text-[10.5px] text-accent"
-                  title={info.source.ref}
-                >
-                  {info.source.ref}
-                </span>
-              </div>
-            ) : (
-              <div className="text-[10.5px] italic text-text-dim">
-                No source ref. The element came from a production build
-                (no <code className="font-mono">_debugSource</code>) or a
-                non-React framework.
-              </div>
-            )}
-          </section>
-
-          <section className="flex flex-col gap-1 px-3 py-3">
-            <Label>Computed styles</Label>
-            <StyleRow name="color" value={info.computedStyles.color} />
-            <StyleRow
-              name="background-color"
-              value={info.computedStyles.backgroundColor}
-            />
-            <StyleRow
-              name="font-family"
-              value={info.computedStyles.fontFamily}
-            />
-            <StyleRow name="font-size" value={info.computedStyles.fontSize} />
-            <StyleRow
-              name="font-weight"
-              value={info.computedStyles.fontWeight}
-            />
-            <StyleRow name="padding" value={info.computedStyles.padding} />
-            <StyleRow name="margin" value={info.computedStyles.margin} />
-            <StyleRow name="border" value={info.computedStyles.border} />
-            <StyleRow
-              name="border-radius"
-              value={info.computedStyles.borderRadius}
-            />
-            <StyleRow name="display" value={info.computedStyles.display} />
-            <StyleRow
-              name="text-align"
-              value={info.computedStyles.textAlign}
-            />
-          </section>
-
-          {mode === 'edit' && (
-            <section className="border-t border-border-subtle bg-surface-3 px-3 py-3">
-              <div className="text-[10.5px] italic text-text-dim">
-                Inline write-back ships in 0.8 (Tailwind) and 0.9 (vanilla
-                CSS / styled-components / CSS Modules). For now, edit mode
-                surfaces the same data as inspect mode — the source ref
-                above tells you exactly where to make the change by hand.
-              </div>
-            </section>
-          )}
-        </div>
-      )}
-    </aside>
-  );
-}
-
-function Label({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="mb-0.5 text-[10px] font-semibold uppercase tracking-wide text-text-muted">
-      {children}
-    </div>
-  );
-}
-
-function StyleRow({ name, value }: { name: string; value: string | undefined }) {
-  if (!value) return null;
-  return (
-    <div className="flex items-baseline justify-between gap-2 text-[11px]">
-      <span className="shrink-0 font-mono text-text-muted">{name}</span>
-      <span
-        className="min-w-0 truncate text-right font-mono text-text-secondary"
-        title={value}
-      >
-        {value}
-      </span>
     </div>
   );
 }
