@@ -11,6 +11,7 @@ import {
   PanelLeftOpen,
   PanelRightClose,
   PanelRightOpen,
+  Search,
   Terminal as TerminalIcon,
   Users,
   Workflow,
@@ -23,6 +24,8 @@ import { RouteErrorBoundary } from '@renderer/components/Layout/RouteErrorBounda
 import { GoToLineDialog } from '@renderer/components/CommandPalette/GoToLineDialog';
 import { PromptDialog } from '@renderer/components/CommandPalette/PromptDialog';
 import { QuickOpenDialog } from '@renderer/components/CommandPalette/QuickOpenDialog';
+import { SpotlightDialog } from '@renderer/components/CommandPalette/SpotlightDialog';
+import type { SpotlightCommand } from '@renderer/components/CommandPalette/spotlightProviders';
 import { ClaudeCliDock } from '@renderer/components/Dock/ClaudeCliDock';
 import { EditorArea } from '@renderer/components/Editor/EditorArea';
 import { Resizer } from '@renderer/components/Layout/Resizer';
@@ -128,6 +131,7 @@ function AppInner() {
     'terminal',
   );
   const [quickOpen, setQuickOpen] = useState(false);
+  const [spotlightOpen, setSpotlightOpen] = useState(false);
   const [goToLine, setGoToLine] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsInitialTab, setSettingsInitialTab] = useState<
@@ -258,6 +262,14 @@ function AppInner() {
         setQuickOpen(true);
         return;
       }
+      // v0.30.8 — Spotlight (Cmd+K). Multi-source (files + recent + commands
+      // + settings routes) with prefix routing. Cmd+P remains as the
+      // file-only fast path for users who learned it.
+      if (!e.shiftKey && !e.altKey && k === 'k') {
+        e.preventDefault();
+        setSpotlightOpen(true);
+        return;
+      }
       // Cmd+N — create a new file in the active project, then open it as a
       // tab. Cmd+Shift+N is reserved for the "New Window" menu role, so we
       // only catch the plain Cmd+N here.
@@ -348,6 +360,166 @@ function AppInner() {
     return () => window.removeEventListener('keydown', onKey);
   }, [setBottomOpen, askPrompt]);
 
+  // v0.30.8 — Command registry for Spotlight (Cmd+K). Built fresh per
+  // active-project change so commands close over the right paths/IDs but
+  // remain stable across re-renders within the same project (memo keys).
+  // We dispatch `devspace:open-settings` for Settings routes — same event
+  // the navbar uses — so there's a single code path for "open Settings → X".
+  const spotlightCommands = useMemo<SpotlightCommand[]>(() => {
+    const openSettings = (tab: string) =>
+      window.dispatchEvent(
+        new CustomEvent('devspace:open-settings', { detail: { tab } }),
+      );
+    const cmds: SpotlightCommand[] = [
+      // Navigation (top of mind for most flows)
+      {
+        id: 'nav.codeflow',
+        title: 'Open Codeflow',
+        keywords: 'codebase visualization architecture',
+        group: 'Navigate',
+        requiresProject: true,
+        run: () => {
+          if (activeProject) openCodeflow(activeProject.path, activeProject.name);
+        },
+      },
+      {
+        id: 'nav.design',
+        title: 'Open Design Studio',
+        keywords: 'mockup ui html generate',
+        group: 'Navigate',
+        requiresProject: true,
+        run: () => {
+          if (activeProject) openDesign(activeProject.path, activeProject.name);
+        },
+      },
+      {
+        id: 'nav.livepreview',
+        title: 'Open Live Preview',
+        keywords: 'dev server webview browser',
+        group: 'Navigate',
+        requiresProject: true,
+        run: () => {
+          if (activeProject) openLivePreview(activeProject.path, activeProject.name);
+        },
+      },
+      {
+        id: 'nav.devlog',
+        title: 'Open Devlog',
+        keywords: 'log plans results agents',
+        group: 'Navigate',
+        requiresProject: true,
+        run: () => {
+          if (activeProject) openDevlog(activeProject.path, activeProject.name);
+        },
+      },
+      // Editor toggles
+      {
+        id: 'layout.bottom',
+        title: 'Toggle bottom panel',
+        keywords: 'terminal git search show hide',
+        group: 'Editor',
+        run: () => {
+          useLayoutStore.getState().toggleBottom();
+          useLayoutStore.getState().persist();
+        },
+      },
+      {
+        id: 'layout.wrap',
+        title: 'Toggle word wrap',
+        keywords: 'soft hard editor line break',
+        shortcut: '⌘⌥Z',
+        group: 'Editor',
+        run: () => {
+          useLayoutStore.getState().toggleWordWrap();
+          useLayoutStore.getState().persist();
+        },
+      },
+      {
+        id: 'layout.left',
+        title: 'Toggle left sidebar',
+        keywords: 'project files panel collapse',
+        shortcut: '⌘\\',
+        group: 'Editor',
+        run: () => useSidebarStore.getState().toggleLeft(),
+      },
+      {
+        id: 'layout.right',
+        title: 'Toggle right sidebar (CLI dock)',
+        keywords: 'claude chat panel collapse',
+        shortcut: '⌘⇧\\',
+        group: 'Editor',
+        run: () => useSidebarStore.getState().toggleRight(),
+      },
+      {
+        id: 'layout.dockfull',
+        title: 'Toggle full CLI width',
+        keywords: 'expand maximize claude',
+        group: 'Editor',
+        run: () => {
+          useLayoutStore.getState().toggleDockFull();
+          useLayoutStore.getState().persist();
+        },
+      },
+      {
+        id: 'layout.hidden',
+        title: 'Toggle hidden files',
+        keywords: 'dotfiles show .git .env',
+        group: 'Editor',
+        run: () => {
+          useLayoutStore.getState().toggleShowHidden();
+          useLayoutStore.getState().persist();
+        },
+      },
+      // Zoom
+      {
+        id: 'zoom.in',
+        title: 'Zoom in',
+        keywords: 'larger bigger increase ui',
+        shortcut: '⌘=',
+        group: 'Editor',
+        run: () => {
+          useLayoutStore.getState().adjustUiZoomLevel(1);
+          useLayoutStore.getState().persist();
+        },
+      },
+      {
+        id: 'zoom.out',
+        title: 'Zoom out',
+        keywords: 'smaller decrease ui',
+        shortcut: '⌘-',
+        group: 'Editor',
+        run: () => {
+          useLayoutStore.getState().adjustUiZoomLevel(-1);
+          useLayoutStore.getState().persist();
+        },
+      },
+      {
+        id: 'zoom.reset',
+        title: 'Reset zoom',
+        keywords: '100 default ui',
+        shortcut: '⌘0',
+        group: 'Editor',
+        run: () => {
+          useLayoutStore.getState().resetUiZoomLevel();
+          useLayoutStore.getState().persist();
+        },
+      },
+      // Settings routes — all use the existing devspace:open-settings event
+      { id: 'settings.account', title: 'Open Account settings', keywords: 'profile login', group: 'Settings', run: () => openSettings('account') },
+      { id: 'settings.setup', title: 'Open Setup checklist', keywords: 'onboarding install brew claude', group: 'Settings', run: () => openSettings('setup') },
+      { id: 'settings.files', title: 'Open Files settings', keywords: 'workspace ignore patterns', group: 'Settings', run: () => openSettings('files') },
+      { id: 'settings.tmux', title: 'Open tmux settings', keywords: 'sessions chat runner', group: 'Settings', run: () => openSettings('tmux') },
+      { id: 'settings.llm', title: 'Open LLM settings', keywords: 'openai anthropic profiles api', group: 'Settings', run: () => openSettings('llm') },
+      { id: 'settings.agents', title: 'Open Agents settings', keywords: 'subagent task team', group: 'Settings', run: () => openSettings('agents') },
+      { id: 'settings.mcp', title: 'Open MCP settings', keywords: 'model context protocol server', group: 'Settings', run: () => openSettings('mcp') },
+      { id: 'settings.memory', title: 'Open Memory settings', keywords: 'remember devlog notes', group: 'Settings', run: () => openSettings('memory') },
+      { id: 'settings.skills', title: 'Open Skills settings', keywords: 'skill catalog forge', group: 'Settings', run: () => openSettings('skills') },
+      { id: 'settings.teams', title: 'Open Teams settings', keywords: 'multi-agent team', group: 'Settings', run: () => openSettings('teams') },
+      { id: 'settings.design', title: 'Open Design settings', keywords: 'tokens designprofile', group: 'Settings', run: () => openSettings('design') },
+    ];
+    return cmds;
+  }, [activeProject, openCodeflow, openDesign, openLivePreview, openDevlog]);
+
   // v0.14: when the user switches to a Design tab AND the viewport is
   // narrow (< 1400px), auto-collapse the LEFT sidebar to give the design
   // pane more room. Fires only on the rising edge of activeTabKind →
@@ -395,6 +567,18 @@ function AppInner() {
           )}
         </div>
         <div className="no-drag flex items-center gap-1.5">
+          {/* v0.30.8 — Spotlight (Cmd+K) — visible affordance so users
+              don't have to memorize the shortcut. Sits at the front of the
+              right action group so it reads first ("search → then actions"). */}
+          <button
+            onClick={() => setSpotlightOpen(true)}
+            className="inline-flex h-[26px] items-center gap-1.5 rounded-[7px] border border-border-subtle bg-surface-3 px-2.5 text-[11px] text-text-secondary transition hover:border-border-hi hover:bg-surface-4 hover:text-text"
+            title="Search files, commands, settings… (⌘K)"
+          >
+            <Search size={11} />
+            <span>Search</span>
+            <kbd className="ml-1 rounded bg-surface-4/60 px-1 text-[9.5px] text-text-muted">⌘K</kbd>
+          </button>
           <button
             onClick={() => {
               if (activeProject) openCodeflow(activeProject.path, activeProject.name);
@@ -766,6 +950,13 @@ function AppInner() {
         open={quickOpen}
         onOpenChange={setQuickOpen}
         projectPath={activeProject?.path ?? null}
+      />
+      <SpotlightDialog
+        open={spotlightOpen}
+        onOpenChange={setSpotlightOpen}
+        projectPath={activeProject?.path ?? null}
+        workspaceId={activeProject?.workspaceId ?? null}
+        commands={spotlightCommands}
       />
       <GoToLineDialog open={goToLine} onOpenChange={setGoToLine} />
       <PromptHost />

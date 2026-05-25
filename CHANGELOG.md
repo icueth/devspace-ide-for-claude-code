@@ -5,6 +5,69 @@ All notable changes to DevSpace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.30.8] — 2026-05-25
+
+Spotlight (⌘K) — multi-source search palette with prefix routing.
+(BRANCH BUILD — `feat/multi-cli`, NOT merged to main yet.)
+
+### Added
+
+- **⌘K Spotlight palette** — new `SpotlightDialog` (renderer) replaces
+  the discoverability gap left by ⌘P (which only searches file names).
+  Multi-source: **Recent** (last 20 per workspace, persisted) → **Files**
+  → **Commands** → routed sections. Prefix routing:
+  - `>foo` — commands only
+  - `/agents` — Settings tabs (dispatches existing `devspace:open-settings`)
+  - `@runOpen` — files now (full symbol indexing is Phase B / v0.31)
+  - `#perf` — notes/devlog (Phase C — UI shows a "coming soon" hint
+    so the prefix isn't a dead end)
+  - plain text — mixed mode (Recent + Files + Commands)
+- **Visible Search button in the navbar** — ahead of the Codeflow /
+  Design / Live Preview action group. The shortcut `⌘K` is shown on the
+  button itself so users can learn it without docs.
+- **`spotlightProviders.ts`** — pure helpers (parseSpotlightQuery,
+  scoreFileMatch, scoreCommandMatch, filterFiles, filterCommands,
+  filterRecents, composeSections, flattenSections). All routing and
+  ranking logic lives here so it can be tested in isolation. 28 new
+  regression tests pin the rules — exact-match beats prefix beats
+  substring beats fuzzy; recents filter out stale paths/commands;
+  empty sections are dropped so headers don't appear with zero items.
+- **`spotlightRecent.ts`** — per-workspace LRU store (cap 20),
+  localStorage persisted (`devspace:spotlight:recents:v1`). Defensive
+  parse — corrupted/forged JSON falls back to empty rather than
+  crashing the renderer. Records file opens AND command activations
+  separately so they can both surface. 3 regression tests pin the
+  bump/cap/no-collision rules.
+- **22 commands** registered: 4 navigate (Codeflow/Design/Live Preview/
+  Devlog), 7 editor toggles (bottom panel, word wrap, both sidebars,
+  full CLI, hidden files), 3 zoom, 11 settings routes (one per existing
+  tab). All reuse existing store actions — no new wiring on the
+  destination side.
+
+### Preserved
+
+- **⌘P (QuickOpenDialog)** stays as the file-only fast path for users
+  who learned it. No breaking change.
+- Cmd+Shift+F (ripgrep search), Cmd+G (go-to-line), Cmd+N (new file),
+  Cmd+Shift+L (send selection to active CLI) — all untouched.
+
+### Deferred (honest scope)
+
+- **Symbol indexing** — `@symbol` currently falls back to file search
+  with an explanatory section label. Real symbol scan (heuristic
+  regex for TS/JS) is Phase B / v0.31.
+- **Notes/devlog/memory search** — `#prefix` shows a hint pointing to
+  the Devlog tab. Wiring devlog entries + memory entries into the
+  palette is Phase C.
+- **LSP** — remains out of scope for the foreseeable future.
+
+### Verified
+
+- **1055 vitest tests pass** (was 1015 → **+40**: 28 spotlightProviders
+  + 3 spotlightRecent bump rules + 9 score boundary tests).
+- Typecheck clean (only pre-existing TS7-prep `baseUrl` deprecation
+  warning, unrelated).
+
 ## [0.30.7] — 2026-05-24
 
 Tier 1 performance pass — the 4 highest-felt-impact items from the
