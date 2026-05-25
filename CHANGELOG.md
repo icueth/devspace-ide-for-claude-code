@@ -5,6 +5,32 @@ All notable changes to DevSpace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.31.3] — 2026-05-25
+
+Layout interaction perf — sidebar drag, Full CLI, and fullscreen no longer jank.
+
+Root cause was two-fold (both verified from code, not guessed):
+
+- **Harmful `transition-[width]` on the drag/flex panels.** The resizer updates
+  `sidebarWidth`/`dockWidth` ~60×/sec during a drag; a 150ms width transition
+  turned every pixel into an easing animation that was immediately superseded —
+  the panel rubber-banded behind the cursor. The same transition caused the
+  **Full CLI** toggle to jank (it animates a px↔`flex-1` width change, which CSS
+  can't interpolate cleanly) and made **macOS fullscreen stutter** (in full/focus
+  mode the dock is `flex-1`, so it animated its width over 150ms *while the OS
+  animated the window*). Collapse/expand is mount/unmount of separate elements,
+  so the transition never helped there — removed it. Width now tracks 1:1.
+
+- **The whole app shell re-rendered on every resize tick.** `AppInner` read
+  `sidebarWidth`/`dockWidth` and renders the entire tree inline, so each drag
+  frame reconciled FileTree + EditorArea + ClaudeCliDock + BottomPanel. The
+  width subscriptions now live in small `SidebarSection`/`DockSection` leaf
+  wrappers (children passthrough), so a resize re-renders only that one panel's
+  DOM node — AppInner no longer re-renders during a drag.
+
+No behavior change: collapse/expand, Full CLI, focus mode, and persistence all
+work exactly as before — they're just smooth now.
+
 ## [0.31.2] — 2026-05-25
 
 Performance pass + design-skill seeding controls.

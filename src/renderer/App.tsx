@@ -28,6 +28,7 @@ import type { SpotlightCommand } from '@renderer/components/CommandPalette/spotl
 import { ClaudeCliDock } from '@renderer/components/Dock/ClaudeCliDock';
 import { EditorArea } from '@renderer/components/Editor/EditorArea';
 import { Resizer } from '@renderer/components/Layout/Resizer';
+import { DockSection, SidebarSection } from '@renderer/components/Layout/ResizablePanels';
 import { SettingsPage } from '@renderer/components/Settings/SettingsPage';
 import { SetupBanner } from '@renderer/components/Settings/SetupBanner';
 import { FileTree } from '@renderer/components/Sidebar/FileTree';
@@ -72,8 +73,9 @@ function AppInner() {
   const openDevlog = useEditorStore((s) => s.openDevlog);
   const openHtmlPreview = useEditorStore((s) => s.openHtmlPreview);
 
-  const sidebarWidth = useLayoutStore((s) => s.sidebarWidth);
-  const dockWidth = useLayoutStore((s) => s.dockWidth);
+  // Width values are intentionally NOT read here — they live in the
+  // SidebarSection / DockSection leaf wrappers so a resize tick re-renders
+  // only that one panel, not the whole AppInner shell. See ResizablePanels.tsx.
   const bottomHeight = useLayoutStore((s) => s.bottomHeight);
   const bottomOpen = useLayoutStore((s) => s.bottomOpen);
   // v0.14: sidebar collapse state (left = project/file tree; right = CLI dock).
@@ -754,10 +756,7 @@ function AppInner() {
           </aside>
         )}
         {teamMode !== 'focus' && !leftCollapsed && (
-        <aside
-          style={{ width: sidebarWidth }}
-          className="no-drag relative flex shrink-0 flex-col border-r border-border bg-surface-sidebar transition-[width] duration-150"
-        >
+        <SidebarSection>
           {/* Subtle top sheen */}
           <div
             className="pointer-events-none absolute left-0 right-0 top-0 h-[100px]"
@@ -826,7 +825,7 @@ function AppInner() {
               onOpenSettings={() => setSettingsOpen(true)}
             />
           )}
-        </aside>
+        </SidebarSection>
         )}
 
         {teamMode !== 'focus' && !leftCollapsed && (
@@ -925,15 +924,7 @@ function AppInner() {
                     onResizeEnd={persistLayout}
                   />
                 )}
-                <section
-                  style={
-                    dockFull || teamMode === 'focus' ? undefined : { width: dockWidth }
-                  }
-                  className={cn(
-                    'no-drag relative flex flex-col border-l border-border bg-surface transition-[width] duration-150',
-                    dockFull || teamMode === 'focus' ? 'min-w-0 flex-1' : 'shrink-0',
-                  )}
-                >
+                <DockSection full={dockFull || teamMode === 'focus'}>
                   {/*
                     Collapse affordance — only shown when the user could
                     actually collapse. In dockFull / focus mode the dock
@@ -951,7 +942,7 @@ function AppInner() {
                     </button>
                   )}
                   <ClaudeCliDock />
-                </section>
+                </DockSection>
               </>
             )}
           </>
