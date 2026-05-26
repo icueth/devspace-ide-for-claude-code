@@ -409,6 +409,18 @@ export interface ChatThread {
   // than inferred from messages.length so retries / errors don't cause
   // double-inject or skipped-inject edge cases.
   memoryInjected?: boolean;
+  // v0.32: native claude session reuse. The first Claude turn on this
+  // thread SEEDS a session (claude --session-id <uuid>, full history
+  // replayed once); every later turn RESUMES it (claude --resume <uuid>,
+  // sending ONLY the new user message) so claude carries context disk-
+  // side instead of us re-serializing the whole transcript each turn —
+  // turns token cost from quadratic to linear. Lowercase UUID (claude
+  // won't match uppercase). Absent = not seeded yet (legacy threads
+  // seed-on-next-turn = automatic migration). If a resume fails with
+  // "No conversation found" (e.g. ~/.claude cleared), this is reset and
+  // the thread re-seeds with full history. Claude-path only — LLM/CLI
+  // runners are stateless-per-turn.
+  claudeSessionId?: string;
 }
 
 // v0.30: multi-CLI support. Each CLI runtime is identified by a stable id;

@@ -5,6 +5,39 @@ All notable changes to DevSpace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.35.0] — 2026-05-26
+
+Claude chat now reuses native sessions instead of replaying the full transcript
+every turn — token cost per thread drops from quadratic to linear, and claude's
+own context management (incl. auto-compaction near the context limit) does the
+remembering instead of brute-force re-sending. (Originally authored as 0.32.0 on
+its own branch; lands after the 0.33/0.34 Codeflow work, hence 0.35.0.)
+
+How it works (verified against claude 2.1.150 with our exact arg set): the first
+Claude turn on a thread **seeds** a session (`--session-id <uuid>`, full history
+replayed once); every later turn **resumes** it (`--resume <uuid>`, sending ONLY
+the new user message). claude holds the conversation disk-side under `~/.claude`,
+keyed by project cwd. Session id is a lowercase UUID persisted on the thread
+(`ChatThread.claudeSessionId`) — claude does not match uppercase ids.
+
+Robustness:
+- **Automatic migration** — legacy threads (no session id) seed-on-next-turn with
+  full history, then resume from there. No migration step, no data change.
+- **Session-lost fallback** — if a resume hits "No conversation found with session
+  ID" (e.g. `~/.claude` cleared between turns), the thread silently re-seeds with
+  full history instead of bricking. `finalizeSoloRun` returns `'session-lost'`
+  without broadcasting a terminal error; `runClaudeTurn` re-seeds once (loop-
+  guarded). The reattach path (`resumeActiveRuns`) is unchanged.
+- `--append-system-prompt` is still passed every turn and is honored on resume
+  (verified) — memory/devlog preamble injection (one-shot per thread) is
+  unchanged.
+
+Scope: Claude path only. LLM-profile and OpenCode CLI runners are stateless-per-
+turn and untouched. This does **not** change the `--print` billing posture.
+
+Tests: +7 (buildClaudeArgs seed/resume flag emission; isClaudeSessionLost
+detection incl. null/empty and non-match cases).
+
 ## [0.34.0] — 2026-05-26
 
 Codeflow Phase 2 — git intelligence. Adds commit-history awareness to the
@@ -88,7 +121,6 @@ branch, so this skips to 0.33.0 to avoid a version clash.
   file graph, not a rewrite.
 - Git churn heatmap + code ownership (Phase 2 / 0.34) and health score +
   security scan + export (Phase 3 / 0.35) are deferred per the agreed roadmap.
-
 ## [0.31.4] — 2026-05-25
 
 Whole-shell re-render cascade eliminated — the systemic cause of tab-switch /

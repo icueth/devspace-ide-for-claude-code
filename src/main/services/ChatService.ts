@@ -142,11 +142,33 @@ function mergeConfig(...layers: Array<ChatConfig | undefined>): ChatConfig {
   return out;
 }
 
+// v0.32: native session binding for a single claude invocation.
+//   seed   → --session-id <uuid> : create a session with this id and
+//            send the (full-history) prompt; claude persists the
+//            conversation under ~/.claude keyed by cwd.
+//   resume → --resume <uuid>     : continue an existing session; only
+//            the new user message is sent (claude already has history).
+// id MUST be lowercase — claude does not match uppercase UUIDs.
+export type ClaudeSessionArg = { mode: 'seed' | 'resume'; id: string };
+
+// True when a run's error string indicates the resume target session no
+// longer exists (e.g. ~/.claude was cleared between turns). Drives the
+// re-seed fallback. The string is claude's own stderr ("No conversation
+// found with session ID: <id>") which the runner surfaces verbatim in
+// ChatRunResult.error.
+export function isClaudeSessionLost(error: string | null | undefined): boolean {
+  return !!error && /no conversation found with session id/i.test(error);
+}
+
 // Translate a resolved ChatConfig into the args array passed to spawn().
 // Order: required baseline first (--print + permission + format), then
-// optional knobs, then extraArgs verbatim at the end. Empty / undefined
-// fields are skipped so claude uses its own defaults.
-function buildClaudeArgs(cfg: ChatConfig): string[] {
+// optional session binding, then optional knobs, then extraArgs verbatim
+// at the end. Empty / undefined fields are skipped so claude uses its own
+// defaults.
+export function buildClaudeArgs(
+  cfg: ChatConfig,
+  session?: ClaudeSessionArg,
+): string[] {
   const args = [
     '--print',
     '--permission-mode',
@@ -155,6 +177,9 @@ function buildClaudeArgs(cfg: ChatConfig): string[] {
     'stream-json',
     '--verbose',
   ];
+  if (session) {
+    args.push(session.mode === 'seed' ? '--session-id' : '--resume', session.id);
+  }
   if (cfg.model?.trim()) {
     args.push('--model', cfg.model.trim());
   }
@@ -764,6 +789,10 @@ async function runClaudeTurn(
   thread: ChatThread,
   assistant: ChatMessage,
   config: ChatConfig,
+  // v0.32: when true, ignore any existing session and SEED a fresh one
+  // with full-history replay. Set by the session-lost fallback so a
+  // vanished session re-establishes context cleanly.
+  forceSeed = false,
 ): Promise<void> {
   const claudeBin = await resolveClaudeBinary();
   if (!claudeBin) {
@@ -779,29 +808,45 @@ async function runClaudeTurn(
     return;
   }
 
-  // Build the prompt as the full conversation history (system + user/asst
-  // turns) so claude has context for the latest user message. claude
-  // --print processes a single prompt at a time, so we serialize the
-  // entire history into one stdin payload. This costs more tokens than a
-  // proper session but works without claude session state.
-  const history = thread.messages
-    .slice(0, -1) // exclude the current streaming assistant
-    .map((m) => {
-      if (m.role === 'user') return `User: ${m.content}`;
-      return `Assistant: ${m.content || '(thinking)'}`;
-    })
-    .join('\n\n');
+  // v0.32: seed vs resume. A thread with a persisted claudeSessionId (and
+  // not forced to re-seed) RESUMES — claude already holds the conversation
+  // disk-side, so we send ONLY the new user message. Otherwise we SEED a
+  // fresh session and replay the full transcript once so claude has the
+  // back-context (this is also the automatic migration path for legacy
+  // threads and the recovery path when a session is lost).
+  const resuming = !forceSeed && !!thread.claudeSessionId;
 
   const lastUser = thread.messages
     .slice()
     .reverse()
     .find((m) => m.role === 'user');
-  const prompt = history
-    ? `${history}\n\n(Continue the conversation above. Reply only with the new assistant turn.)`
-    : (lastUser?.content ?? '');
+
+  let prompt: string;
+  let sessionArg: ClaudeSessionArg;
+  if (resuming) {
+    // Lean turn: claude has the history; just send the latest user input.
+    prompt = lastUser?.content ?? '';
+    sessionArg = { mode: 'resume', id: thread.claudeSessionId! };
+  } else {
+    // Seed: full-history replay into a new session. Persisted before the
+    // spawn (via the activeRun persist below) so a crash can't lose the id.
+    const history = thread.messages
+      .slice(0, -1) // exclude the current streaming assistant
+      .map((m) => {
+        if (m.role === 'user') return `User: ${m.content}`;
+        return `Assistant: ${m.content || '(thinking)'}`;
+      })
+      .join('\n\n');
+    prompt = history
+      ? `${history}\n\n(Continue the conversation above. Reply only with the new assistant turn.)`
+      : (lastUser?.content ?? '');
+    const sid = randomUUID().toLowerCase();
+    thread.claudeSessionId = sid;
+    sessionArg = { mode: 'seed', id: sid };
+  }
 
   const env = await resolveInteractiveShellEnv();
-  const args = buildClaudeArgs(config);
+  const args = buildClaudeArgs(config, sessionArg);
 
   // Forward ref: line handler needs handle.kill but handle isn't built
   // until startChatRun returns. The closure binds late, so by the time
@@ -878,7 +923,29 @@ async function runClaudeTurn(
     ts: Date.now(),
   });
 
-  await finalizeSoloRun(state, thread, assistant, handle);
+  const outcome = await finalizeSoloRun(state, thread, assistant, handle, {
+    resuming,
+  });
+
+  // Session-lost recovery: the resume target vanished (e.g. ~/.claude
+  // cleared between turns). finalizeSoloRun did NOT broadcast a terminal
+  // error for this case — re-seed once with full history so the thread
+  // keeps working instead of bricking. forceSeed guards against a loop.
+  if (outcome === 'session-lost' && resuming) {
+    logger.warn(
+      `claude session ${thread.claudeSessionId} not found — re-seeding thread=${thread.id.slice(0, 8)} with full history`,
+    );
+    thread.claudeSessionId = undefined;
+    assistant.content = '';
+    assistant.toolCalls = [];
+    assistant.segments = undefined;
+    assistant.thinking = undefined;
+    assistant.error = undefined;
+    assistant.awaitingUserAnswer = false;
+    assistant.status = 'streaming';
+    await persistThread(state.projectPath, thread);
+    await runClaudeTurn(state, thread, assistant, config, /* forceSeed */ true);
+  }
 }
 
 // Wait for the run to terminate, then update the assistant message +
@@ -889,16 +956,29 @@ async function finalizeSoloRun(
   thread: ChatThread,
   assistant: ChatMessage,
   handle: ChatRunHandle,
-): Promise<void> {
+  // v0.32: when this run was a --resume, a "No conversation found" error
+  // means the session vanished. We signal 'session-lost' to the caller
+  // WITHOUT broadcasting a terminal error so it can re-seed transparently.
+  // Undefined (e.g. resumeActiveRuns reattach) = legacy behavior.
+  opts?: { resuming?: boolean },
+): Promise<'done' | 'session-lost'> {
   const result = await handle.promise;
 
   // Only clear active state if WE are still the owner — defensive
   // against a race where the user already started another run on the
-  // same thread (which would have replaced our Map entry).
+  // same thread (which would have replaced our Map entry). Released on
+  // both the finalize and the session-lost-handoff paths.
   if (state.activeRunsByThread.get(thread.id) === handle) {
     state.activeRunsByThread.delete(thread.id);
   }
   delete thread.activeRun;
+
+  // v0.32: resume target gone → hand back to the caller's re-seed path.
+  // No broadcast, no status mutation, no persist — the assistant message
+  // is reset by the caller for a clean retry.
+  if (opts?.resuming && !result.cancelled && isClaudeSessionLost(result.error)) {
+    return 'session-lost';
+  }
 
   if (assistant.awaitingUserAnswer) {
     // Claude called AskUserQuestion and we killed the run early. Treat
@@ -955,6 +1035,8 @@ async function finalizeSoloRun(
     userMsg,
     assistant,
   );
+
+  return 'done';
 }
 
 // ─── v0.29: LLM-profile turn execution ─────────────────────────────────────
