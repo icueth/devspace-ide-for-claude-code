@@ -77,6 +77,8 @@ export interface RowComparableProps {
   gitToken: object;
   /** Flips on any file-tree state change (expand / collapse / load). */
   structureToken: object;
+  /** Flips whenever the active editor file changes. */
+  activeFileToken: object;
   folderStat: FolderChangeStats | undefined;
   isActiveFile: boolean;
   isIgnored: boolean;
@@ -86,15 +88,19 @@ export interface RowComparableProps {
 /**
  * React.memo equality for a file-tree row.
  *
- * Folder rows re-render on ANY git change (re-derive children's gitType) AND on
- * ANY tree-structure change. The structure check is critical: expanding a NESTED
- * folder mutates tree state but leaves every ANCESTOR row's props unchanged, so
- * without it the memoized ancestors never re-render and the newly-loaded
- * children don't mount until an unrelated git tick happens to cascade through —
- * which reads as a multi-second "stuck" expand (regression after rows were
- * memoized). Leaf (file) rows ignore both tokens — their own gitType prop is the
- * precise signal — so a git tick or a sibling folder expanding still only
- * re-renders rows that actually changed.
+ * Folder rows re-render on ANY git change (re-derive children's gitType), on
+ * ANY tree-structure change, AND on ANY active-file change. The structure check
+ * is critical: expanding a NESTED folder mutates tree state but leaves every
+ * ANCESTOR row's props unchanged, so without it the memoized ancestors never
+ * re-render and the newly-loaded children don't mount until an unrelated git
+ * tick happens to cascade through — which reads as a multi-second "stuck"
+ * expand (regression after rows were memoized). The active-file check is the
+ * same shape: switching the active tab mutates neither the tree nor git state,
+ * so without it the highlight stays on the old file until a git tick flips
+ * gitToken. Leaf (file) rows ignore all three tokens — their own gitType /
+ * isActiveFile props are the precise signals — so a git tick, a sibling folder
+ * expanding, or an active-tab switch still only re-renders rows that actually
+ * changed.
  */
 export function areRowPropsEqual(
   prev: RowComparableProps,
@@ -103,7 +109,8 @@ export function areRowPropsEqual(
   if (
     next.entry.isDirectory &&
     (prev.gitToken !== next.gitToken ||
-      prev.structureToken !== next.structureToken)
+      prev.structureToken !== next.structureToken ||
+      prev.activeFileToken !== next.activeFileToken)
   ) {
     return false;
   }

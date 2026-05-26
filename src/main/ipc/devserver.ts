@@ -11,6 +11,7 @@ import {
   subscribeDevServerEvents,
   unsubscribeDevServerEvents,
 } from '@main/services/DevServerService';
+import { assertInWorkspace } from '@main/utils/pathScope';
 import { IPC } from '@shared/ipc-channels';
 import type { DevServerInstallInput, DevServerStartInput } from '@shared/design';
 
@@ -44,7 +45,7 @@ export function registerDevServerIpc(): void {
     return detectDevServer(assertProjectPath(projectPath));
   });
 
-  ipcMain.handle(IPC.DEVSERVER_START, (event, input: DevServerStartInput) => {
+  ipcMain.handle(IPC.DEVSERVER_START, async (event, input: DevServerStartInput) => {
     if (!input || typeof input !== 'object') {
       throw new Error('DEVSERVER_START requires an input object');
     }
@@ -52,6 +53,10 @@ export function registerDevServerIpc(): void {
       ...input,
       projectPath: assertProjectPath(input.projectPath),
     };
+    // Confine to an open workspace in addition to the absolute/no-`..`
+    // shape check above — starting a dev server spawns a process in this
+    // directory, so it must be a real workspace project.
+    await assertInWorkspace(safe.projectPath);
     // Starting an action — subscribe the sender so it gets the
     // resulting status_changed / url_resolved stream.
     subscribeDevServerEvents(safe.projectPath, event.sender);

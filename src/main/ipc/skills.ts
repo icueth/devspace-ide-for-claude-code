@@ -15,6 +15,7 @@ import {
   seedDesignSkills,
   setSeedingEnabled,
 } from '@main/services/SkillSeedingService';
+import { assertInWorkspace } from '@main/utils/pathScope';
 import { IPC } from '@shared/ipc-channels';
 import type {
   DesignSeedingReseedResult,
@@ -46,12 +47,20 @@ export function registerSkillsIpc(): void {
 
   ipcMain.handle(
     IPC.SKILLS_CREATE,
-    (
+    async (
       _event,
       scope: 'global' | 'project',
       projectPath: string | null,
       slug: string,
-    ) => createSkill(scope, projectPath, slug),
+    ) => {
+      // Project scope writes under <projectPath>/.claude/skills — confine
+      // that path to an open workspace. Global scope uses ~/.claude and
+      // carries no projectPath to validate.
+      if (scope === 'project' && projectPath) {
+        await assertInWorkspace(projectPath);
+      }
+      return createSkill(scope, projectPath, slug);
+    },
   );
 
   ipcMain.handle(IPC.SKILLS_DELETE, (_event, filePath: string) => {
@@ -61,13 +70,16 @@ export function registerSkillsIpc(): void {
 
   ipcMain.handle(
     IPC.SKILLS_DUPLICATE,
-    (
+    async (
       _event,
       filePath: string,
       targetScope: 'global' | 'project',
       projectPath: string | null,
     ) => {
       assertValidSkillPath(filePath);
+      if (targetScope === 'project' && projectPath) {
+        await assertInWorkspace(projectPath);
+      }
       return duplicateSkill(filePath, targetScope, projectPath);
     },
   );

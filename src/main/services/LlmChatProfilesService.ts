@@ -60,6 +60,29 @@ interface ProfilesFileShape {
 
 let cache: LlmChatProfile[] | null = null;
 
+// ─── per-file mutex to defeat read-modify-write races ───────────────────────
+//
+// upsertProfile/deleteProfile do load → mutate → write; without
+// serialization two concurrent IPC calls both read the same baseline and
+// the second write clobbers the first. Mirrors McpService.withFileLock.
+const writeLocks = new Map<string, Promise<void>>();
+
+async function withFileLock<T>(file: string, fn: () => Promise<T>): Promise<T> {
+  const prev = writeLocks.get(file) ?? Promise.resolve();
+  let release!: () => void;
+  const next = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  writeLocks.set(file, prev.then(() => next));
+  try {
+    await prev;
+    return await fn();
+  } finally {
+    release();
+    if (writeLocks.get(file) === next) writeLocks.delete(file);
+  }
+}
+
 function normalizeProvider(p: unknown): LlmProvider {
   return p === 'anthropic' ? 'anthropic' : 'openai';
 }
@@ -208,6 +231,7 @@ export async function listProfiles(): Promise<LlmChatProfile[]> {
 export async function upsertProfile(
   input: Partial<LlmChatProfile>,
 ): Promise<LlmChatProfile> {
+  return withFileLock(profilesFile(), async () => {
   await loadProfiles();
   const list = cache ?? [];
 
@@ -304,6 +328,7 @@ export async function upsertProfile(
     `upsert profile id=${next.id.slice(0, 8)} provider=${next.provider} model=${next.model}`,
   );
   return next;
+  });
 }
 
 /** Remove a profile by id. Idempotent — missing ids are a no-op. */
@@ -311,13 +336,15 @@ export async function deleteProfile(id: string): Promise<void> {
   if (typeof id !== 'string' || !id.trim()) {
     throw new Error('deleteProfile: id is required');
   }
-  await loadProfiles();
-  const list = cache ?? [];
-  const next = list.filter((p) => p.id !== id);
-  if (next.length === list.length) return;
-  await writeToDisk(next);
-  cache = next;
-  logger.info(`delete profile id=${id.slice(0, 8)}`);
+  await withFileLock(profilesFile(), async () => {
+    await loadProfiles();
+    const list = cache ?? [];
+    const next = list.filter((p) => p.id !== id);
+    if (next.length === list.length) return;
+    await writeToDisk(next);
+    cache = next;
+    logger.info(`delete profile id=${id.slice(0, 8)}`);
+  });
 }
 
 /**

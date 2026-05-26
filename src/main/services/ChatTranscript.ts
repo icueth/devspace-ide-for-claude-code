@@ -46,6 +46,16 @@ export interface ProjectState {
   // handles never get mistaken for tmux handles in finalize paths.
   activeRunsByThread: Map<string, ChatRunHandle>;
   activeLlmRunsByThread: Map<string, LlmRunHandle>;
+  // v0.35.2: the active-run Maps above are only populated AFTER the spawn
+  // resolves (an await). `startingThreads` is claimed SYNCHRONOUSLY in
+  // sendMessage before any await, so the per-thread lock holds across the
+  // whole dispatch→spawn window — closing a double-send race that pushed
+  // two interleaved runs onto one thread. `cancelDuringStart` records a
+  // cancel/delete that arrived during that window; the run honors it right
+  // after the spawn (kill + finalize-cancelled / skip-persist-if-deleted)
+  // instead of silently losing the cancel.
+  startingThreads: Set<string>;
+  cancelDuringStart: Set<string>;
   subscribers: Set<WebContents>;
   hydrationPromise: Promise<void>;
 }
@@ -69,6 +79,8 @@ export function getState(projectPath: string): ProjectState {
       threads: new Map(),
       activeRunsByThread: new Map(),
       activeLlmRunsByThread: new Map(),
+      startingThreads: new Set(),
+      cancelDuringStart: new Set(),
       subscribers: new Set(),
       hydrationPromise: Promise.resolve(),
     };
@@ -312,6 +324,17 @@ export async function persistThread(
 ): Promise<void> {
   if (!isUuid(thread.id)) {
     throw new Error(`persistThread: invalid threadId: ${thread.id}`);
+  }
+  // v0.35.2: never resurrect a deleted thread. A run finalizer holds the
+  // thread object by reference; if the user deleted the thread mid-stream
+  // (deleteThread removed it from state + unlinked the file), the
+  // finalizer's persist would re-create the JSON → a zombie thread that
+  // reappears on next-boot hydrate. If the thread is gone from its live
+  // state, this write is a no-op. (When no state exists yet — e.g. an
+  // isolated unit test — we fall through and write as before.)
+  const liveState = states.get(path.resolve(projectPath));
+  if (liveState && !liveState.threads.has(thread.id)) {
+    return;
   }
   const file = threadFile(projectPath, thread.id);
   await fs.promises.mkdir(path.dirname(file), { recursive: true });

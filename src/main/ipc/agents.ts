@@ -9,6 +9,7 @@ import {
   readAgent,
   saveAgent,
 } from '@main/services/AgentsService';
+import { assertInWorkspace } from '@main/utils/pathScope';
 import { IPC } from '@shared/ipc-channels';
 import type { AgentDef, AgentScope } from '@shared/types';
 
@@ -34,12 +35,20 @@ export function registerAgentsIpc(): void {
 
   ipcMain.handle(
     IPC.AGENTS_CREATE,
-    (
+    async (
       _event,
       scope: AgentScope,
       projectPath: string | null,
       slug: string,
-    ) => createAgent(scope, projectPath, slug),
+    ) => {
+      // Project scope writes under <projectPath>/.claude/agents — confine
+      // that path to an open workspace. Global scope uses ~/.claude and
+      // carries no projectPath to validate.
+      if (scope === 'project' && projectPath) {
+        await assertInWorkspace(projectPath);
+      }
+      return createAgent(scope, projectPath, slug);
+    },
   );
 
   ipcMain.handle(IPC.AGENTS_DELETE, (_event, filePath: string) => {
@@ -49,13 +58,16 @@ export function registerAgentsIpc(): void {
 
   ipcMain.handle(
     IPC.AGENTS_DUPLICATE,
-    (
+    async (
       _event,
       filePath: string,
       targetScope: 'global' | 'project',
       projectPath: string | null,
     ) => {
       assertValidAgentPath(filePath);
+      if (targetScope === 'project' && projectPath) {
+        await assertInWorkspace(projectPath);
+      }
       return duplicateAgent(filePath, targetScope, projectPath);
     },
   );

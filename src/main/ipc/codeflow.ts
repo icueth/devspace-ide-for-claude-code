@@ -37,22 +37,24 @@ export function registerCodeflowIpc(): void {
   ipcMain.handle(
     IPC.CODEFLOW_GET_STATUS,
     async (event, projectPath: string): Promise<CodeflowStatus> => {
+      const safe = await assertInWorkspace(projectPath);
       // Subscribe the requesting webContents so we can stream progress
       // events back. Subscription is cleaned up on destroy or on the matching
       // unsubscribe call. Multiple subscriptions for the same webContents are
       // de-duplicated by the underlying Set.
-      subscribeStatus(projectPath, event.sender);
-      return getStatus(projectPath);
+      subscribeStatus(safe, event.sender);
+      return getStatus(safe);
     },
   );
 
   ipcMain.handle(
     IPC.CODEFLOW_ANALYZE,
     async (event, projectPath: string, opts?: CodeflowAnalyzeOptions) => {
+      const safe = await assertInWorkspace(projectPath);
       // Re-subscribe defensively in case the renderer skipped status fetch.
-      subscribeStatus(projectPath, event.sender);
+      subscribeStatus(safe, event.sender);
       try {
-        await analyzeProject(projectPath, opts ?? {});
+        await analyzeProject(safe, opts ?? {});
       } catch (err) {
         logger.error('analyze failed:', (err as Error).message);
         // Service writes the error into status; nothing more to do here. We
@@ -63,7 +65,8 @@ export function registerCodeflowIpc(): void {
   );
 
   ipcMain.handle(IPC.CODEFLOW_CANCEL, async (_event, projectPath: string) => {
-    await cancelAnalyze(projectPath);
+    const safe = await assertInWorkspace(projectPath);
+    await cancelAnalyze(safe);
   });
 
   ipcMain.handle(IPC.CODEFLOW_READ_DOC, async (_event, absPath: string) => {
@@ -79,11 +82,13 @@ export function registerCodeflowIpc(): void {
   });
 
   ipcMain.handle(IPC.CODEFLOW_LIST_DOCS, async (_event, projectPath: string) => {
-    return listProjectDocs(projectPath);
+    const safe = await assertInWorkspace(projectPath);
+    return listProjectDocs(safe);
   });
 
   ipcMain.handle(IPC.CODEFLOW_OPEN_DIR, async (_event, projectPath: string) => {
-    const dir = codeflowDirFor(projectPath);
+    const safe = await assertInWorkspace(projectPath);
+    const dir = codeflowDirFor(safe);
     await shell.openPath(dir);
   });
 
@@ -103,19 +108,20 @@ export function registerCodeflowIpc(): void {
   ipcMain.handle(
     IPC.CODEFLOW_AUGMENT_GRAPH,
     async (event, projectPath: string, graph) => {
+      const safe = await assertInWorkspace(projectPath);
       // Stream "Reading…" / "Grep…" beats so the UI can show what Claude is
       // doing rather than a silent spinner. Channel-per-project keeps multi-
       // window setups from cross-talking.
       const send = (message: string) => {
         if (!event.sender.isDestroyed()) {
           event.sender.send(IPC.CODEFLOW_AUGMENT_PROGRESS, {
-            projectPath,
+            projectPath: safe,
             message,
           });
         }
       };
       try {
-        const softEdges = await augmentGraph(projectPath, graph, send);
+        const softEdges = await augmentGraph(safe, graph, send);
         return { ok: true as const, softEdges };
       } catch (err) {
         return { ok: false as const, error: (err as Error).message };
@@ -124,33 +130,37 @@ export function registerCodeflowIpc(): void {
   );
 
   ipcMain.handle(IPC.CODEFLOW_AUGMENT_CANCEL, async (_event, projectPath: string) => {
-    cancelAugment(projectPath);
+    const safe = await assertInWorkspace(projectPath);
+    cancelAugment(safe);
   });
 
   ipcMain.handle(
     IPC.CODEFLOW_AUGMENT_LOAD,
     async (_event, projectPath: string, fingerprint: string) => {
-      return loadAugment(projectPath, fingerprint);
+      const safe = await assertInWorkspace(projectPath);
+      return loadAugment(safe, fingerprint);
     },
   );
 
   ipcMain.handle(IPC.CODEFLOW_AUGMENT_CLEAR, async (_event, projectPath: string) => {
-    await clearAugment(projectPath);
+    const safe = await assertInWorkspace(projectPath);
+    await clearAugment(safe);
   });
 
   ipcMain.handle(
     IPC.CODEFLOW_AUGMENT_FUNCTIONS,
     async (event, projectPath: string, graph) => {
+      const safe = await assertInWorkspace(projectPath);
       const send = (message: string) => {
         if (!event.sender.isDestroyed()) {
           event.sender.send(IPC.CODEFLOW_AUGMENT_FUNCTIONS_PROGRESS, {
-            projectPath,
+            projectPath: safe,
             message,
           });
         }
       };
       try {
-        const softEdges = await augmentFunctionGraph(projectPath, graph, send);
+        const softEdges = await augmentFunctionGraph(safe, graph, send);
         return { ok: true as const, softEdges };
       } catch (err) {
         return { ok: false as const, error: (err as Error).message };
@@ -161,14 +171,16 @@ export function registerCodeflowIpc(): void {
   ipcMain.handle(
     IPC.CODEFLOW_AUGMENT_FUNCTIONS_CANCEL,
     async (_event, projectPath: string) => {
-      cancelFunctionAugment(projectPath);
+      const safe = await assertInWorkspace(projectPath);
+      cancelFunctionAugment(safe);
     },
   );
 
   ipcMain.handle(
     IPC.CODEFLOW_AUGMENT_FUNCTIONS_LOAD,
     async (_event, projectPath: string, fingerprint: string) => {
-      return loadFunctionAugment(projectPath, fingerprint);
+      const safe = await assertInWorkspace(projectPath);
+      return loadFunctionAugment(safe, fingerprint);
     },
   );
 

@@ -702,7 +702,10 @@ async function gitListFiles(projectRoot: string): Promise<string[] | null> {
     const { stdout } = await execFileAsync(
       'git',
       ['ls-files', '--cached', '--others', '--exclude-standard', '-z'],
-      { cwd: projectRoot, maxBuffer: 64 * 1024 * 1024 },
+      // 30s timeout so a slow/locked repo can't pin the debounced live-sync
+      // rebuild slot (timeout-kill → clean null below), mirroring
+      // computeGitIntelligence.
+      { cwd: projectRoot, maxBuffer: 64 * 1024 * 1024, timeout: 30_000 },
     );
     const paths = stdout.split('\0').filter(Boolean);
     if (paths.length === 0) return null;

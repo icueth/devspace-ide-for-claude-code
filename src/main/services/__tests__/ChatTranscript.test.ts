@@ -474,3 +474,43 @@ describe('ProjectState per-thread active-run maps (v0.30.3)', () => {
     expect(state.activeRunsByThread.has(threadB.id)).toBe(true);
   });
 });
+
+describe('persistThread tombstone guard (v0.35.2)', () => {
+  it('does not resurrect a thread deleted from its live state', async () => {
+    const thread = await createThread(tmpRoot, 'doomed');
+    const file = threadFile(tmpRoot, thread.id);
+    expect(fs.existsSync(file)).toBe(true);
+
+    // Zombie race: the thread is deleted while a run finalizer still holds
+    // the object by reference. deleteThread removes it from state + unlinks.
+    await deleteThread(tmpRoot, thread.id);
+    expect(fs.existsSync(file)).toBe(false);
+
+    // The stale finalizer re-persisting the deleted thread must NOT recreate
+    // the JSON (which would reappear on next-boot hydrate as a zombie).
+    await persistThread(tmpRoot, thread);
+    expect(fs.existsSync(file)).toBe(false);
+  });
+
+  it('still writes when no live state exists for the project (unit-test path)', async () => {
+    // A project never registered via getState() can't be tombstoned, so the
+    // write proceeds as before — keeps isolated unit tests working.
+    const freshRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'devspace-chat-fresh-'),
+    );
+    const id = 'cccccccc-cccc-cccc-cccc-cccccccccccc';
+    try {
+      await persistThread(freshRoot, {
+        id,
+        projectId: path.basename(freshRoot),
+        title: 'x',
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        messages: [],
+      } as never);
+      expect(fs.existsSync(threadFile(freshRoot, id))).toBe(true);
+    } finally {
+      fs.rmSync(freshRoot, { recursive: true, force: true });
+    }
+  });
+});

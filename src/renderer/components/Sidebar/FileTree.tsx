@@ -92,6 +92,16 @@ export const FileTree = memo(function FileTree({ rootPath, onOpenFile }: FileTre
   // rows ignore it, so the bulk file rows still skip re-render on tree changes.
   const structureToken = useMemo(() => ({}), [tree]);
 
+  // Identity token that flips whenever the active editor file changes. Folder
+  // rows compare it so switching the active tab (Spotlight / Quick Open / tab
+  // strip / go-to-line) — which mutates neither the tree nor git state —
+  // re-renders the memoized ancestor chain, letting nested leaves receive the
+  // updated isActiveFile. Without it the highlight stays on the old file until
+  // the next git tick happens to flip gitToken and cascade through. Leaf rows
+  // ignore the token — their own isActiveFile prop is the precise signal — so
+  // only the two leaves whose active-state actually changed re-render.
+  const activeFileToken = useMemo(() => ({}), [activeEditorPath]);
+
   // Build absolute paths for everything git's `ls-files --ignored --directory`
   // reported. We split into two lists: exact-match files and directory
   // prefixes. A child of an ignored directory inherits the gray styling
@@ -547,6 +557,7 @@ export const FileTree = memo(function FileTree({ rootPath, onOpenFile }: FileTre
                 gitType={gitType}
                 gitToken={gitToken}
                 structureToken={structureToken}
+                activeFileToken={activeFileToken}
                 folderStat={callbacks.getFolderStat(entry)}
                 isActiveFile={callbacks.isActiveFile(entry)}
                 isIgnored={callbacks.isIgnored(entry, gitType)}

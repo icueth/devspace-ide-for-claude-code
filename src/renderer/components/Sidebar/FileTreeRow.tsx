@@ -73,6 +73,11 @@ interface FileTreeRowProps {
    *  / load). Folder rows compare it so a nested expand actually propagates
    *  through memoized ancestors; leaf rows ignore it. See areRowPropsEqual. */
   structureToken: object;
+  /** Identity token that flips whenever the active editor file changes. Folder
+   *  rows compare it so an active-tab switch propagates through memoized
+   *  ancestors to nested leaves; leaf rows ignore it (their own isActiveFile is
+   *  the precise signal). See areRowPropsEqual. */
+  activeFileToken: object;
   folderStat: FolderChangeStats | undefined;
   isActiveFile: boolean;
   isIgnored: boolean;
@@ -92,6 +97,7 @@ function FileTreeRowImpl({
   gitType,
   gitToken,
   structureToken,
+  activeFileToken,
   folderStat,
   isActiveFile,
   isIgnored,
@@ -308,6 +314,7 @@ function FileTreeRowImpl({
                 gitType={childGitType}
                 gitToken={gitToken}
                 structureToken={structureToken}
+                activeFileToken={activeFileToken}
                 folderStat={callbacks.getFolderStat(child)}
                 isActiveFile={callbacks.isActiveFile(child)}
                 isIgnored={callbacks.isIgnored(child, childGitType)}

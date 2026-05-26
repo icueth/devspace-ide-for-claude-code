@@ -5,6 +5,62 @@ All notable changes to DevSpace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.35.2] — 2026-05-26
+
+Bug-fix pass from a 4-surface audit (chat runtime, codeflow, renderer, services/IPC).
+The codebase was largely sound; these are the real, triggerable issues found.
+
+### Chat runtime — spawn-window concurrency race (3 HIGH, one root cause)
+The per-thread lock Maps (`activeRunsByThread`/`activeLlmRunsByThread`) were only
+populated *after* the spawn resolved (an `await`), but the lock check, cancel, and
+delete all assumed the entry existed synchronously once `sendMessage` had dispatched.
+In that window:
+- **double-send** to the same thread slipped past the gate → two interleaved runs
+  corrupting one transcript;
+- **cancel** (Stop) was silently lost → the run kept streaming;
+- **delete** re-persisted the thread from the in-flight finalizer → a zombie thread
+  that reappeared on next-boot hydrate.
+
+Fix: claim the lock **synchronously** in `sendMessage` (`startingThreads`) before any
+await; a `cancelDuringStart` set records a cancel/delete that lands during the window,
+which every run honors right after its spawn (`abortIfCancelledDuringStart` → kill the
+fresh handle, finalize cancelled, or skip-persist if deleted). `persistThread` is now
+tombstone-aware — it never resurrects a thread missing from its live state, closing the
+zombie window for delete-during-streaming too. `cancelActive` is now best-effort (a kill
+failure on one handle no longer strands the rest on project-wide cancel/quit).
+
+### Security / correctness (services + IPC)
+- **Git IPC `cwd` was never workspace-confined** — every git handler (status/diff/log/
+  push/pull/commit/…) now calls `assertInWorkspace(cwd)`, closing an arbitrary-repo
+  read/diff/operate primitive from a compromised renderer.
+- Added `assertInWorkspace` to the remaining unguarded handlers: skills/agents create+
+  duplicate (project scope), codeflow analyze/status/open-dir/augment, pty create,
+  devserver start.
+- **Profile services had no mutex** → concurrent upsert/delete could clobber a
+  freshly-saved profile. `LlmChatProfilesService` + `CliProfilesService` now serialize
+  read-modify-write via the same `withFileLock` the MCP service uses.
+
+### Renderer / codeflow correctness
+- **FileTree nested active-file highlight went stale on tab switch** — the memo
+  comparator had `gitToken`/`structureToken` but no `activeFileToken`, so folder rows
+  bailed when only the active editor path changed (masked, but up to ~15s, by the git
+  poll). Added `activeFileToken`; folders re-render on it, leaves still compare their
+  own active flag.
+- **`gitListFiles` had no timeout** → a slow/locked repo could pin the debounced
+  live-sync rebuild slot permanently. Added the same `timeout: 30_000` as the sibling
+  git-intelligence call.
+
+### Verified
+985/985 tests pass (+5 regression: 3 for the spawn-window abort helper, 2 for the
+persistThread tombstone; +4 for the activeFileToken comparator), typecheck clean,
+packaged dmg boots clean. Claude/LLM/OpenCode normal paths unchanged.
+
+### Deferred (documented)
+SSRF guard hardening (`urlSafety` validates the hostname string, not the resolved IP —
+DNS-rebinding + numeric-IP encodings can bypass it; needs an IP-pinned fetch agent), and
+analyzer dead-code false-positives for computed dynamic imports — both lower-frequency
+and want their own focused change.
+
 ## [0.35.1] — 2026-05-26
 
 Dead-code cleanup pass — no user-facing behavior change. After the Design Studio,

@@ -260,12 +260,26 @@ export async function cancelActive(
       })()
     : Array.from(s.activeLlmRunsByThread.values());
 
+  // v0.35.2: cancel targeting a thread whose run hasn't registered its
+  // handle yet (still inside the dispatch→spawn window) found nothing to
+  // kill above and would silently lose the cancel. Record it so the run
+  // aborts the moment its spawn resolves. Project-wide cancel (no
+  // threadId) flags every starting thread.
+  if (threadId) {
+    if (!s.activeRunsByThread.has(threadId) && !s.activeLlmRunsByThread.has(threadId) && s.startingThreads.has(threadId)) {
+      s.cancelDuringStart.add(threadId);
+    }
+  } else {
+    for (const id of s.startingThreads) s.cancelDuringStart.add(id);
+  }
+
+  // Best-effort: a kill failure on one handle must not strand the rest
+  // (esp. on project-wide cancel / quit). Collect and log, never throw.
   for (const h of claudeHandles) {
     try {
       await h.kill();
     } catch (err) {
       logger.warn(`cancel kill failed: ${(err as Error).message}`);
-      throw err;
     }
   }
   for (const h of llmHandles) {
@@ -273,9 +287,40 @@ export async function cancelActive(
       await h.kill();
     } catch (err) {
       logger.warn(`cancel llm kill failed: ${(err as Error).message}`);
-      throw err;
     }
   }
+}
+
+/**
+ * v0.35.2: called by every run function right after its spawn resolves,
+ * before it registers the real handle in the active-run Map. Returns true
+ * if the run must abort because a cancel or delete arrived during the
+ * dispatch→spawn window:
+ *   - thread was DELETED (gone from state.threads) → kill the fresh handle
+ *     and return WITHOUT persisting (re-persisting would resurrect a
+ *     zombie thread on disk + on next-boot hydrate).
+ *   - thread was CANCELLED mid-start → kill, finalize as cancelled, persist.
+ * The caller must `return` immediately when this resolves true. Handles of
+ * all three runner kinds satisfy the structural `{ kill }` shape.
+ */
+export async function abortIfCancelledDuringStart(
+  state: ProjectState,
+  thread: ChatThread,
+  assistant: ChatMessage,
+  handle: { kill: () => Promise<void> },
+): Promise<boolean> {
+  const deleted = !state.threads.has(thread.id);
+  const cancelled = state.cancelDuringStart.has(thread.id);
+  if (!deleted && !cancelled) return false;
+  state.cancelDuringStart.delete(thread.id);
+  await handle.kill().catch(() => {});
+  if (!deleted) {
+    assistant.status = 'cancelled';
+    thread.updatedAt = Date.now();
+    broadcast(state, thread.id, { kind: 'done', ts: Date.now() });
+    await persistThread(state.projectPath, thread).catch(() => {});
+  }
+  return true;
 }
 
 // ─── turn execution ─────────────────────────────────────────────────────────
@@ -298,187 +343,220 @@ export async function sendMessage(req: ChatSendRequest): Promise<{ messageId: st
   if (!thread) throw new Error(`thread not found: ${req.threadId}`);
   if (
     s.activeRunsByThread.has(req.threadId) ||
-    s.activeLlmRunsByThread.has(req.threadId)
+    s.activeLlmRunsByThread.has(req.threadId) ||
+    s.startingThreads.has(req.threadId)
   ) {
     throw new Error('a chat turn is already running for this thread');
   }
 
-  const userMsg: ChatMessage = {
-    id: randomUUID(),
-    role: 'user',
-    content: req.text,
-    toolCalls: [],
-    createdAt: Date.now(),
-    status: 'done',
+  // v0.35.2: claim the per-thread lock SYNCHRONOUSLY — before the first
+  // await below — so a cancel / delete / double-send arriving during the
+  // dispatch→spawn window is not lost (the active-run Maps are only
+  // populated after the spawn resolves). The run clears it when its
+  // promise settles (.finally on each dispatch); if we throw before
+  // dispatching, the finally at the end clears it so the thread isn't
+  // left permanently locked.
+  s.startingThreads.add(req.threadId);
+  let dispatched = false;
+  const clearStarting = (): void => {
+    s.startingThreads.delete(req.threadId);
   };
-  // v0.24: implicit Forge signal detection. Inspect the user text
-  // against the IMMEDIATELY-PREVIOUS assistant turn — if we detect a
-  // thanks/correction/abandoned cue, emit a forge_signal event so the
-  // ForgeService can bump the per-skill counters for every key in
-  // prev.loadedSkillKeys. Fire-and-forget — chat must never block on
-  // this. See detectForgeSignal() at the bottom of this module.
+
   try {
-    const prev = lastAssistantMessage(thread);
-    if (prev) {
-      const detected = detectForgeSignal(req.text, userMsg.createdAt, prev.createdAt);
-      if (detected) {
-        // Settings gate is async — broadcast / record only after the
-        // settings check resolves so a disabled toggle doesn't leak
-        // events. Fire-and-forget so the chat path isn't blocked.
-        const detectedKind = detected;
-        const prevId = prev.id;
-        const keys = prev.loadedSkillKeys ?? [];
-        void forgeSignalAllowed(detectedKind).then((ok) => {
-          if (!ok) return;
-          broadcast(s, thread.id, {
-            kind: 'forge_signal',
-            forgeSignal: detectedKind,
-            prevAssistantId: prevId,
-            ts: Date.now(),
-          });
-          for (const key of keys) {
-            recordForgeSignal({
-              projectPath: s.projectPath,
-              key,
-              messageId: prevId,
-              signal: detectedKind,
-            }).catch((err) => {
-              logger.warn(`forge recordSignal failed: ${(err as Error).message}`);
-            });
-          }
-        });
-      }
-    }
-  } catch (err) {
-    logger.warn(`forge signal detection threw: ${(err as Error).message}`);
-  }
-  thread.messages.push(userMsg);
-
-  // Give the thread a sensible title once it has its first user message.
-  if (thread.title === 'New chat' && thread.messages.length === 1) {
-    thread.title = req.text.split('\n')[0]!.slice(0, 60) || 'New chat';
-  }
-
-  const assistantMsg: ChatMessage = {
-    id: randomUUID(),
-    role: 'assistant',
-    content: '',
-    toolCalls: [],
-    createdAt: Date.now(),
-    status: 'streaming',
-  };
-  thread.messages.push(assistantMsg);
-  thread.updatedAt = Date.now();
-  await persistThread(s.projectPath, thread);
-
-  // v0.29: LLM-profile-backed threads route to LlmChatRunner instead of
-  // the Claude/tmux path. All Claude-specific machinery (tool cards,
-  // AskUserQuestion early-finalize, Forge signals, devlog auto-capture,
-  // Task subagent dispatch) is skipped — the LLM path streams plain
-  // text via fetch and persists usage. Memory/devlog preamble IS still
-  // injected, but as a system message at the head of the messages
-  // array (LLMs have no equivalent of --append-system-prompt).
-  if (thread.llmProfileId) {
-    void runLlmTurn(s, thread, assistantMsg).catch((err) => {
-      logger.error(`llm chat turn failed: ${(err as Error).message}`);
-    });
-    return { messageId: assistantMsg.id };
-  }
-
-  // v0.30: non-Claude CLI runtimes (opencode for now) route to the
-  // generic CliRunner path. Currently text-streaming only — tool cards
-  // / AskUserQuestion / Forge signals are owned by the Claude path and
-  // intentionally NOT replicated here. Memory preamble is prepended as
-  // a system message at the head of the prompt, same posture as the
-  // LLM-profile path. The Claude branch below is unchanged byte-for-
-  // byte; this is a sibling early-return.
-  if (thread.cliId === 'opencode' && thread.cliProfileId) {
-    void runOpenCodeTurn(s, thread, assistantMsg).catch((err) => {
-      logger.error(`opencode chat turn failed: ${(err as Error).message}`);
-    });
-    return { messageId: assistantMsg.id };
-  }
-
-  // Resolve effective config for this turn before we lose the request
-  // reference. Highest precedence: turn override (req.config) → thread
-  // override (thread.config) → project default on disk.
-  const projectDefault = await getProjectConfig(s.projectPath);
-  let effective = mergeConfig(projectDefault, thread.config, req.config);
-
-  // Memory injection: ONCE per thread, on whichever turn happens first
-  // after the thread is created — not "first turn after resume". A
-  // persisted `thread.memoryInjected` flag avoids count-based heuristics
-  // that mis-fire on hydrated/retried threads. Capped server-side by
-  // MemorySettings.maxInjectLines. Best-effort: empty preamble or
-  // failure = pass-through. SEC: the preamble is fenced as untrusted
-  // reference data by buildInjectPreamble — Claude won't treat memory
-  // content as system-prompt instructions.
-  if (!thread.memoryInjected) {
+    const userMsg: ChatMessage = {
+      id: randomUUID(),
+      role: 'user',
+      content: req.text,
+      toolCalls: [],
+      createdAt: Date.now(),
+      status: 'done',
+    };
+    // v0.24: implicit Forge signal detection. Inspect the user text
+    // against the IMMEDIATELY-PREVIOUS assistant turn — if we detect a
+    // thanks/correction/abandoned cue, emit a forge_signal event so the
+    // ForgeService can bump the per-skill counters for every key in
+    // prev.loadedSkillKeys. Fire-and-forget — chat must never block on
+    // this. See detectForgeSignal() at the bottom of this module.
     try {
-      const memoryPre = await buildInjectPreamble(s.projectPath);
-      // Devlog preamble lives in its own fence so Claude can pattern-
-      // match the source — never throws (DevlogService swallows at the
-      // boundary). Both blocks get prepended to systemPromptAppend in
-      // sequence so the prior config / orchestrator prompt still flows
-      // after them.
-      const devlogPre = await buildDevlogPreamble(s.projectPath).catch(
-        (err) => {
-          logger.warn(`devlog inject failed: ${(err as Error).message}`);
-          return '';
-        },
-      );
-      const prior = effective.systemPromptAppend ?? '';
-      const blocks: string[] = [];
-      if (memoryPre) blocks.push(`## Project memory\n\n${memoryPre}`);
-      if (devlogPre) blocks.push(devlogPre);
-      if (prior) blocks.push(prior);
-      if (blocks.length > 0) {
-        effective = mergeConfig(effective, {
-          systemPromptAppend: blocks.join('\n\n---\n\n').trimEnd(),
-        });
+      const prev = lastAssistantMessage(thread);
+      if (prev) {
+        const detected = detectForgeSignal(req.text, userMsg.createdAt, prev.createdAt);
+        if (detected) {
+          // Settings gate is async — broadcast / record only after the
+          // settings check resolves so a disabled toggle doesn't leak
+          // events. Fire-and-forget so the chat path isn't blocked.
+          const detectedKind = detected;
+          const prevId = prev.id;
+          const keys = prev.loadedSkillKeys ?? [];
+          void forgeSignalAllowed(detectedKind).then((ok) => {
+            if (!ok) return;
+            broadcast(s, thread.id, {
+              kind: 'forge_signal',
+              forgeSignal: detectedKind,
+              prevAssistantId: prevId,
+              ts: Date.now(),
+            });
+            for (const key of keys) {
+              recordForgeSignal({
+                projectPath: s.projectPath,
+                key,
+                messageId: prevId,
+                signal: detectedKind,
+              }).catch((err) => {
+                logger.warn(`forge recordSignal failed: ${(err as Error).message}`);
+              });
+            }
+          });
+        }
       }
-      thread.memoryInjected = true;
-      await persistThread(s.projectPath, thread);
     } catch (err) {
-      logger.warn(`memory inject failed: ${(err as Error).message}`);
+      logger.warn(`forge signal detection threw: ${(err as Error).message}`);
     }
-  }
+    thread.messages.push(userMsg);
 
-  // Resolve team (if any) and branch on its mode. Orchestrator just
-  // appends a system prompt and runs the normal turn. Sequential takes
-  // a different codepath that chains N spawns. Parallel isn't
-  // implemented yet — falls back to solo with a status note so the
-  // user knows their team setting was ignored.
-  const team = req.teamId ? await getTeam(s.projectPath, req.teamId) : null;
+    // Give the thread a sensible title once it has its first user message.
+    if (thread.title === 'New chat' && thread.messages.length === 1) {
+      thread.title = req.text.split('\n')[0]!.slice(0, 60) || 'New chat';
+    }
 
-  if (team && team.mode === 'sequential') {
-    void runTeamSequentialTurn(s, thread, assistantMsg, effective, team).catch(
-      (err) => logger.error(`team-sequential failed: ${(err as Error).message}`),
-    );
+    const assistantMsg: ChatMessage = {
+      id: randomUUID(),
+      role: 'assistant',
+      content: '',
+      toolCalls: [],
+      createdAt: Date.now(),
+      status: 'streaming',
+    };
+    thread.messages.push(assistantMsg);
+    thread.updatedAt = Date.now();
+    await persistThread(s.projectPath, thread);
+
+    // v0.29: LLM-profile-backed threads route to LlmChatRunner instead of
+    // the Claude/tmux path. All Claude-specific machinery (tool cards,
+    // AskUserQuestion early-finalize, Forge signals, devlog auto-capture,
+    // Task subagent dispatch) is skipped — the LLM path streams plain
+    // text via fetch and persists usage. Memory/devlog preamble IS still
+    // injected, but as a system message at the head of the messages
+    // array (LLMs have no equivalent of --append-system-prompt).
+    if (thread.llmProfileId) {
+      dispatched = true;
+      void runLlmTurn(s, thread, assistantMsg)
+        .catch((err) => {
+          logger.error(`llm chat turn failed: ${(err as Error).message}`);
+        })
+        .finally(clearStarting);
+      return { messageId: assistantMsg.id };
+    }
+
+    // v0.30: non-Claude CLI runtimes (opencode for now) route to the
+    // generic CliRunner path. Currently text-streaming only — tool cards
+    // / AskUserQuestion / Forge signals are owned by the Claude path and
+    // intentionally NOT replicated here. Memory preamble is prepended as
+    // a system message at the head of the prompt, same posture as the
+    // LLM-profile path. The Claude branch below is unchanged byte-for-
+    // byte; this is a sibling early-return.
+    if (thread.cliId === 'opencode' && thread.cliProfileId) {
+      dispatched = true;
+      void runOpenCodeTurn(s, thread, assistantMsg)
+        .catch((err) => {
+          logger.error(`opencode chat turn failed: ${(err as Error).message}`);
+        })
+        .finally(clearStarting);
+      return { messageId: assistantMsg.id };
+    }
+
+    // Resolve effective config for this turn before we lose the request
+    // reference. Highest precedence: turn override (req.config) → thread
+    // override (thread.config) → project default on disk.
+    const projectDefault = await getProjectConfig(s.projectPath);
+    let effective = mergeConfig(projectDefault, thread.config, req.config);
+
+    // Memory injection: ONCE per thread, on whichever turn happens first
+    // after the thread is created — not "first turn after resume". A
+    // persisted `thread.memoryInjected` flag avoids count-based heuristics
+    // that mis-fire on hydrated/retried threads. Capped server-side by
+    // MemorySettings.maxInjectLines. Best-effort: empty preamble or
+    // failure = pass-through. SEC: the preamble is fenced as untrusted
+    // reference data by buildInjectPreamble — Claude won't treat memory
+    // content as system-prompt instructions.
+    if (!thread.memoryInjected) {
+      try {
+        const memoryPre = await buildInjectPreamble(s.projectPath);
+        // Devlog preamble lives in its own fence so Claude can pattern-
+        // match the source — never throws (DevlogService swallows at the
+        // boundary). Both blocks get prepended to systemPromptAppend in
+        // sequence so the prior config / orchestrator prompt still flows
+        // after them.
+        const devlogPre = await buildDevlogPreamble(s.projectPath).catch(
+          (err) => {
+            logger.warn(`devlog inject failed: ${(err as Error).message}`);
+            return '';
+          },
+        );
+        const prior = effective.systemPromptAppend ?? '';
+        const blocks: string[] = [];
+        if (memoryPre) blocks.push(`## Project memory\n\n${memoryPre}`);
+        if (devlogPre) blocks.push(devlogPre);
+        if (prior) blocks.push(prior);
+        if (blocks.length > 0) {
+          effective = mergeConfig(effective, {
+            systemPromptAppend: blocks.join('\n\n---\n\n').trimEnd(),
+          });
+        }
+        thread.memoryInjected = true;
+        await persistThread(s.projectPath, thread);
+      } catch (err) {
+        logger.warn(`memory inject failed: ${(err as Error).message}`);
+      }
+    }
+
+    // Resolve team (if any) and branch on its mode. Orchestrator just
+    // appends a system prompt and runs the normal turn. Sequential takes
+    // a different codepath that chains N spawns. Parallel isn't
+    // implemented yet — falls back to solo with a status note so the
+    // user knows their team setting was ignored.
+    const team = req.teamId ? await getTeam(s.projectPath, req.teamId) : null;
+
+    if (team && team.mode === 'sequential') {
+      dispatched = true;
+      void runTeamSequentialTurn(s, thread, assistantMsg, effective, team)
+        .catch((err) =>
+          logger.error(`team-sequential failed: ${(err as Error).message}`),
+        )
+        .finally(clearStarting);
+      return { messageId: assistantMsg.id };
+    }
+
+    let cfg = effective;
+    if (team && team.mode === 'orchestrator') {
+      const orchestratorAppend = await buildOrchestratorPromptAppend(
+        s.projectPath,
+        team,
+      );
+      cfg = mergeConfig(effective, {
+        systemPromptAppend:
+          (effective.systemPromptAppend ?? '') +
+          (effective.systemPromptAppend ? '\n\n' : '') +
+          orchestratorAppend,
+      });
+    }
+
+    // Kick off the spawn but don't await it — caller wants the message id
+    // synchronously so it can render the streaming placeholder.
+    dispatched = true;
+    void runClaudeTurn(s, thread, assistantMsg, cfg)
+      .catch((err) => {
+        logger.error(`chat turn failed: ${(err as Error).message}`);
+      })
+      .finally(clearStarting);
+
     return { messageId: assistantMsg.id };
+  } finally {
+    // If we threw before dispatching any run, release the lock so the
+    // thread isn't permanently stuck. Dispatched runs clear it via the
+    // .finally() attached to each promise above.
+    if (!dispatched) clearStarting();
   }
-
-  let cfg = effective;
-  if (team && team.mode === 'orchestrator') {
-    const orchestratorAppend = await buildOrchestratorPromptAppend(
-      s.projectPath,
-      team,
-    );
-    cfg = mergeConfig(effective, {
-      systemPromptAppend:
-        (effective.systemPromptAppend ?? '') +
-        (effective.systemPromptAppend ? '\n\n' : '') +
-        orchestratorAppend,
-    });
-  }
-
-  // Kick off the spawn but don't await it — caller wants the message id
-  // synchronously so it can render the streaming placeholder.
-  void runClaudeTurn(s, thread, assistantMsg, cfg).catch((err) => {
-    logger.error(`chat turn failed: ${(err as Error).message}`);
-  });
-
-  return { messageId: assistantMsg.id };
 }
 
 // Truncate the agent's output (the `text` field of the tool_result)
@@ -906,6 +984,12 @@ async function runClaudeTurn(
     return;
   }
 
+  // v0.35.2: a cancel or delete may have arrived during the spawn window
+  // (the lock was held by startingThreads, not yet by this Map). Honor it
+  // now — kill the fresh handle and bail before registering / persisting.
+  if (await abortIfCancelledDuringStart(state, thread, assistant, handle)) {
+    return;
+  }
   state.activeRunsByThread.set(thread.id, handle);
   thread.activeRun = {
     runId,
@@ -1196,6 +1280,10 @@ async function runLlmTurn(
     },
   });
 
+  // v0.35.2: honor a cancel/delete that landed during the spawn window.
+  if (await abortIfCancelledDuringStart(state, thread, assistant, handle)) {
+    return;
+  }
   state.activeLlmRunsByThread.set(thread.id, handle);
 
   await handle.promise;
@@ -1447,6 +1535,10 @@ async function runOpenCodeTurn(
   // we still funnel OpenCode through the LLM map to keep the cancel
   // path unified. Future cleanup: separate Maps per kind if a 3-kind
   // discriminated union becomes worth it.
+  // v0.35.2: honor a cancel/delete that landed during the spawn window.
+  if (await abortIfCancelledDuringStart(state, thread, assistant, handle)) {
+    return;
+  }
   state.activeLlmRunsByThread.set(thread.id, handle as unknown as LlmRunHandle);
 
   const result = await handle.promise;
@@ -1811,6 +1903,11 @@ async function runStreamingSpawn(
     };
   }
 
+  // v0.35.2: honor a cancel/delete that landed before this step's handle
+  // registered (dispatch window for the first step, or an inter-step gap).
+  if (await abortIfCancelledDuringStart(state, thread, assistant, handle)) {
+    return;
+  }
   state.activeRunsByThread.set(thread.id, handle);
   thread.activeRun = {
     runId,

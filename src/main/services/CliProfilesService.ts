@@ -58,6 +58,29 @@ interface ProfilesFileShape {
 
 let cache: CliProfile[] | null = null;
 
+// ─── per-file mutex to defeat read-modify-write races ───────────────────────
+//
+// upsertProfile/deleteProfile do load → mutate → write; without
+// serialization two concurrent IPC calls both read the same baseline and
+// the second write clobbers the first. Mirrors McpService.withFileLock.
+const writeLocks = new Map<string, Promise<void>>();
+
+async function withFileLock<T>(file: string, fn: () => Promise<T>): Promise<T> {
+  const prev = writeLocks.get(file) ?? Promise.resolve();
+  let release!: () => void;
+  const next = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  writeLocks.set(file, prev.then(() => next));
+  try {
+    await prev;
+    return await fn();
+  } finally {
+    release();
+    if (writeLocks.get(file) === next) writeLocks.delete(file);
+  }
+}
+
 function clampNumber(
   v: number | undefined,
   min: number,
@@ -215,6 +238,7 @@ export async function listProfiles(): Promise<CliProfile[]> {
 export async function upsertProfile(
   input: Partial<CliProfile>,
 ): Promise<CliProfile> {
+  return withFileLock(profilesFile(), async () => {
   await loadProfiles();
   const list = cache ?? [];
 
@@ -325,6 +349,7 @@ export async function upsertProfile(
     `upsert profile id=${next.id.slice(0, 8)} cli=${next.cliId} model=${next.provider.model}`,
   );
   return next;
+  });
 }
 
 /** Idempotent delete. Unknown ids are a no-op. */
@@ -332,26 +357,28 @@ export async function deleteProfile(id: string): Promise<void> {
   if (typeof id !== 'string' || !id.trim()) {
     throw new Error('deleteProfile: id is required');
   }
-  await loadProfiles();
-  const list = cache ?? [];
-  const next = list.filter((p) => p.id !== id);
-  if (next.length === list.length) return;
-  await writeToDisk(next);
-  cache = next;
-  // Arch H6: also remove the per-profile config dir holding the auto-
-  // generated opencode.json with the apiKey. Without this the apiKey
-  // persists on disk indefinitely after the user thinks they've deleted
-  // the profile. Best-effort — log on failure so we still mark the
-  // service as having advanced.
-  if (isUuid(id)) {
-    const dir = path.join(os.homedir(), '.devspace', 'cli-profiles', id);
-    try {
-      await fs.promises.rm(dir, { recursive: true, force: true });
-    } catch (err) {
-      logger.warn(`delete profile dir failed: ${(err as Error).message}`);
+  await withFileLock(profilesFile(), async () => {
+    await loadProfiles();
+    const list = cache ?? [];
+    const next = list.filter((p) => p.id !== id);
+    if (next.length === list.length) return;
+    await writeToDisk(next);
+    cache = next;
+    // Arch H6: also remove the per-profile config dir holding the auto-
+    // generated opencode.json with the apiKey. Without this the apiKey
+    // persists on disk indefinitely after the user thinks they've deleted
+    // the profile. Best-effort — log on failure so we still mark the
+    // service as having advanced.
+    if (isUuid(id)) {
+      const dir = path.join(os.homedir(), '.devspace', 'cli-profiles', id);
+      try {
+        await fs.promises.rm(dir, { recursive: true, force: true });
+      } catch (err) {
+        logger.warn(`delete profile dir failed: ${(err as Error).message}`);
+      }
     }
-  }
-  logger.info(`delete profile id=${id.slice(0, 8)}`);
+    logger.info(`delete profile id=${id.slice(0, 8)}`);
+  });
 }
 
 /** Sync cache lookup — used by hot-path consumers like the OpenCode runner. */

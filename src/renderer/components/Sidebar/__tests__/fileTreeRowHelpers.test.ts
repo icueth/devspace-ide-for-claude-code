@@ -106,6 +106,7 @@ describe('areRowPropsEqual', () => {
   const file: DirEntry = { name: 'a.ts', path: '/p/a.ts', isDirectory: false };
   const GIT = {};
   const STRUCT = {};
+  const ACTIVE = {};
   // Stable reference — matches real usage (the parent hands the SAME filtered
   // array per node). A fresh [] per call would defeat the identity check and
   // mask what each assertion is actually testing.
@@ -122,6 +123,7 @@ describe('areRowPropsEqual', () => {
       gitType: undefined,
       gitToken: GIT,
       structureToken: STRUCT,
+      activeFileToken: ACTIVE,
       folderStat: undefined,
       isActiveFile: false,
       isIgnored: false,
@@ -145,10 +147,40 @@ describe('areRowPropsEqual', () => {
     expect(areRowPropsEqual(props(), props({ gitToken: {} }))).toBe(false);
   });
 
+  // Regression: switching the active editor tab mutates neither tree nor git
+  // state, so without the active-file token the memoized ancestor chain bails
+  // and nested leaves never receive the updated isActiveFile — highlight stays
+  // on the old file until an unrelated git tick flips gitToken.
+  it('FORCES a folder re-render when only the activeFileToken flips', () => {
+    expect(areRowPropsEqual(props(), props({ activeFileToken: {} }))).toBe(false);
+  });
+
   it('does NOT re-render a leaf file when only a token flips (perf preserved)', () => {
     const base = props({ entry: file });
     expect(areRowPropsEqual(base, props({ entry: file, structureToken: {} }))).toBe(true);
     expect(areRowPropsEqual(base, props({ entry: file, gitToken: {} }))).toBe(true);
+    // The active-file token is no different: a leaf ignores it and relies on
+    // its own isActiveFile flag, so an active-tab switch that doesn't touch
+    // THIS file leaves it untouched.
+    expect(areRowPropsEqual(base, props({ entry: file, activeFileToken: {} }))).toBe(true);
+  });
+
+  // The leaf whose active-state actually changed must re-render — its own
+  // isActiveFile flag is the precise signal the comparator inspects directly,
+  // independent of the token.
+  it('re-renders a leaf file when its own isActiveFile flag flips', () => {
+    const base = props({ entry: file, isActiveFile: false });
+    expect(
+      areRowPropsEqual(base, props({ entry: file, isActiveFile: true })),
+    ).toBe(false);
+    // And it re-renders even if the token did NOT flip — proving the leaf
+    // doesn't depend on the token to catch its own active-state change.
+    expect(
+      areRowPropsEqual(
+        base,
+        props({ entry: file, isActiveFile: true, activeFileToken: ACTIVE }),
+      ),
+    ).toBe(false);
   });
 
   it('re-renders any row when its own loading flag changes', () => {

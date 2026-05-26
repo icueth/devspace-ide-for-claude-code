@@ -8,6 +8,7 @@ import {
   subscribe,
   writeToPty,
 } from '@main/services/PtyPool';
+import { assertInWorkspace } from '@main/utils/pathScope';
 import { IPC } from '@shared/ipc-channels';
 import { createLogger } from '@shared/logger';
 import type { PtyCreateOptions, PtySession } from '@shared/types';
@@ -21,6 +22,10 @@ export function registerPtyIpc(): void {
       if (!opts || !opts.projectId || !opts.cwd) {
         throw new Error('PTY_CREATE requires projectId + cwd');
       }
+
+      // Confine the spawned shell/CLI to an open workspace — the renderer
+      // supplies cwd and it must never point a PTY at an arbitrary directory.
+      await assertInWorkspace(opts.cwd);
 
       let session: PtySession;
       if (opts.kind === 'claude-cli') {
