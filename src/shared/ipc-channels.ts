@@ -208,6 +208,11 @@ export const IPC = {
   CODEFLOW_AUGMENT_FUNCTIONS_LOAD: 'codeflow:augment-functions-load',
   CODEFLOW_AUGMENT_FUNCTIONS_PROGRESS: 'codeflow:augment-functions-progress',
   CODEFLOW_PROGRESS: 'codeflow:progress',
+  // v0.33 live graph sync: subscribe returns the current graph + starts
+  // pushing CODEFLOW_GRAPH_UPDATED on every debounced filesystem change.
+  CODEFLOW_GRAPH_SUBSCRIBE: 'codeflow:graph-subscribe',
+  CODEFLOW_GRAPH_UNSUBSCRIBE: 'codeflow:graph-unsubscribe',
+  CODEFLOW_GRAPH_UPDATED: 'codeflow:graph-updated',
 
   // Memory system (v0.19)
   MEMORY_LIST_PROJECTS: 'memory:list-projects',

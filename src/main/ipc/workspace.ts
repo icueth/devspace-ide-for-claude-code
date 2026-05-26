@@ -5,6 +5,7 @@ import { shutdownProject as shutdownDevServerProject } from '@main/services/DevS
 import { killProjectSessions } from '@main/services/PtyPool';
 import { disposeProject as disposeChatProject } from '@main/services/ChatTranscript';
 import { disposeProject as disposeCodeflowProject } from '@main/services/CodeflowService';
+import { disposeProject as disposeCodeflowGraphProject } from '@main/services/CodeflowGraphLive';
 import {
   addWorkspace,
   listWorkspaces,
@@ -89,6 +90,11 @@ export function registerWorkspaceIpc(): void {
         disposeCodeflowProject(projectPath);
       } catch (err) {
         logger.warn(`disposeCodeflowProject failed: ${(err as Error).message}`);
+      }
+      try {
+        disposeCodeflowGraphProject(projectPath);
+      } catch (err) {
+        logger.warn(`disposeCodeflowGraphProject failed: ${(err as Error).message}`);
       }
       logger.info(`closed workspace ${projectId} (${projectPath})`);
     },

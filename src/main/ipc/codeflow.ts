@@ -23,6 +23,10 @@ import {
   subscribeStatus,
   unsubscribeStatus,
 } from '@main/services/CodeflowService';
+import {
+  subscribeGraph,
+  unsubscribeGraph,
+} from '@main/services/CodeflowGraphLive';
 import { IPC } from '@shared/ipc-channels';
 import { createLogger } from '@shared/logger';
 import type { CodeflowAnalyzeOptions, CodeflowStatus } from '@shared/types';
@@ -84,13 +88,15 @@ export function registerCodeflowIpc(): void {
   });
 
   ipcMain.handle(IPC.CODEFLOW_BUILD_GRAPH, async (_event, projectPath: string) => {
-    return buildGraph(projectPath);
+    const safe = await assertInWorkspace(projectPath);
+    return buildGraph(safe);
   });
 
   ipcMain.handle(
     IPC.CODEFLOW_BUILD_FUNCTION_GRAPH,
     async (_event, projectPath: string) => {
-      return buildFunctionGraph(projectPath);
+      const safe = await assertInWorkspace(projectPath);
+      return buildFunctionGraph(safe);
     },
   );
 
@@ -163,6 +169,25 @@ export function registerCodeflowIpc(): void {
     IPC.CODEFLOW_AUGMENT_FUNCTIONS_LOAD,
     async (_event, projectPath: string, fingerprint: string) => {
       return loadFunctionAugment(projectPath, fingerprint);
+    },
+  );
+
+  // v0.33 live graph sync. assertInWorkspace confines projectPath to an open
+  // workspace root — without it a crafted renderer call could point the
+  // persistent rebuild loop (and its full-tree walk) at any filesystem path.
+  ipcMain.handle(
+    IPC.CODEFLOW_GRAPH_SUBSCRIBE,
+    async (event, projectPath: string) => {
+      const safe = await assertInWorkspace(projectPath);
+      return subscribeGraph(safe, event.sender);
+    },
+  );
+
+  ipcMain.handle(
+    IPC.CODEFLOW_GRAPH_UNSUBSCRIBE,
+    async (event, projectPath: string) => {
+      const safe = await assertInWorkspace(projectPath);
+      unsubscribeGraph(safe, event.sender);
     },
   );
 }

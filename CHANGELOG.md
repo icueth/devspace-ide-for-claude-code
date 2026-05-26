@@ -5,6 +5,56 @@ All notable changes to DevSpace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.33.0] — 2026-05-26
+
+Codeflow Phase 1 — live project sync + static-analysis depth. Branched off
+`main` (0.31.4); the unmerged 0.32.0 session-resume work lives on its own
+branch, so this skips to 0.33.0 to avoid a version clash.
+
+### Added
+
+- **Live graph sync** — the Codeflow file graph now stays in sync with the
+  project automatically. Opening the graph subscribes to filesystem changes
+  (`CODEFLOW_GRAPH_SUBSCRIBE`); a debounced rebuild (~400 ms atop the watcher's
+  150 ms) pushes `CODEFLOW_GRAPH_UPDATED` to the renderer, which patches in
+  place. No more manual "Rebuild" to see edits reflected (the button stays for
+  forced rebuilds). New `CodeflowGraphLive` service holds per-project state,
+  coalesces overlapping rebuilds, and tears down on workspace close.
+- **Circular-dependency detection** — Tarjan SCC over the import graph stamps
+  `node.inCycle` and fills `stats.cycles`. Cycle nodes get a red ring; the
+  stats bar shows "Circular deps: N".
+- **Dead-code detection** — reachability BFS from detected entry points
+  (package.json main/module/bin, root index/main/app entries, zero-in-degree
+  sources) marks unreachable files (`node.reachable === false`), dimmed +
+  dashed in the graph; stats bar shows "Dead code: N files".
+- **Transitive blast radius** — `blastIn` (transitive dependents = impact if
+  this file changes) and `blastOut` (transitive dependencies) computed via
+  bitset closure over the SCC condensation, capped at 1500 nodes
+  (`stats.blastSkipped` when exceeded). New **Blast** color mode shades by
+  `blastIn`; clicking a node traces its transitive dependents (orange) and
+  dependencies (cyan), dimming the rest — works regardless of the cap.
+
+### Security / correctness (Wave-2 review, fixed pre-commit)
+
+- `assertInWorkspace` now guards `CODEFLOW_GRAPH_SUBSCRIBE`/`UNSUBSCRIBE` plus
+  `BUILD_GRAPH`/`BUILD_FUNCTION_GRAPH` — a crafted `projectPath` can no longer
+  point the walk (or the persistent rebuild loop) outside an open workspace.
+- Concurrent-subscribe wait now rejects when the in-flight build fails instead
+  of polling forever (renderer `invoke()` no longer hangs for the window
+  lifetime; interval no longer leaks).
+- Click-to-trace highlight is cleared on live graph updates so stale topology
+  isn't painted on the new edge set.
+- `CodeflowGraphLive.teardown()` unregisters the global watcher listener
+  (test/quit cleanliness); `disposeProject` wired into `WORKSPACE_CLOSE`.
+
+### Kept / not done this phase
+
+- Claude doc-gen (`codebase.md` / `flow-*.md` → CLAUDE.md + skill) and the
+  function-call graph are untouched — this is additive depth on the existing
+  file graph, not a rewrite.
+- Git churn heatmap + code ownership (Phase 2 / 0.34) and health score +
+  security scan + export (Phase 3 / 0.35) are deferred per the agreed roadmap.
+
 ## [0.31.4] — 2026-05-25
 
 Whole-shell re-render cascade eliminated — the systemic cause of tab-switch /

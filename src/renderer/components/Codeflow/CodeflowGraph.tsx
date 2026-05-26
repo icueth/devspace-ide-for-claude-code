@@ -4,6 +4,7 @@ import {
   Brain,
   CircleSlash,
   FileCode,
+  Flame,
   Loader2,
   RefreshCw,
   Sparkles,
@@ -11,6 +12,12 @@ import {
   ZoomOut,
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+
+import {
+  blastColor,
+  transitiveDependencies,
+  transitiveDependents,
+} from '@renderer/components/Codeflow/blastHelpers';
 
 import { api } from '@renderer/lib/api';
 import { cn } from '@renderer/lib/utils';
@@ -24,12 +31,20 @@ import type {
   CodeflowLayer,
 } from '@shared/types';
 
+/** Graph-level stats surfaced to parent (CodeflowView) for its stats panel. */
+export interface CodeflowGraphStats {
+  cycleCount: number;
+  deadCodeCount: number;
+}
+
 interface CodeflowGraphViewProps {
   projectPath: string;
   visible: boolean;
+  /** Called whenever the graph's static-analysis stats change. */
+  onStatsChange?: (stats: CodeflowGraphStats) => void;
 }
 
-type ColorMode = 'layer' | 'folder';
+type ColorMode = 'layer' | 'folder' | 'blast';
 type ViewMode = 'files' | 'functions';
 
 // Layer palette — distinct hues so a glance at the canvas tells you the
@@ -94,7 +109,11 @@ interface SimEdge
 
 type AugmentStatus = 'idle' | 'running' | 'cancelled' | 'error';
 
-export function CodeflowGraphView({ projectPath, visible }: CodeflowGraphViewProps) {
+export function CodeflowGraphView({
+  projectPath,
+  visible,
+  onStatsChange,
+}: CodeflowGraphViewProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
   const simRef = useRef<d3.Simulation<SimNode, SimEdge> | null>(null);
@@ -117,6 +136,11 @@ export function CodeflowGraphView({ projectPath, visible }: CodeflowGraphViewPro
   const [colorMode, setColorMode] = useState<ColorMode>('layer');
   const [hovered, setHovered] = useState<CodeflowGraphNode | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
+  // Blast trace — computed on click; cleared when selection is cleared.
+  const [blastTrace, setBlastTrace] = useState<{
+    dependents: Set<string>;
+    dependencies: Set<string>;
+  } | null>(null);
   const [softEdges, setSoftEdges] = useState<CodeflowGraphEdge[]>([]);
   const [softFunctionEdges, setSoftFunctionEdges] = useState<CodeflowFunctionEdge[]>([]);
   const [augmentStatus, setAugmentStatus] = useState<AugmentStatus>('idle');
@@ -134,10 +158,74 @@ export function CodeflowGraphView({ projectPath, visible }: CodeflowGraphViewPro
     inferred: true,
   });
 
-  // Auto-load on first show. Replays whenever the project path changes.
+  // Live subscription: subscribe on mount / project-change, receive live
+  // graph updates when watched files change. The subscription is torn down
+  // on unmount or project switch (effect cleanup). When the tab becomes
+  // visible for the first time and the subscription hasn't fired yet (i.e.
+  // graph is still null), subscribeGraph returns the initial snapshot so we
+  // don't need a separate one-shot load.
+  //
+  // The function-graph path is unchanged (heavier, on-demand, no live sync).
   useEffect(() => {
-    if (!visible || !projectPath || loading || graph) return;
-    void reload();
+    if (!visible || !projectPath) return;
+    let cancelled = false;
+
+    setLoading(true);
+    setError(null);
+
+    // Register the live-update listener BEFORE calling subscribeGraph so we
+    // never miss an update that fires between subscribe resolving and the
+    // listener being registered. `onGraphUpdated` returns its own cleanup.
+    const unsubListener = api.codeflow.onGraphUpdated(projectPath, (update) => {
+      if (cancelled) return;
+      setGraph(update.graph);
+      // A live update replaces the edge set; any active click-to-trace was
+      // computed against the OLD edges, so dependents/dependencies highlights
+      // would now be painted on stale topology. Clear it (user can re-click).
+      setBlastTrace(null);
+      // Show a subtle pulse on watch-triggered updates (optional nicety).
+      if (update.reason === 'watch') {
+        setAugmentMessage('Graph updated');
+        // Clear the message after 3 s so it doesn't persist indefinitely.
+        setTimeout(() => {
+          if (!cancelled) setAugmentMessage('');
+        }, 3000);
+      }
+    });
+
+    void api.codeflow
+      .subscribeGraph(projectPath)
+      .then(async (g) => {
+        if (cancelled) return;
+        setGraph(g);
+        // Re-hydrate soft edges from disk.
+        const cached = await api.codeflow.augmentLoad(
+          projectPath,
+          g.stats.fingerprint,
+        );
+        if (cancelled) return;
+        if (cached) {
+          setSoftEdges(cached.softEdges);
+          setAugmentMessage(
+            `Loaded ${cached.softEdges.length} cached soft edge${cached.softEdges.length === 1 ? '' : 's'} (${formatRelative(cached.savedAt)}).`,
+          );
+        } else {
+          setSoftEdges([]);
+          setAugmentMessage('');
+        }
+      })
+      .catch((err: Error) => {
+        if (!cancelled) setError(err.message);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+      unsubListener();
+      void api.codeflow.unsubscribeGraph(projectPath);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible, projectPath]);
 
@@ -179,6 +267,7 @@ export function CodeflowGraphView({ projectPath, visible }: CodeflowGraphViewPro
     setFunctionGraph(null);
     setSelected(null);
     setHovered(null);
+    setBlastTrace(null);
     setSoftEdges([]);
     setSoftFunctionEdges([]);
     setAugmentStatus('idle');
@@ -186,6 +275,15 @@ export function CodeflowGraphView({ projectPath, visible }: CodeflowGraphViewPro
     setAugmentError(null);
     positionCacheRef.current = new Map();
   }, [projectPath]);
+
+  // Emit static-analysis stats to the parent whenever the graph changes.
+  useEffect(() => {
+    if (!graph || !onStatsChange) return;
+    onStatsChange({
+      cycleCount: graph.stats.cycles?.length ?? 0,
+      deadCodeCount: graph.stats.deadCodeCount ?? 0,
+    });
+  }, [graph, onStatsChange]);
 
   // viewMode flip wipes the position cache too — file-graph node ids and
   // function-graph node ids share zero overlap, so any cached coordinates
@@ -195,6 +293,7 @@ export function CodeflowGraphView({ projectPath, visible }: CodeflowGraphViewPro
     positionCacheRef.current = new Map();
     setSelected(null);
     setHovered(null);
+    setBlastTrace(null);
   }, [viewMode]);
 
   const reload = useCallback(async () => {
@@ -411,6 +510,16 @@ export function CodeflowGraphView({ projectPath, visible }: CodeflowGraphViewPro
     return map;
   }, [renderedGraph]);
 
+  // Max blastIn across all nodes — used to normalize the blast color scale.
+  const maxBlast = useMemo(() => {
+    if (!renderedGraph) return 0;
+    let max = 0;
+    for (const n of renderedGraph.nodes) {
+      if (n.blastIn !== undefined && n.blastIn > max) max = n.blastIn;
+    }
+    return max;
+  }, [renderedGraph]);
+
   // Mount the d3 simulation + svg renderer. Re-runs whenever the rendered
   // graph (static + visible soft edges) changes — but NOT on color-mode
   // toggle, since recoloring shouldn't reset the layout. Color updates run
@@ -473,10 +582,21 @@ export function CodeflowGraphView({ projectPath, visible }: CodeflowGraphViewPro
       .join('circle')
       .attr('r', (d) => 3.5 + Math.min(8, Math.sqrt(d.degree)))
       .attr('fill', (d) =>
-        colorMode === 'layer' ? LAYER_COLORS[d.layer] : folderColor(d.folder),
+        colorMode === 'layer'
+          ? LAYER_COLORS[d.layer]
+          : colorMode === 'blast'
+          ? blastColor(d.blastIn, maxBlast)
+          : folderColor(d.folder),
       )
-      .attr('stroke', 'rgba(0,0,0,0.4)')
-      .attr('stroke-width', 1)
+      // Cycle overlay: red ring. Dead code: dashed stroke.
+      .attr('stroke', (d) =>
+        d.inCycle ? '#ef4444' : 'rgba(0,0,0,0.4)',
+      )
+      .attr('stroke-width', (d) => (d.inCycle ? 2 : 1))
+      .attr('stroke-dasharray', (d) =>
+        d.reachable === false && !d.inCycle ? '3 2' : null,
+      )
+      .attr('opacity', (d) => (d.reachable === false ? 0.45 : 1))
       .style('cursor', 'pointer');
 
     // Tooltip + hover/select state are driven from these handlers; the
@@ -485,9 +605,26 @@ export function CodeflowGraphView({ projectPath, visible }: CodeflowGraphViewPro
     nodeSel
       .on('pointerenter', (_event, d) => setHovered(d))
       .on('pointerleave', () => setHovered(null))
-      .on('click', (_event, d) =>
-        setSelected((cur) => (cur === d.id ? null : d.id)),
-      );
+      .on('click', (_event, d) => {
+        setSelected((cur) => {
+          const next = cur === d.id ? null : d.id;
+          if (next) {
+            // Compute transitive BFS sets for the clicked node. Uses the
+            // rendered edge list so hidden kinds are excluded from the trace.
+            const edgeList = renderedGraph!.edges.map((e) => ({
+              source: e.source,
+              target: e.target,
+            }));
+            setBlastTrace({
+              dependents: transitiveDependents(next, edgeList),
+              dependencies: transitiveDependencies(next, edgeList),
+            });
+          } else {
+            setBlastTrace(null);
+          }
+          return next;
+        });
+      });
 
     const sim = d3
       .forceSimulation<SimNode, SimEdge>(nodes)
@@ -574,7 +711,7 @@ export function CodeflowGraphView({ projectPath, visible }: CodeflowGraphViewPro
   }, [renderedGraph]);
 
   // Color-mode update — recolor existing circles in place so toggling
-  // Layer ↔ Folder is instant and doesn't disturb the force layout.
+  // Layer / Folder / Blast is instant and doesn't disturb the force layout.
   useEffect(() => {
     if (!svgRef.current) return;
     d3.select(svgRef.current)
@@ -582,30 +719,122 @@ export function CodeflowGraphView({ projectPath, visible }: CodeflowGraphViewPro
       .transition()
       .duration(180)
       .attr('fill', (d) =>
-        colorMode === 'layer' ? LAYER_COLORS[d.layer] : folderColor(d.folder),
+        colorMode === 'layer'
+          ? LAYER_COLORS[d.layer]
+          : colorMode === 'blast'
+          ? blastColor(d.blastIn, maxBlast)
+          : folderColor(d.folder),
       );
-  }, [colorMode, renderedGraph]);
+  }, [colorMode, renderedGraph, maxBlast]);
 
   // Selection / hover highlight pass — stays separate from the main render
   // effect so we don't tear down the simulation on every mouse move.
+  //
+  // When `blastTrace` is set (click-to-trace mode):
+  //   - selected node: bright white ring
+  //   - dependents (files affected by this change): amber/orange fill
+  //   - dependencies (files this pulls in): cyan fill
+  //   - everything else: very dim
+  //
+  // Cycle and dead-code stroke overlays are preserved in every focus state.
   useEffect(() => {
     if (!svgRef.current || !renderedGraph) return;
     const focusId = hovered?.id ?? selected ?? null;
-    const neighbors = focusId ? adjacency.get(focusId) ?? new Set<string>() : null;
     const svg = d3.select(svgRef.current);
-    svg
-      .selectAll<SVGCircleElement, SimNode>('.cf-nodes circle')
-      .attr('opacity', (d) => {
-        if (!focusId) return 1;
-        if (d.id === focusId) return 1;
-        return neighbors?.has(d.id) ? 0.95 : 0.18;
-      })
-      .attr('stroke-width', (d) => (d.id === focusId ? 2.5 : 1));
+
+    const circleSel = svg.selectAll<SVGCircleElement, SimNode>('.cf-nodes circle');
+
+    if (blastTrace && selected && !hovered) {
+      // Blast-trace mode: color by role in the transitive set
+      circleSel
+        .attr('opacity', (d) => {
+          if (d.id === selected) return 1;
+          if (blastTrace.dependents.has(d.id) || blastTrace.dependencies.has(d.id)) return 0.95;
+          return 0.12;
+        })
+        .attr('fill', (d) => {
+          // Keep cycle nodes visually distinct even in blast-trace mode
+          if (d.id === selected) {
+            return colorMode === 'layer'
+              ? LAYER_COLORS[d.layer]
+              : colorMode === 'blast'
+              ? blastColor(d.blastIn, maxBlast)
+              : folderColor(d.folder);
+          }
+          if (blastTrace.dependents.has(d.id)) return '#f97316'; // orange — affected by change
+          if (blastTrace.dependencies.has(d.id)) return '#22d3ee'; // cyan — pulled in by node
+          return colorMode === 'layer'
+            ? LAYER_COLORS[d.layer]
+            : colorMode === 'blast'
+            ? blastColor(d.blastIn, maxBlast)
+            : folderColor(d.folder);
+        })
+        // Preserve cycle/dead-code stroke overlays
+        .attr('stroke', (d) =>
+          d.id === selected
+            ? 'rgba(255,255,255,0.9)'
+            : d.inCycle
+            ? '#ef4444'
+            : 'rgba(0,0,0,0.4)',
+        )
+        .attr('stroke-width', (d) => {
+          if (d.id === selected) return 2.5;
+          if (d.inCycle) return 2;
+          return 1;
+        })
+        .attr('stroke-dasharray', (d) =>
+          d.reachable === false && !d.inCycle && d.id !== selected ? '3 2' : null,
+        );
+    } else {
+      // Standard hover/selection highlight (1-hop neighbor)
+      const neighbors = focusId ? adjacency.get(focusId) ?? new Set<string>() : null;
+      circleSel
+        .attr('opacity', (d) => {
+          if (!focusId) return d.reachable === false ? 0.45 : 1;
+          if (d.id === focusId) return 1;
+          return neighbors?.has(d.id) ? 0.95 : 0.18;
+        })
+        .attr('fill', (d) =>
+          colorMode === 'layer'
+            ? LAYER_COLORS[d.layer]
+            : colorMode === 'blast'
+            ? blastColor(d.blastIn, maxBlast)
+            : folderColor(d.folder),
+        )
+        .attr('stroke', (d) =>
+          d.id === focusId
+            ? 'rgba(255,255,255,0.9)'
+            : d.inCycle
+            ? '#ef4444'
+            : 'rgba(0,0,0,0.4)',
+        )
+        .attr('stroke-width', (d) => {
+          if (d.id === focusId) return 2.5;
+          if (d.inCycle) return 2;
+          return 1;
+        })
+        .attr('stroke-dasharray', (d) =>
+          d.reachable === false && !d.inCycle && d.id !== focusId ? '3 2' : null,
+        );
+    }
+
     svg
       .selectAll<SVGLineElement, SimEdge>('.cf-edges line')
       .attr('stroke', (d) => {
         const s = (d.source as SimNode).id ?? (d.source as unknown as string);
         const t = (d.target as SimNode).id ?? (d.target as unknown as string);
+        if (blastTrace && selected && !hovered) {
+          // In blast-trace mode: highlight edges that connect to dependents (orange) or deps (cyan)
+          if (s === selected || t === selected) return 'rgba(168,85,247,0.85)';
+          if (
+            (blastTrace.dependents.has(s) || blastTrace.dependents.has(t)) &&
+            (blastTrace.dependents.has(s) || s === selected) &&
+            (blastTrace.dependents.has(t) || t === selected)
+          ) {
+            return 'rgba(249,115,22,0.6)'; // orange for dependent-only edges
+          }
+          return 'rgba(255,255,255,0.04)';
+        }
         if (focusId && (s === focusId || t === focusId)) {
           return 'rgba(168,85,247,0.85)'; // selected — purple highlight
         }
@@ -616,9 +845,12 @@ export function CodeflowGraphView({ projectPath, visible }: CodeflowGraphViewPro
         const s = (d.source as SimNode).id ?? (d.source as unknown as string);
         const t = (d.target as SimNode).id ?? (d.target as unknown as string);
         const base = Math.max(0.5, Math.min(2.5, Math.sqrt(d.weight)));
+        if (blastTrace && selected && !hovered && (s === selected || t === selected)) {
+          return base + 1;
+        }
         return focusId && (s === focusId || t === focusId) ? base + 1 : base;
       });
-  }, [hovered, selected, adjacency, renderedGraph]);
+  }, [hovered, selected, adjacency, renderedGraph, blastTrace, colorMode, maxBlast]);
 
   const onZoom = useCallback((dir: 1 | -1) => {
     const svg = svgRef.current;
@@ -653,7 +885,11 @@ export function CodeflowGraphView({ projectPath, visible }: CodeflowGraphViewPro
         baseGraph={graph}
         loading={loading}
         colorMode={colorMode}
-        onColorMode={setColorMode}
+        onColorMode={(m) => {
+          setColorMode(m);
+          // Switching away from blast mode clears any active blast trace
+          if (m !== 'blast') setBlastTrace(null);
+        }}
         viewMode={viewMode}
         onViewMode={setViewMode}
         hideOrphans={hideOrphans}
@@ -673,6 +909,7 @@ export function CodeflowGraphView({ projectPath, visible }: CodeflowGraphViewPro
         onToggleEdgeKind={(kind) =>
           setEdgeKindVisible((v) => ({ ...v, [kind]: !v[kind] }))
         }
+        blastSkipped={graph?.stats.blastSkipped}
       />
 
       {(loading || (!graph && !error && viewMode === 'files')) && (
@@ -719,8 +956,20 @@ export function CodeflowGraphView({ projectPath, visible }: CodeflowGraphViewPro
           nodeId={selected}
           graph={renderedGraph}
           adjacency={adjacency}
-          onClose={() => setSelected(null)}
-          onSelectNode={setSelected}
+          blastTrace={blastTrace}
+          onClose={() => { setSelected(null); setBlastTrace(null); }}
+          onSelectNode={(id) => {
+            setSelected(id);
+            // Recompute blast trace for the newly selected node
+            const edgeList = renderedGraph.edges.map((e) => ({
+              source: e.source,
+              target: e.target,
+            }));
+            setBlastTrace({
+              dependents: transitiveDependents(id, edgeList),
+              dependencies: transitiveDependencies(id, edgeList),
+            });
+          }}
         />
       )}
     </div>
@@ -750,6 +999,8 @@ interface ToolbarProps {
   onCancelAugment: () => void;
   edgeKindVisible: Record<CodeflowEdgeKind, boolean>;
   onToggleEdgeKind: (kind: CodeflowEdgeKind) => void;
+  // Blast color mode metadata
+  blastSkipped?: boolean;
 }
 
 function ToolbarOverlay({
@@ -773,6 +1024,7 @@ function ToolbarOverlay({
   onCancelAugment,
   edgeKindVisible,
   onToggleEdgeKind,
+  blastSkipped,
 }: ToolbarProps) {
   const augmentRunning = augmentStatus === 'running';
   // Only kinds actually present in the rendered graph get a toggle, so the
@@ -829,6 +1081,18 @@ function ToolbarOverlay({
             }
           >
             {viewMode === 'functions' ? 'File' : 'Folder'}
+          </ToolbarBtn>
+          <ToolbarBtn
+            active={colorMode === 'blast'}
+            onClick={() => onColorMode('blast')}
+            title={
+              blastSkipped
+                ? 'Blast shading unavailable for graphs > 1500 files — use click-to-trace instead'
+                : 'Color nodes by blast radius (blastIn): how many files are affected if this file changes'
+            }
+          >
+            <Flame size={11} className="shrink-0" />
+            <span>Blast</span>
           </ToolbarBtn>
         </div>
         {viewMode === 'functions' && (
@@ -941,6 +1205,40 @@ function ToolbarOverlay({
               </button>
             );
           })}
+        </div>
+      )}
+
+      {/* Blast color legend — only shown in blast mode; sits above the edge-kind legend */}
+      {colorMode === 'blast' && (
+        <div className="absolute bottom-10 right-3 rounded-[7px] border border-border-subtle bg-surface-3/90 px-3 py-1.5 text-[10.5px] text-text-muted backdrop-blur space-y-1">
+          {blastSkipped ? (
+            <div className="text-semantic-warning text-[10px]">
+              Blast shading unavailable for graphs &gt; 1500 files.
+              <br />
+              Click a node to trace dependents interactively.
+            </div>
+          ) : (
+            <>
+              <div className="text-[10px] font-semibold uppercase tracking-wider text-text-muted">
+                Blast radius (blastIn)
+              </div>
+              {/* Gradient bar: navy → teal → amber → red */}
+              <div
+                className="h-2 w-32 rounded-sm"
+                style={{
+                  background:
+                    'linear-gradient(to right, rgb(30,58,95), rgb(45,158,107), rgb(245,158,11), rgb(239,68,68))',
+                }}
+              />
+              <div className="flex justify-between text-[9.5px] text-text-dim">
+                <span>Low</span>
+                <span>High</span>
+              </div>
+              <div className="text-[9.5px] text-text-dim">
+                Click a node to trace dependents
+              </div>
+            </>
+          )}
         </div>
       )}
 
@@ -1060,6 +1358,7 @@ interface NodeDetailsProps {
   nodeId: string;
   graph: CodeflowGraph;
   adjacency: Map<string, Set<string>>;
+  blastTrace: { dependents: Set<string>; dependencies: Set<string> } | null;
   onClose: () => void;
   onSelectNode: (id: string) => void;
 }
@@ -1068,6 +1367,7 @@ function NodeDetails({
   nodeId,
   graph,
   adjacency,
+  blastTrace,
   onClose,
   onSelectNode,
 }: NodeDetailsProps) {
@@ -1090,15 +1390,71 @@ function NodeDetails({
       </div>
       <div className="p-3 text-[11px] text-text-secondary">
         <div className="font-mono text-[10.5px] text-text-muted">{node.id}</div>
+
+        {/* Cycle / dead-code badges */}
+        {(node.inCycle || node.reachable === false) && (
+          <div className="mt-1.5 flex gap-1.5">
+            {node.inCycle && (
+              <span className="inline-flex items-center rounded-[4px] border border-semantic-error/40 bg-semantic-error/10 px-1.5 py-0.5 text-[9.5px] font-medium text-semantic-error">
+                Circular dep
+              </span>
+            )}
+            {node.reachable === false && (
+              <span className="inline-flex items-center rounded-[4px] border border-text-muted/30 bg-surface-4 px-1.5 py-0.5 text-[9.5px] font-medium text-text-muted">
+                Unreachable / dead code
+              </span>
+            )}
+          </div>
+        )}
+
         <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-0.5 font-mono tabular-nums">
           <span>Layer: <span className="text-text">{node.layer}</span></span>
           <span>Lines: <span className="text-text">{node.loc.toLocaleString()}</span></span>
           <span>Imports: <span className="text-text">{outbound.length}</span></span>
           <span>Imported by: <span className="text-text">{inbound.length}</span></span>
           <span className="col-span-2">
-            Blast radius: <span className="text-text">{blastRadius}</span> direct neighbors
+            Direct neighbors: <span className="text-text">{blastRadius}</span>
           </span>
+          {node.blastIn !== undefined && (
+            <span className="col-span-2">
+              Transitive dependents:{' '}
+              <span className="text-[#f97316]">{node.blastIn}</span>
+              {blastTrace && (
+                <span className="ml-1 text-text-dim">
+                  (traced: {blastTrace.dependents.size})
+                </span>
+              )}
+            </span>
+          )}
+          {node.blastOut !== undefined && (
+            <span className="col-span-2">
+              Transitive dependencies:{' '}
+              <span className="text-[#22d3ee]">{node.blastOut}</span>
+              {blastTrace && (
+                <span className="ml-1 text-text-dim">
+                  (traced: {blastTrace.dependencies.size})
+                </span>
+              )}
+            </span>
+          )}
         </div>
+
+        {blastTrace && (
+          <div className="mt-2 space-y-0.5 text-[10px]">
+            <div className="flex items-center gap-1.5">
+              <span className="h-2 w-2 rounded-full bg-[#f97316]" />
+              <span className="text-text-muted">
+                {blastTrace.dependents.size} transitive dependents (orange on canvas)
+              </span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <span className="h-2 w-2 rounded-full bg-[#22d3ee]" />
+              <span className="text-text-muted">
+                {blastTrace.dependencies.size} transitive dependencies (cyan on canvas)
+              </span>
+            </div>
+          </div>
+        )}
 
         <NeighborSection
           title={`Imports (${outbound.length})`}

@@ -10,6 +10,405 @@ import { createLogger } from '@shared/logger';
 const execFileAsync = promisify(execFile);
 import type { CodeflowGraph, CodeflowGraphNode } from '@shared/types';
 
+// ─── Phase 1 (v0.33) static-analysis helpers ─────────────────────────────────
+
+/** Cap for blast-radius computation. Beyond this node count the O(V²/32)
+ *  bitset pass is still acceptable on big machines, but not everyone has
+ *  32GB of RAM. Users are told via stats.blastSkipped. */
+const BLAST_NODE_CAP = 1500;
+
+// Simple edge type used by the pure helpers (source → target).
+type Edge = { source: string; target: string };
+
+/**
+ * Tarjan's algorithm — computes all strongly-connected components.
+ * Returns each SCC of size > 1 as an ordered id list, plus any self-loop
+ * (source === target) as a single-element list.
+ * Stamps node.inCycle = true for every node that appears in a returned SCC.
+ */
+export function computeCycles(
+  nodeIds: string[],
+  edges: Edge[],
+): string[][] {
+  if (nodeIds.length === 0) return [];
+
+  // Build adjacency list (id → successor ids).
+  const adj = new Map<string, string[]>();
+  for (const id of nodeIds) adj.set(id, []);
+  for (const e of edges) {
+    if (e.source === e.target) continue; // self-loops handled separately
+    const list = adj.get(e.source);
+    if (list) list.push(e.target);
+  }
+
+  // Collect self-loop node ids.
+  const selfLoopIds = new Set<string>();
+  for (const e of edges) {
+    if (e.source === e.target && adj.has(e.source)) selfLoopIds.add(e.source);
+  }
+
+  // Tarjan iterative SCC.
+  const index = new Map<string, number>();
+  const lowlink = new Map<string, number>();
+  const onStack = new Set<string>();
+  const stack: string[] = [];
+  let idx = 0;
+  const sccs: string[][] = [];
+
+  // Iterative Tarjan to avoid stack overflow on deep graphs.
+  for (const root of nodeIds) {
+    if (index.has(root)) continue;
+
+    // (node, neighborIdx) pairs
+    const callStack: Array<{ v: string; i: number }> = [{ v: root, i: 0 }];
+    index.set(root, idx);
+    lowlink.set(root, idx);
+    idx++;
+    stack.push(root);
+    onStack.add(root);
+
+    while (callStack.length > 0) {
+      const frame = callStack[callStack.length - 1]!;
+      const v = frame.v;
+      const neighbors = adj.get(v) ?? [];
+
+      if (frame.i < neighbors.length) {
+        const w = neighbors[frame.i]!;
+        frame.i++;
+        if (!index.has(w)) {
+          index.set(w, idx);
+          lowlink.set(w, idx);
+          idx++;
+          stack.push(w);
+          onStack.add(w);
+          callStack.push({ v: w, i: 0 });
+        } else if (onStack.has(w)) {
+          lowlink.set(v, Math.min(lowlink.get(v)!, lowlink.get(w)!));
+        }
+      } else {
+        callStack.pop();
+        if (callStack.length > 0) {
+          const parent = callStack[callStack.length - 1]!;
+          lowlink.set(parent.v, Math.min(lowlink.get(parent.v)!, lowlink.get(v)!));
+        }
+        if (lowlink.get(v) === index.get(v)) {
+          const scc: string[] = [];
+          let w: string;
+          do {
+            w = stack.pop()!;
+            onStack.delete(w);
+            scc.push(w);
+          } while (w !== v);
+          if (scc.length > 1) sccs.push(scc);
+        }
+      }
+    }
+  }
+
+  // Add self-loops as single-element cycles.
+  for (const id of selfLoopIds) sccs.push([id]);
+
+  return sccs;
+}
+
+/**
+ * Detect entry-point node ids: union of
+ *   (a) nodes with zero incoming edges,
+ *   (b) root-level entries matching common conventions,
+ *   (c) package.json main/module/bin targets (best-effort).
+ */
+export async function detectEntryPoints(
+  nodeIds: string[],
+  edges: Edge[],
+  projectRoot: string,
+): Promise<string[]> {
+  if (nodeIds.length === 0) return [];
+  const nodeSet = new Set(nodeIds);
+
+  // Count incoming edges per node.
+  const inDegree = new Map<string, number>();
+  for (const id of nodeIds) inDegree.set(id, 0);
+  for (const e of edges) {
+    if (e.source === e.target) continue;
+    if (nodeSet.has(e.target)) {
+      inDegree.set(e.target, (inDegree.get(e.target) ?? 0) + 1);
+    }
+  }
+
+  const entries = new Set<string>();
+
+  // (a) Zero-incoming nodes.
+  for (const [id, deg] of inDegree) {
+    if (deg === 0) entries.add(id);
+  }
+
+  // (b) Convention-based root entries (case-insensitive).
+  const rootEntryRe =
+    /^(src\/)?(index|main|app)\.[jt]sx?$|^src\/main\/index\.[jt]sx?$|^src\/renderer\/main\.[jt]sx?$/i;
+  for (const id of nodeIds) {
+    if (rootEntryRe.test(id)) entries.add(id);
+  }
+
+  // (c) package.json main/module/bin fields (best-effort).
+  try {
+    const pkgPath = path.join(projectRoot, 'package.json');
+    const raw = await fs.promises.readFile(pkgPath, 'utf8');
+    const pkg = JSON.parse(raw) as {
+      main?: string;
+      module?: string;
+      bin?: string | Record<string, string>;
+    };
+    const candidates: string[] = [];
+    if (typeof pkg.main === 'string') candidates.push(pkg.main);
+    if (typeof pkg.module === 'string') candidates.push(pkg.module);
+    if (typeof pkg.bin === 'string') candidates.push(pkg.bin);
+    if (pkg.bin && typeof pkg.bin === 'object') {
+      candidates.push(...Object.values(pkg.bin));
+    }
+    for (const c of candidates) {
+      // Normalise to forward-slash project-relative.
+      const rel = c.replace(/^\.\//, '').replace(/\\/g, '/');
+      if (nodeSet.has(rel)) entries.add(rel);
+    }
+  } catch {
+    /* package.json absent or malformed — skip */
+  }
+
+  return Array.from(entries);
+}
+
+/**
+ * BFS from entryPoints following outgoing edges.
+ * Returns the Set of reachable node ids.
+ */
+export function computeReachability(
+  nodeIds: string[],
+  edges: Edge[],
+  entryPoints: string[],
+): Set<string> {
+  if (nodeIds.length === 0) return new Set();
+
+  // Build outgoing adjacency list.
+  const adj = new Map<string, string[]>();
+  for (const id of nodeIds) adj.set(id, []);
+  for (const e of edges) {
+    if (e.source === e.target) continue;
+    const list = adj.get(e.source);
+    if (list) list.push(e.target);
+  }
+
+  const visited = new Set<string>();
+  const queue: string[] = [];
+  for (const ep of entryPoints) {
+    if (!visited.has(ep) && adj.has(ep)) {
+      visited.add(ep);
+      queue.push(ep);
+    }
+  }
+  let head = 0;
+  while (head < queue.length) {
+    const v = queue[head++]!;
+    for (const w of adj.get(v) ?? []) {
+      if (!visited.has(w) && adj.has(w)) {
+        visited.add(w);
+        queue.push(w);
+      }
+    }
+  }
+  return visited;
+}
+
+/**
+ * Compute per-node transitive blast radius using Tarjan SCC condensation
+ * into a DAG + reverse-topological Uint32Array bitset union.
+ *
+ * blastOut[v] = count of distinct nodes reachable following OUTGOING edges.
+ * blastIn[v]  = count of distinct nodes that can reach v (transitive dependents).
+ *
+ * Returns { skipped: true } without touching nodes when nodeIds.length > BLAST_NODE_CAP.
+ */
+export function computeBlast(
+  nodeIds: string[],
+  edges: Edge[],
+): { blastIn: Map<string, number>; blastOut: Map<string, number>; skipped: boolean } {
+  if (nodeIds.length > BLAST_NODE_CAP) {
+    return { blastIn: new Map(), blastOut: new Map(), skipped: true };
+  }
+  if (nodeIds.length === 0) {
+    return { blastIn: new Map(), blastOut: new Map(), skipped: false };
+  }
+
+  const n = nodeIds.length;
+  const idToIdx = new Map<string, number>();
+  for (let i = 0; i < n; i++) idToIdx.set(nodeIds[i]!, i);
+
+  // Build adjacency on indices (outgoing: fwd, incoming: rev).
+  const fwdAdj: number[][] = Array.from({ length: n }, () => []);
+  for (const e of edges) {
+    if (e.source === e.target) continue;
+    const s = idToIdx.get(e.source);
+    const t = idToIdx.get(e.target);
+    if (s !== undefined && t !== undefined) fwdAdj[s]!.push(t);
+  }
+
+  // Tarjan SCC condensation (index-based, iterative).
+  const sccId = new Int32Array(n).fill(-1);
+  const indexArr = new Int32Array(n).fill(-1);
+  const lowlinkArr = new Int32Array(n);
+  const onStackArr = new Uint8Array(n);
+  const tarjanStack: number[] = [];
+  let tarjanIdx = 0;
+  let numSCC = 0;
+
+  for (let root = 0; root < n; root++) {
+    if (indexArr[root] !== -1) continue;
+    const callStack: Array<{ v: number; i: number }> = [{ v: root, i: 0 }];
+    indexArr[root] = tarjanIdx;
+    lowlinkArr[root] = tarjanIdx;
+    tarjanIdx++;
+    tarjanStack.push(root);
+    onStackArr[root] = 1;
+
+    while (callStack.length > 0) {
+      const frame = callStack[callStack.length - 1]!;
+      const v = frame.v;
+      const neighbors = fwdAdj[v]!;
+
+      if (frame.i < neighbors.length) {
+        const w = neighbors[frame.i]!;
+        frame.i++;
+        if (indexArr[w] === -1) {
+          indexArr[w] = tarjanIdx;
+          lowlinkArr[w] = tarjanIdx;
+          tarjanIdx++;
+          tarjanStack.push(w);
+          onStackArr[w] = 1;
+          callStack.push({ v: w, i: 0 });
+        } else if (onStackArr[w]) {
+          if (lowlinkArr[w]! < lowlinkArr[v]!) lowlinkArr[v] = lowlinkArr[w]!;
+        }
+      } else {
+        callStack.pop();
+        if (callStack.length > 0) {
+          const parent = callStack[callStack.length - 1]!;
+          if (lowlinkArr[v]! < lowlinkArr[parent.v]!) lowlinkArr[parent.v] = lowlinkArr[v]!;
+        }
+        if (lowlinkArr[v] === indexArr[v]) {
+          let w: number;
+          do {
+            w = tarjanStack.pop()!;
+            onStackArr[w] = 0;
+            sccId[w] = numSCC;
+          } while (w !== v);
+          numSCC++;
+        }
+      }
+    }
+  }
+
+  // Build condensation DAG (SCC-level adjacency).
+  const sccFwd: Set<number>[] = Array.from({ length: numSCC }, () => new Set<number>());
+  for (let v = 0; v < n; v++) {
+    const sv = sccId[v]!;
+    for (const w of fwdAdj[v]!) {
+      const sw = sccId[w]!;
+      if (sv !== sw) sccFwd[sv]!.add(sw);
+    }
+  }
+
+  // Topological order of condensation DAG via Kahn's algorithm.
+  const sccInDeg = new Int32Array(numSCC);
+  for (let s = 0; s < numSCC; s++) {
+    for (const t of sccFwd[s]!) sccInDeg[t]++;
+  }
+  const topoOrder: number[] = [];
+  const topoQueue: number[] = [];
+  for (let s = 0; s < numSCC; s++) {
+    if (sccInDeg[s] === 0) topoQueue.push(s);
+  }
+  while (topoQueue.length > 0) {
+    const s = topoQueue.shift()!;
+    topoOrder.push(s);
+    for (const t of sccFwd[s]!) {
+      sccInDeg[t]--;
+      if (sccInDeg[t] === 0) topoQueue.push(t);
+    }
+  }
+
+  const words = Math.ceil(n / 32);
+
+  // Bitset helpers.
+  function popcount(x: number): number {
+    x = x - ((x >> 1) & 0x55555555);
+    x = (x & 0x33333333) + ((x >> 2) & 0x33333333);
+    return (((x + (x >> 4)) & 0x0f0f0f0f) * 0x01010101) >>> 24;
+  }
+  function countBits(bits: Uint32Array): number {
+    let c = 0;
+    for (let w = 0; w < words; w++) c += popcount(bits[w]!);
+    return c;
+  }
+
+  // ── blastOut (forward reachability): process topoOrder in REVERSE so that
+  // when we visit SCC s, all of s's successors have already been processed.
+  // For each s, union all successors' bits into s's bits.
+  const blastOutBits: Uint32Array[] = Array.from({ length: numSCC }, () => new Uint32Array(words));
+  // Seed each SCC with itself.
+  for (let v = 0; v < n; v++) {
+    const s = sccId[v]!;
+    blastOutBits[s]![v >> 5]! |= (1 << (v & 31));
+  }
+  // Reverse-topological: sinks come at the end of topoOrder, so iterate backwards.
+  for (let i = topoOrder.length - 1; i >= 0; i--) {
+    const s = topoOrder[i]!;
+    for (const t of sccFwd[s]!) {
+      // t is a successor of s; t appears LATER in topoOrder so already processed.
+      const tBits = blastOutBits[t]!;
+      const sBits = blastOutBits[s]!;
+      for (let w = 0; w < words; w++) sBits[w]! |= tBits[w]!;
+    }
+  }
+
+  // Compute blastOut per node (all reachable excluding self).
+  const blastOutMap = new Map<string, number>();
+  for (let v = 0; v < n; v++) {
+    const s = sccId[v]!;
+    const total = countBits(blastOutBits[s]!);
+    blastOutMap.set(nodeIds[v]!, total - 1); // exclude self
+  }
+
+  // ── blastIn (reverse reachability): process topoOrder FORWARD so that when
+  // we visit SCC s, all of s's predecessors (in the FORWARD graph) have already
+  // been processed. For each s, union all predecessors' bits into s's bits.
+  // (Equivalently: for each s, push s's bits into each successor so that
+  //  successor accumulates who can reach it.)
+  const blastInBits: Uint32Array[] = Array.from({ length: numSCC }, () => new Uint32Array(words));
+  // Seed with self.
+  for (let v = 0; v < n; v++) {
+    const s = sccId[v]!;
+    blastInBits[s]![v >> 5]! |= (1 << (v & 31));
+  }
+  // Forward-topological: sources first. For each s, push s's bits into each
+  // of its successors t (meaning: t can be reached FROM all nodes that can reach s).
+  for (let i = 0; i < topoOrder.length; i++) {
+    const s = topoOrder[i]!;
+    const sBits = blastInBits[s]!;
+    for (const t of sccFwd[s]!) {
+      const tBits = blastInBits[t]!;
+      for (let w = 0; w < words; w++) tBits[w]! |= sBits[w]!;
+    }
+  }
+
+  const blastInMap = new Map<string, number>();
+  for (let v = 0; v < n; v++) {
+    const s = sccId[v]!;
+    const total = countBits(blastInBits[s]!);
+    blastInMap.set(nodeIds[v]!, total - 1);
+  }
+
+  return { blastIn: blastInMap, blastOut: blastOutMap, skipped: false };
+}
+
 const logger = createLogger('CodeflowGraph');
 
 // Fallback skip list, used only when `git ls-files` isn't available
@@ -671,6 +1070,39 @@ export async function buildGraph(projectRoot: string): Promise<CodeflowGraph> {
   }
   for (const n of nodes) n.degree = degree.get(n.id) ?? 0;
 
+  // ─── Phase 1 (v0.33) static analysis ─────────────────────────────────────
+  const nodeIds = nodes.map((n) => n.id);
+  const edgesSimple: { source: string; target: string }[] = edges;
+
+  // 1. Cycles (Tarjan SCC).
+  const cycles = computeCycles(nodeIds, edgesSimple);
+  const cycleNodeSet = new Set<string>(cycles.flat());
+  for (const n of nodes) if (cycleNodeSet.has(n.id)) n.inCycle = true;
+
+  // 2. Entry points.
+  const entryPoints = await detectEntryPoints(nodeIds, edgesSimple, projectRoot);
+
+  // 3. Reachability.
+  const reachable = computeReachability(nodeIds, edgesSimple, entryPoints);
+  let deadCodeCount = 0;
+  for (const n of nodes) {
+    n.reachable = reachable.has(n.id);
+    if (!n.reachable) deadCodeCount++;
+  }
+
+  // 4. Blast radius.
+  const blast = computeBlast(nodeIds, edgesSimple);
+  let blastSkipped: boolean | undefined;
+  if (blast.skipped) {
+    blastSkipped = true;
+  } else {
+    for (const n of nodes) {
+      n.blastOut = blast.blastOut.get(n.id) ?? 0;
+      n.blastIn = blast.blastIn.get(n.id) ?? 0;
+    }
+  }
+  // ─────────────────────────────────────────────────────────────────────────
+
   const totalLanguageNodes = Array.from(langCounts.values()).reduce(
     (a, b) => a + b,
     0,
@@ -709,6 +1141,10 @@ export async function buildGraph(projectRoot: string): Promise<CodeflowGraph> {
       importsResolved,
       aliasCount: aliases.length,
       fingerprint,
+      cycles,
+      deadCodeCount,
+      entryPoints,
+      ...(blastSkipped ? { blastSkipped: true } : {}),
     },
   };
 }

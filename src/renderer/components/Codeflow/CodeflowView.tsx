@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 
+import type { CodeflowGraphStats } from '@renderer/components/Codeflow/CodeflowGraph';
 import { CodeflowGraphView } from '@renderer/components/Codeflow/CodeflowGraph';
 import { api } from '@renderer/lib/api';
 import { cn } from '@renderer/lib/utils';
@@ -50,6 +51,8 @@ export function CodeflowView({ projectPath }: CodeflowViewProps) {
   const [activeName, setActiveName] = useState<string | null>(VIZ_TAB);
   const [docContent, setDocContent] = useState<string>('');
   const [docLoading, setDocLoading] = useState(false);
+  // Graph-level static-analysis stats surfaced by CodeflowGraphView.
+  const [graphStats, setGraphStats] = useState<CodeflowGraphStats | null>(null);
 
   // Subscribe to status updates from the main process. The first call also
   // registers this WebContents so progress events arrive.
@@ -146,6 +149,10 @@ export function CodeflowView({ projectPath }: CodeflowViewProps) {
       />
       <ProgressBar status={status} />
       <ActivityLine status={status} running={running} />
+      {/* Graph static-analysis stats panel: show on the Viz tab when available */}
+      {activeName === VIZ_TAB && graphStats && (graphStats.cycleCount > 0 || graphStats.deadCodeCount > 0) && (
+        <GraphStatsBar cycleCount={graphStats.cycleCount} deadCodeCount={graphStats.deadCodeCount} />
+      )}
       <DocsTabs
         docs={status?.docs ?? []}
         activeName={activeName}
@@ -159,6 +166,7 @@ export function CodeflowView({ projectPath }: CodeflowViewProps) {
         <CodeflowGraphView
           projectPath={projectPath}
           visible={activeName === VIZ_TAB}
+          onStatsChange={setGraphStats}
         />
         {activeName !== VIZ_TAB && activeDoc && (
           <div className="absolute inset-0">
@@ -545,6 +553,46 @@ function EmptyState({ status, running, onAnalyze }: EmptyStateProps) {
           </button>
         )}
       </div>
+    </div>
+  );
+}
+
+/**
+ * Compact stats bar shown on the Viz tab when the graph has non-zero
+ * cycle or dead-code counts. Sits between the progress bar and the doc tabs
+ * so it's visually adjacent to the canvas below.
+ */
+function GraphStatsBar({
+  cycleCount,
+  deadCodeCount,
+}: {
+  cycleCount: number;
+  deadCodeCount: number;
+}) {
+  return (
+    <div
+      className="flex shrink-0 items-center gap-3 border-b border-border-subtle px-3 py-1"
+      style={{ background: 'var(--color-surface-2)' }}
+    >
+      <span className="text-[10px] font-semibold uppercase tracking-wider text-text-dim">
+        Graph
+      </span>
+      {cycleCount > 0 && (
+        <span className="inline-flex items-center gap-1 text-[10.5px]">
+          <span className="inline-block h-2 w-2 rounded-full border-2 border-semantic-error bg-transparent" />
+          <span className="text-semantic-error font-medium">
+            Circular deps:
+          </span>{' '}
+          <span className="font-mono tabular-nums text-text">{cycleCount}</span>
+        </span>
+      )}
+      {deadCodeCount > 0 && (
+        <span className="inline-flex items-center gap-1 text-[10.5px]">
+          <span className="inline-block h-2 w-2 rounded-sm border border-dashed border-text-muted bg-transparent" />
+          <span className="text-text-muted font-medium">Dead code:</span>{' '}
+          <span className="font-mono tabular-nums text-text">{deadCodeCount} files</span>
+        </span>
+      )}
     </div>
   );
 }

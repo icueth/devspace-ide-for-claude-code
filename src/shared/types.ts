@@ -1199,6 +1199,20 @@ export interface CodeflowGraphNode {
   size: number;      // bytes
   loc: number;       // line count
   degree: number;    // (in + out) edge count
+  // ─── Phase 1 (v0.33) static-analysis metadata ───────────────────────────
+  // Part of a circular import chain — a Tarjan strongly-connected component
+  // of size > 1 (or a self-import). Renderer rings these red.
+  inCycle?: boolean;
+  // Reachable from a detected entry point by following outgoing import edges.
+  // false ⇒ candidate dead code (nothing in the project imports a path here).
+  reachable?: boolean;
+  // Transitive blast radius. blastIn = how many files would be affected if
+  // this file changes (transitive dependents). blastOut = how many files this
+  // pulls in (transitive dependencies). Both omitted when the graph exceeds
+  // the blast cap — renderer falls back to degree shading + interactive
+  // (per-click) blast highlighting, and stats.blastSkipped is set.
+  blastIn?: number;
+  blastOut?: number;
 }
 
 // How an edge was discovered.
@@ -1250,7 +1264,33 @@ export interface CodeflowGraph {
     // no longer match, the saved augment is dropped instead of pointing at
     // ghost files.
     fingerprint: string;
+    // ─── Phase 1 (v0.33) additions — optional so older persisted graphs and
+    // the function-graph path still satisfy the type ──────────────────────
+    // Circular import chains. Each entry is the ordered node ids of one
+    // strongly-connected component of size > 1 (or a single self-importing id).
+    cycles?: string[][];
+    // Count of nodes with reachable === false.
+    deadCodeCount?: number;
+    // Node ids treated as reachability roots: package.json main/module/bin,
+    // root-level index/main/app entries, plus any node with zero incoming
+    // import edges (a source nothing else pulls in).
+    entryPoints?: string[];
+    // True when nodes.length exceeded the blast cap so blastIn/blastOut were
+    // skipped for performance — lets the renderer explain why blast shading is
+    // unavailable instead of painting everything flat.
+    blastSkipped?: boolean;
   };
+}
+
+// Live-sync push payload (v0.33). Emitted on CODEFLOW_GRAPH_UPDATED whenever a
+// subscribed project's watched files change (debounced) or a manual rebuild
+// completes. The renderer patches its in-place graph state from this.
+export interface CodeflowGraphUpdate {
+  projectPath: string;
+  graph: CodeflowGraph;
+  // 'watch' = a filesystem change triggered the rebuild; 'manual' = explicit
+  // subscribe / rebuild. Lets the renderer choose whether to animate the diff.
+  reason: 'watch' | 'manual';
 }
 
 // ─── Memory system (v0.19) ─────────────────────────────────────────────────

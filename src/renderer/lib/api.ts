@@ -15,6 +15,7 @@ import type {
   CodeflowFunctionGraph,
   CodeflowGraph,
   CodeflowGraphEdge,
+  CodeflowGraphUpdate,
   CodeflowStatus,
   DirEntry,
   LlmChatProfile,
@@ -426,6 +427,13 @@ export interface DevspaceApi {
     onAugmentProgress: (projectPath: string, cb: (msg: string) => void) => () => void;
     onAugmentFunctionsProgress: (projectPath: string, cb: (msg: string) => void) => () => void;
     onProgress: (projectPath: string, cb: (status: CodeflowStatus) => void) => () => void;
+    // v0.33 live graph sync.
+    subscribeGraph: (projectPath: string) => Promise<CodeflowGraph>;
+    unsubscribeGraph: (projectPath: string) => Promise<void>;
+    onGraphUpdated: (
+      projectPath: string,
+      cb: (update: CodeflowGraphUpdate) => void,
+    ) => () => void;
   };
   memory: {
     listProjects: () => Promise<MemoryProject[]>;
@@ -834,6 +842,9 @@ function makeStubApi(): DevspaceApi {
       onAugmentProgress: () => () => undefined,
       onAugmentFunctionsProgress: () => () => undefined,
       onProgress: () => () => undefined,
+      subscribeGraph: notWired('codeflow.subscribeGraph'),
+      unsubscribeGraph: () => Promise.resolve(),
+      onGraphUpdated: () => () => undefined,
     },
     memory: {
       listProjects: () => Promise.resolve([]),

@@ -449,6 +449,24 @@ const api = {
       ipcRenderer.on(IPC.CODEFLOW_PROGRESS, listener);
       return () => ipcRenderer.off(IPC.CODEFLOW_PROGRESS, listener);
     },
+    // v0.33 live graph sync.
+    subscribeGraph: (projectPath: string) =>
+      ipcRenderer.invoke(IPC.CODEFLOW_GRAPH_SUBSCRIBE, projectPath),
+    unsubscribeGraph: (projectPath: string) =>
+      ipcRenderer.invoke(IPC.CODEFLOW_GRAPH_UNSUBSCRIBE, projectPath),
+    onGraphUpdated: (
+      projectPath: string,
+      cb: (update: import('@shared/types').CodeflowGraphUpdate) => void,
+    ) => {
+      const listener = (
+        _e: unknown,
+        ev: import('@shared/types').CodeflowGraphUpdate,
+      ) => {
+        if (ev.projectPath === projectPath) cb(ev);
+      };
+      ipcRenderer.on(IPC.CODEFLOW_GRAPH_UPDATED, listener);
+      return () => ipcRenderer.off(IPC.CODEFLOW_GRAPH_UPDATED, listener);
+    },
   },
   memory: {
     listProjects: () => ipcRenderer.invoke(IPC.MEMORY_LIST_PROJECTS),
