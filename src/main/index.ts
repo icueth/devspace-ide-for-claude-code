@@ -38,7 +38,6 @@ import { registerLlmIpc } from '@main/ipc/llm';
 import { registerMcpIpc } from '@main/ipc/mcp';
 import { registerMemoryIpc } from '@main/ipc/memory';
 import { registerMempalaceIpc } from '@main/ipc/mempalace';
-import { registerMempalaceDataIpc } from '@main/ipc/mempalaceData';
 import { registerPreviewIpc } from '@main/ipc/preview';
 import { registerSetupIpc } from '@main/ipc/setup';
 import { registerSkillsIpc } from '@main/ipc/skills';
@@ -282,7 +281,6 @@ app.whenReady().then(async () => {
   registerDevlogIpc();
   registerForgeIpc();
   registerMempalaceIpc();
-  registerMempalaceDataIpc();
   registerSetupIpc();
 
   // Warm the memory index in the background so the dashboard doesn't

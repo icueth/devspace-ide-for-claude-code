@@ -1,7 +1,7 @@
 {
   "name": "devspace",
   "type": "module",
-  "version": "0.35.0",
+  "version": "0.35.1",
   "description": "One-window MacBook dev workspace with Claude Code CLI at the core",
   "license": "MIT",
   "author": {
@@ -20,8 +20,8 @@
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.node.json",
     "test": "vitest run",
     "test:watch": "vitest",
-    "rebuild:native:arm64": "electron-rebuild -f -o node-pty,better-sqlite3 --arch=arm64",
-    "rebuild:native:x64": "electron-rebuild -f -o node-pty,better-sqlite3 --arch=x64",
+    "rebuild:native:arm64": "electron-rebuild -f -o node-pty --arch=arm64",
+    "rebuild:native:x64": "electron-rebuild -f -o node-pty --arch=x64",
     "predist:mac": "node scripts/fetch-uv.mjs --mac",
     "dist:mac": "electron-vite build && electron-builder --mac",
     "predist:mac:arm64": "node scripts/fetch-uv.mjs && pnpm run rebuild:native:arm64",
@@ -32,17 +32,15 @@
     "postdist:mac:x64": "pnpm run rebuild:native:arm64",
     "predist:mac:universal": "node scripts/fetch-uv.mjs --mac",
     "dist:mac:universal": "electron-vite build && electron-builder --mac --universal",
-    "postinstall": "electron-rebuild -f -o node-pty,better-sqlite3 || echo 'native rebuild skipped (terminal/memory features will be disabled)'"
+    "postinstall": "electron-rebuild -f -o node-pty || echo 'native rebuild skipped (terminal features will be disabled)'"
   },
   "pnpm": {
     "onlyBuiltDependencies": [
-      "better-sqlite3",
       "electron",
       "node-pty"
     ]
   },
   "dependencies": {
-    "better-sqlite3": "^12.10.0",
     "node-pty": "^1.1.0"
   },
   "devDependencies": {
@@ -85,7 +83,6 @@
     "@radix-ui/react-tabs": "^1.1.13",
     "@radix-ui/react-tooltip": "^1.2.8",
     "@tailwindcss/typography": "^0.5.19",
-    "@types/better-sqlite3": "^7.6.13",
     "@types/d3": "^7.4.3",
     "@types/diff": "^7.0.2",
     "@types/node": "^22.10.0",
@@ -149,9 +146,6 @@
       "!**/node_modules/node-pty/tools/**",
       "!**/node_modules/node-pty/prebuilds/darwin-x64/**",
       "!**/node_modules/node-pty/bin/darwin-x64-*/**",
-      "!**/node_modules/better-sqlite3/deps/**",
-      "!**/node_modules/better-sqlite3/src/**",
-      "!**/node_modules/better-sqlite3/build/Release/obj.target/**",
       "!**/node_modules/**/*.test.js",
       "!**/*.d.ts",
       "!**/*.md"
@@ -159,10 +153,7 @@
     "afterPack": "scripts/after-pack.cjs",
     "asar": true,
     "asarUnpack": [
-      "**/node_modules/node-pty/**",
-      "**/node_modules/better-sqlite3/**",
-      "**/node_modules/bindings/**",
-      "**/node_modules/file-uri-to-path/**"
+      "**/node_modules/node-pty/**"
     ],
     "extraResources": [
       {

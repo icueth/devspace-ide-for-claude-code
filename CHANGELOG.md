@@ -5,6 +5,31 @@ All notable changes to DevSpace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.35.1] — 2026-05-26
+
+Dead-code cleanup pass — no user-facing behavior change. After the Design Studio,
+Forge UI, and Dashboard/MemPalace-viewer teardowns, an import-graph audit found a
+small set of genuinely-unreferenced code, now removed:
+
+- **MemPalace data-viewer backend** — the entire `mempalaceData` IPC stack
+  (`MemPalaceDataService`, `ipc/mempalaceData.ts`, `shared/mempalaceData.ts`,
+  preload bridge, `api.mempalaceData`, 6 `MEMPALACE_DATA_*` channels). It powered
+  the in-app vault viewer removed in 0.25.2 and had **no renderer consumer** since.
+  MemPalace itself is unaffected — it works via MCP tools; only the dead viewer
+  read-path is gone.
+- **`better-sqlite3`** — its sole importer was `MemPalaceDataService`, so it's now
+  a fully unused native dependency. Dropped from `dependencies`, `devDependencies`
+  (`@types/better-sqlite3`), rebuild/postinstall scripts, `pnpm.onlyBuiltDependencies`,
+  `build.files` prunes, and `asarUnpack`. Its orphaned transitive deps (`bindings`,
+  `file-uri-to-path`) were pruned by pnpm and their now-dead asarUnpack globs removed.
+  Removing a native module also simplifies the per-arch electron-rebuild step.
+- **`CreateTeamDialog.tsx`** — orphaned since v0.3.14, superseded by the inline
+  `TeamsSettings` form; never imported.
+- **`DevlogIndex` type** and **`APP_READY` IPC channel** — both declared, never referenced.
+
+Verified: 978/978 tests pass (unchanged — the removed code had no tests, confirming
+it was dead), typecheck clean, packaged dmg boots clean with node-pty intact.
+
 ## [0.35.0] — 2026-05-26
 
 Claude chat now reuses native sessions instead of replaying the full transcript

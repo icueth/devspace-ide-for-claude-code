@@ -1558,13 +1558,6 @@ export interface DevlogEntry {
   toolUseId?: string;
 }
 
-export interface DevlogIndex {
-  projectPath: string;
-  entries: DevlogEntry[];
-  // INDEX.md regen timestamp.
-  generatedAt: number;
-}
-
 export interface DevlogSettings {
   enabled: boolean;
   // Auto-capture Task() dispatches → agent entries. ON by default.
@@ -1634,7 +1627,7 @@ export interface ForgeDraft {
   brief: string;
   // Slug user picked (or generated). Will become directory name on save.
   slug: string;
-  // Streamed chat turns from the generator run. Mirror DesignMessage shape.
+  // Streamed chat turns from the generator run.
   messages: Array<{
     id: string;
     role: 'user' | 'assistant';

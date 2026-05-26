@@ -542,16 +542,6 @@ const api = {
       return () => ipcRenderer.off(IPC.MEMPALACE_PROGRESS, listener);
     },
   },
-  mempalaceData: {
-    getOverview: () => ipcRenderer.invoke(IPC.MEMPALACE_DATA_GET_OVERVIEW),
-    listWings: () => ipcRenderer.invoke(IPC.MEMPALACE_DATA_LIST_WINGS),
-    listRooms: (wing: string) => ipcRenderer.invoke(IPC.MEMPALACE_DATA_LIST_ROOMS, wing),
-    listDrawers: (input?: import('@shared/mempalaceData').MemPalaceListDrawersInput) =>
-      ipcRenderer.invoke(IPC.MEMPALACE_DATA_LIST_DRAWERS, input ?? {}),
-    listTriples: (input?: import('@shared/mempalaceData').MemPalaceListTriplesInput) =>
-      ipcRenderer.invoke(IPC.MEMPALACE_DATA_LIST_TRIPLES, input ?? {}),
-    invalidate: () => ipcRenderer.invoke(IPC.MEMPALACE_DATA_INVALIDATE),
-  },
   setup: {
     getStatus: () => ipcRenderer.invoke(IPC.SETUP_GET_STATUS),
     installTool: (toolId: import('@shared/setup').SetupToolId) =>

@@ -4,7 +4,6 @@
 
 export const IPC = {
   // App lifecycle
-  APP_READY: 'app:ready',
   APP_GET_VERSION: 'app:get-version',
   APP_GET_HOME: 'app:get-home',
   APP_CHECK_UPDATE: 'app:check-update',
@@ -249,17 +248,6 @@ export const IPC = {
   MEMPALACE_UNINSTALL: 'mempalace:uninstall',
   MEMPALACE_OPEN_VAULT: 'mempalace:open-vault',
   MEMPALACE_PROGRESS: 'mempalace:progress',
-
-  // MemPalace data viewer (Memory Dashboard). Read-only browse of the vault
-  // SQLite stores — drawers, wings/rooms, knowledge-graph triples. Powers
-  // the post-v0.21 dashboard which replaced the legacy ~/.devspace memory
-  // system.
-  MEMPALACE_DATA_GET_OVERVIEW: 'mempalace-data:get-overview',
-  MEMPALACE_DATA_LIST_WINGS: 'mempalace-data:list-wings',
-  MEMPALACE_DATA_LIST_ROOMS: 'mempalace-data:list-rooms',
-  MEMPALACE_DATA_LIST_DRAWERS: 'mempalace-data:list-drawers',
-  MEMPALACE_DATA_LIST_TRIPLES: 'mempalace-data:list-triples',
-  MEMPALACE_DATA_INVALIDATE: 'mempalace-data:invalidate',
 
   // Environment Setup wizard (Settings → Setup tab). Detects + installs
   // Homebrew / Claude / tmux / rtk / jq / rtk hook / MemPalace so a fresh
