@@ -1213,6 +1213,17 @@ export interface CodeflowGraphNode {
   // (per-click) blast highlighting, and stats.blastSkipped is set.
   blastIn?: number;
   blastOut?: number;
+  // ─── Phase 2 (v0.34) git-intelligence metadata ──────────────────────────
+  // Commit frequency over the analysis window (default 90 days). Higher =
+  // hotspot. All git fields omitted when the project isn't a git repo or git
+  // is unavailable — renderer falls back gracefully (no churn color mode).
+  churn?: number;          // commits touching this file in the window
+  churnAdds?: number;      // lines added across those commits (numstat sum)
+  churnDels?: number;      // lines deleted across those commits
+  // Code ownership over the window.
+  topOwner?: string;       // author name with the most commits touching this file
+  ownerShare?: number;     // 0..1 — topOwner's share of commits touching this file
+  authorCount?: number;    // distinct authors touching this file in the window
 }
 
 // How an edge was discovered.
@@ -1279,6 +1290,15 @@ export interface CodeflowGraph {
     // skipped for performance — lets the renderer explain why blast shading is
     // unavailable instead of painting everything flat.
     blastSkipped?: boolean;
+    // ─── Phase 2 (v0.34) git intelligence ──────────────────────────────────
+    // True when churn/ownership data was computed (project is a git repo and
+    // `git log` succeeded). false/undefined ⇒ churn color mode is unavailable.
+    gitAnalyzed?: boolean;
+    // Window the churn/ownership pass covered, in days (default 90).
+    churnWindowDays?: number;
+    // Max churn (commit count) across all nodes — renderer normalizes the
+    // churn heatmap against this.
+    maxChurn?: number;
   };
 }
 

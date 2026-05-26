@@ -5,6 +5,40 @@ All notable changes to DevSpace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.34.0] — 2026-05-26
+
+Codeflow Phase 2 — git intelligence. Adds commit-history awareness to the
+dependency graph on the `feat/codeflow-sync` branch (continues 0.33.0).
+
+### Added
+
+- **Churn heatmap** — a new "Churn" graph color mode shades each file by how
+  often it changed over the last 90 days (green → amber → red). Surfaces
+  hotspots at a glance. The button is disabled with a tooltip when the project
+  isn't a git repo.
+- **Code ownership** — per-file top author + their commit share + distinct
+  author count, computed over the same window and shown in the node detail
+  panel. Helps answer "who knows this file?".
+- **Git intelligence backend** — one `git log --no-merges --numstat` pass per
+  graph build (≈0.3 s) populates `churn`/`churnAdds`/`churnDels`/`topOwner`/
+  `ownerShare`/`authorCount` per node + `stats.gitAnalyzed`/`churnWindowDays`/
+  `maxChurn`. Auto-refreshes through the existing live-sync rebuild — no extra
+  wiring. Degrades cleanly (no churn mode) on non-git projects.
+
+### Security / hardening
+
+- `git log` spawn uses `execFile` (no shell), is workspace-path-confined, has
+  a 30 s timeout, and the `C\0<author>` format makes the commit-header sentinel
+  unforgeable from commit-message content (verified by security review — no
+  findings ≥ Medium). `windowDays` is clamped (defense-in-depth for any future
+  IPC-plumbed value).
+
+### Fixed
+
+- Root-promotion brace renames (`{src => }/file.ts`) now strip the leading
+  slash so the file keeps its churn/ownership attribution instead of silently
+  losing it.
+
 ## [0.33.0] — 2026-05-26
 
 Codeflow Phase 1 — live project sync + static-analysis depth. Branched off

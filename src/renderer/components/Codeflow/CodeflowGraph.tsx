@@ -5,6 +5,7 @@ import {
   CircleSlash,
   FileCode,
   Flame,
+  History,
   Loader2,
   RefreshCw,
   Sparkles,
@@ -15,6 +16,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import {
   blastColor,
+  churnColor,
+  churnModeAvailable,
   transitiveDependencies,
   transitiveDependents,
 } from '@renderer/components/Codeflow/blastHelpers';
@@ -44,7 +47,7 @@ interface CodeflowGraphViewProps {
   onStatsChange?: (stats: CodeflowGraphStats) => void;
 }
 
-type ColorMode = 'layer' | 'folder' | 'blast';
+type ColorMode = 'layer' | 'folder' | 'blast' | 'churn';
 type ViewMode = 'files' | 'functions';
 
 // Layer palette — distinct hues so a glance at the canvas tells you the
@@ -520,6 +523,52 @@ export function CodeflowGraphView({
     return max;
   }, [renderedGraph]);
 
+  // Max churn across all nodes — normalizes the churn heatmap. Prefer the
+  // backend-reported stats.maxChurn (it covers the full graph, pre-filter),
+  // falling back to a local scan of the rendered node set when absent.
+  const maxChurn = useMemo(() => {
+    if (!renderedGraph) return 0;
+    const reported = renderedGraph.stats.maxChurn;
+    if (reported !== undefined && reported > 0) return reported;
+    let max = 0;
+    for (const n of renderedGraph.nodes) {
+      if (n.churn !== undefined && n.churn > max) max = n.churn;
+    }
+    return max;
+  }, [renderedGraph]);
+
+  // Whether the backend computed git churn/ownership for the current graph.
+  // Gates the Churn color-mode toggle (and the fall-back-to-layer guard).
+  const gitAnalyzed = churnModeAvailable(renderedGraph?.stats.gitAnalyzed);
+
+  // Single source of truth for the per-node fill across every paint site
+  // (initial render, color-mode transition, hover/selection passes). Keeps
+  // all four switches in lockstep — adding a mode means editing this once.
+  const nodeFill = useCallback(
+    (d: CodeflowGraphNode): string => {
+      switch (colorMode) {
+        case 'layer':
+          return LAYER_COLORS[d.layer];
+        case 'blast':
+          return blastColor(d.blastIn, maxBlast);
+        case 'churn':
+          return churnColor(d.churn, maxChurn);
+        case 'folder':
+        default:
+          return folderColor(d.folder);
+      }
+    },
+    [colorMode, maxBlast, maxChurn],
+  );
+
+  // If we're in churn mode but a (re)build reports no git analysis, fall back
+  // to layer so the canvas never paints every node the neutral churn color.
+  useEffect(() => {
+    if (colorMode === 'churn' && renderedGraph && !gitAnalyzed) {
+      setColorMode('layer');
+    }
+  }, [colorMode, renderedGraph, gitAnalyzed]);
+
   // Mount the d3 simulation + svg renderer. Re-runs whenever the rendered
   // graph (static + visible soft edges) changes — but NOT on color-mode
   // toggle, since recoloring shouldn't reset the layout. Color updates run
@@ -581,13 +630,7 @@ export function CodeflowGraphView({
       .data(nodes, (d) => d.id)
       .join('circle')
       .attr('r', (d) => 3.5 + Math.min(8, Math.sqrt(d.degree)))
-      .attr('fill', (d) =>
-        colorMode === 'layer'
-          ? LAYER_COLORS[d.layer]
-          : colorMode === 'blast'
-          ? blastColor(d.blastIn, maxBlast)
-          : folderColor(d.folder),
-      )
+      .attr('fill', (d) => nodeFill(d))
       // Cycle overlay: red ring. Dead code: dashed stroke.
       .attr('stroke', (d) =>
         d.inCycle ? '#ef4444' : 'rgba(0,0,0,0.4)',
@@ -718,14 +761,8 @@ export function CodeflowGraphView({
       .selectAll<SVGCircleElement, SimNode>('.cf-nodes circle')
       .transition()
       .duration(180)
-      .attr('fill', (d) =>
-        colorMode === 'layer'
-          ? LAYER_COLORS[d.layer]
-          : colorMode === 'blast'
-          ? blastColor(d.blastIn, maxBlast)
-          : folderColor(d.folder),
-      );
-  }, [colorMode, renderedGraph, maxBlast]);
+      .attr('fill', (d) => nodeFill(d));
+  }, [colorMode, renderedGraph, maxBlast, maxChurn, nodeFill]);
 
   // Selection / hover highlight pass — stays separate from the main render
   // effect so we don't tear down the simulation on every mouse move.
@@ -754,20 +791,10 @@ export function CodeflowGraphView({
         })
         .attr('fill', (d) => {
           // Keep cycle nodes visually distinct even in blast-trace mode
-          if (d.id === selected) {
-            return colorMode === 'layer'
-              ? LAYER_COLORS[d.layer]
-              : colorMode === 'blast'
-              ? blastColor(d.blastIn, maxBlast)
-              : folderColor(d.folder);
-          }
+          if (d.id === selected) return nodeFill(d);
           if (blastTrace.dependents.has(d.id)) return '#f97316'; // orange — affected by change
           if (blastTrace.dependencies.has(d.id)) return '#22d3ee'; // cyan — pulled in by node
-          return colorMode === 'layer'
-            ? LAYER_COLORS[d.layer]
-            : colorMode === 'blast'
-            ? blastColor(d.blastIn, maxBlast)
-            : folderColor(d.folder);
+          return nodeFill(d);
         })
         // Preserve cycle/dead-code stroke overlays
         .attr('stroke', (d) =>
@@ -794,13 +821,7 @@ export function CodeflowGraphView({
           if (d.id === focusId) return 1;
           return neighbors?.has(d.id) ? 0.95 : 0.18;
         })
-        .attr('fill', (d) =>
-          colorMode === 'layer'
-            ? LAYER_COLORS[d.layer]
-            : colorMode === 'blast'
-            ? blastColor(d.blastIn, maxBlast)
-            : folderColor(d.folder),
-        )
+        .attr('fill', (d) => nodeFill(d))
         .attr('stroke', (d) =>
           d.id === focusId
             ? 'rgba(255,255,255,0.9)'
@@ -850,7 +871,7 @@ export function CodeflowGraphView({
         }
         return focusId && (s === focusId || t === focusId) ? base + 1 : base;
       });
-  }, [hovered, selected, adjacency, renderedGraph, blastTrace, colorMode, maxBlast]);
+  }, [hovered, selected, adjacency, renderedGraph, blastTrace, colorMode, maxBlast, maxChurn, nodeFill]);
 
   const onZoom = useCallback((dir: 1 | -1) => {
     const svg = svgRef.current;
@@ -886,6 +907,8 @@ export function CodeflowGraphView({
         loading={loading}
         colorMode={colorMode}
         onColorMode={(m) => {
+          // Guard: never enter churn mode when git wasn't analyzed.
+          if (m === 'churn' && !gitAnalyzed) return;
           setColorMode(m);
           // Switching away from blast mode clears any active blast trace
           if (m !== 'blast') setBlastTrace(null);
@@ -910,6 +933,8 @@ export function CodeflowGraphView({
           setEdgeKindVisible((v) => ({ ...v, [kind]: !v[kind] }))
         }
         blastSkipped={graph?.stats.blastSkipped}
+        gitAnalyzed={gitAnalyzed}
+        churnWindowDays={renderedGraph?.stats.churnWindowDays}
       />
 
       {(loading || (!graph && !error && viewMode === 'files')) && (
@@ -1001,6 +1026,9 @@ interface ToolbarProps {
   onToggleEdgeKind: (kind: CodeflowEdgeKind) => void;
   // Blast color mode metadata
   blastSkipped?: boolean;
+  // Churn color mode metadata
+  gitAnalyzed: boolean;
+  churnWindowDays?: number;
 }
 
 function ToolbarOverlay({
@@ -1025,6 +1053,8 @@ function ToolbarOverlay({
   edgeKindVisible,
   onToggleEdgeKind,
   blastSkipped,
+  gitAnalyzed,
+  churnWindowDays,
 }: ToolbarProps) {
   const augmentRunning = augmentStatus === 'running';
   // Only kinds actually present in the rendered graph get a toggle, so the
@@ -1093,6 +1123,23 @@ function ToolbarOverlay({
           >
             <Flame size={11} className="shrink-0" />
             <span>Blast</span>
+          </ToolbarBtn>
+          <ToolbarBtn
+            active={colorMode === 'churn'}
+            onClick={() => {
+              // Inert when git wasn't analyzed (parent also guards, but this
+              // keeps the click a no-op so disabled styling reads true).
+              if (gitAnalyzed) onColorMode('churn');
+            }}
+            disabled={!gitAnalyzed}
+            title={
+              !gitAnalyzed
+                ? 'Churn needs a git repo'
+                : `Color nodes by churn (commits in the last ${churnWindowDays ?? 90} days): hotter = changed more often`
+            }
+          >
+            <History size={11} className="shrink-0" />
+            <span>Churn</span>
           </ToolbarBtn>
         </div>
         {viewMode === 'functions' && (
@@ -1242,6 +1289,29 @@ function ToolbarOverlay({
         </div>
       )}
 
+      {/* Churn color legend — only shown in churn mode; sits above the
+          edge-kind legend (same anchor as the blast legend; only one of
+          blast/churn is active at a time). */}
+      {colorMode === 'churn' && (
+        <div className="absolute bottom-10 right-3 rounded-[7px] border border-border-subtle bg-surface-3/90 px-3 py-1.5 text-[10.5px] text-text-muted backdrop-blur space-y-1">
+          <div className="text-[10px] font-semibold uppercase tracking-wider text-text-muted">
+            Churn ({churnWindowDays ?? 90}d commits)
+          </div>
+          {/* Gradient bar: green → amber → red */}
+          <div
+            className="h-2 w-32 rounded-sm"
+            style={{
+              background:
+                'linear-gradient(to right, rgb(34,197,94), rgb(245,158,11), rgb(239,68,68))',
+            }}
+          />
+          <div className="flex justify-between text-[9.5px] text-text-dim">
+            <span>Stable</span>
+            <span>Hot</span>
+          </div>
+        </div>
+      )}
+
       <div className="absolute right-3 top-3 inline-flex h-[26px] items-stretch rounded-[7px] border border-border-subtle bg-surface-3/90 text-[11px] backdrop-blur">
         <ToolbarBtn onClick={() => onZoom(1)} title="Zoom in">
           <ZoomIn size={11} />
@@ -1307,11 +1377,13 @@ function ToolbarOverlay({
 
 function ToolbarBtn({
   active,
+  disabled,
   onClick,
   title,
   children,
 }: {
   active?: boolean;
+  disabled?: boolean;
   onClick: () => void;
   title: string;
   children: React.ReactNode;
@@ -1320,9 +1392,12 @@ function ToolbarBtn({
     <button
       onClick={onClick}
       title={title}
+      disabled={disabled}
       className={cn(
         'inline-flex items-center gap-1 px-2.5 transition first:rounded-l-[7px] last:rounded-r-[7px]',
-        active
+        disabled
+          ? 'cursor-not-allowed text-text-dim opacity-40'
+          : active
           ? 'bg-surface-4 text-text'
           : 'text-text-secondary hover:bg-surface-4 hover:text-text',
       )}
@@ -1349,6 +1424,14 @@ function NodeTooltip({
         <span>loc: {node.loc.toLocaleString()}</span>
         <span>in: {inbound}</span>
         <span>out: {outbound}</span>
+        {node.churn !== undefined && (
+          <span>churn: <span className="text-text">{node.churn}</span></span>
+        )}
+        {node.topOwner !== undefined && (
+          <span className="truncate" title={node.topOwner}>
+            owner: <span className="text-text">{node.topOwner}</span>
+          </span>
+        )}
       </div>
     </div>
   );
@@ -1433,6 +1516,41 @@ function NodeDetails({
               {blastTrace && (
                 <span className="ml-1 text-text-dim">
                   (traced: {blastTrace.dependencies.size})
+                </span>
+              )}
+            </span>
+          )}
+          {node.churn !== undefined && (
+            <span className="col-span-2">
+              Churn (commits):{' '}
+              <span className="text-text">{node.churn}</span>
+              {(node.churnAdds !== undefined || node.churnDels !== undefined) && (
+                <span className="ml-1 text-text-dim">
+                  (
+                  <span className="text-semantic-success">
+                    +{node.churnAdds ?? 0}
+                  </span>{' '}
+                  /{' '}
+                  <span className="text-semantic-error">
+                    -{node.churnDels ?? 0}
+                  </span>
+                  )
+                </span>
+              )}
+            </span>
+          )}
+          {node.authorCount !== undefined && (
+            <span className="col-span-2">
+              Authors: <span className="text-text">{node.authorCount}</span>
+            </span>
+          )}
+          {node.topOwner !== undefined && (
+            <span className="col-span-2 truncate" title={node.topOwner}>
+              Top owner:{' '}
+              <span className="text-text">{node.topOwner}</span>
+              {node.ownerShare !== undefined && (
+                <span className="ml-1 text-text-dim">
+                  ({Math.round(node.ownerShare * 100)}%)
                 </span>
               )}
             </span>

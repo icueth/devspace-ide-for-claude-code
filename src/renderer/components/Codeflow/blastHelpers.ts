@@ -124,18 +124,83 @@ export function interpolateBlast(t: number): string {
     [0.66, [245, 158, 11]],
     [1.0,  [239,  68,  68]],
   ];
+  return interpolateStops(t, stops);
+}
+
+// ─── Churn color scale ──────────────────────────────────────────────────────
+//
+// Maps a churn value (commit count touching a file, 0 .. maxChurn) to a CSS
+// color on a green→amber→red heatmap. Cool/neutral when there's no activity,
+// hot red at the most-churned file. Same normalization shape as blastColor so
+// it threads through the renderer identically.
+
+/** Neutral shade used when churn data is unavailable / zero for a node. */
+export const CHURN_NEUTRAL = '#475569'; // slate-600-ish (cool, low-attention)
+
+/**
+ * Churn color mode is only meaningful when the backend actually analyzed git
+ * history (i.e. the project is a git repo and `git log` succeeded). Pure gate
+ * so the toggle's enabled state and the "fall back to layer" guard share one
+ * source of truth and can be unit-tested without React.
+ */
+export function churnModeAvailable(gitAnalyzed: boolean | undefined): boolean {
+  return gitAnalyzed === true;
+}
+
+/**
+ * Compute a churn-heatmap fill color for a node.
+ *
+ * @param churn     The node's churn (commit count, may be undefined).
+ * @param maxChurn  The maximum churn across all nodes in the graph (used to
+ *                  normalize the scale). If 0, every node is neutral.
+ * @returns A CSS color string. churn 0 / undefined → cool/neutral; the
+ *          most-churned file → hot red.
+ */
+export function churnColor(churn: number | undefined, maxChurn: number): string {
+  if (churn === undefined || churn <= 0 || maxChurn <= 0) return CHURN_NEUTRAL;
+  // Clamp t to [0, 1]
+  const t = Math.max(0, Math.min(1, churn / maxChurn));
+  return interpolateChurn(t);
+}
+
+/**
+ * Interpolate along a 3-stop green→amber→red heatmap:
+ *   0.0 → #22c55e  (green — calm / stable)
+ *   0.5 → #f59e0b  (amber — warming up)
+ *   1.0 → #ef4444  (red — hot / heavily churned)
+ *
+ * Pure numeric lerp; no d3 dependency.
+ */
+export function interpolateChurn(t: number): string {
+  const stops: [number, [number, number, number]][] = [
+    [0.0, [34,  197, 94]],
+    [0.5, [245, 158, 11]],
+    [1.0, [239, 68,  68]],
+  ];
+  return interpolateStops(t, stops);
+}
+
+/**
+ * Shared piecewise-linear RGB interpolation across an ordered list of stops.
+ * `t` is clamped into the [first, last] stop range.
+ */
+function interpolateStops(
+  t: number,
+  stops: [number, [number, number, number]][],
+): string {
+  const clamped = Math.max(stops[0][0], Math.min(stops[stops.length - 1][0], t));
   // Find bracketing stops
   let lo = stops[0];
   let hi = stops[stops.length - 1];
   for (let i = 0; i < stops.length - 1; i++) {
-    if (t >= stops[i][0] && t <= stops[i + 1][0]) {
+    if (clamped >= stops[i][0] && clamped <= stops[i + 1][0]) {
       lo = stops[i];
       hi = stops[i + 1];
       break;
     }
   }
   const span = hi[0] - lo[0];
-  const localT = span === 0 ? 0 : (t - lo[0]) / span;
+  const localT = span === 0 ? 0 : (clamped - lo[0]) / span;
   const r = Math.round(lo[1][0] + (hi[1][0] - lo[1][0]) * localT);
   const g = Math.round(lo[1][1] + (hi[1][1] - lo[1][1]) * localT);
   const b = Math.round(lo[1][2] + (hi[1][2] - lo[1][2]) * localT);

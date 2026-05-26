@@ -409,6 +409,156 @@ export function computeBlast(
   return { blastIn: blastInMap, blastOut: blastOutMap, skipped: false };
 }
 
+// ─── Phase 2 (v0.34) git churn + ownership intelligence ──────────────────────
+
+/** Default window for the churn/ownership pass, in days. */
+const CHURN_WINDOW_DAYS = 90;
+
+/** Per-file aggregate produced by parsing `git log --numstat`. */
+export interface GitFileStats {
+  /** Distinct commits (in the window) that touched this file. */
+  churn: number;
+  /** Lines added across those commits (numstat sum; binary `-` counts 0). */
+  adds: number;
+  /** Lines deleted across those commits. */
+  dels: number;
+  /** author name → number of commits (in the window) touching this file. */
+  authors: Map<string, number>;
+}
+
+/**
+ * PURE parser for the output of:
+ *   git log --no-merges --numstat --format='C%x00%an' --since='<N> days ago'
+ *
+ * Layout: each commit is introduced by a header line `C\0<authorName>`, then
+ * zero or more numstat lines `<adds>\t<dels>\t<path>`. Blank lines separate
+ * commits and are ignored. `adds`/`dels` are `-` for binary files → treated as
+ * 0. Rename paths come in two numstat forms:
+ *   - brace form:  `src/{old => new}/file.ts`  or  `{old => new}`
+ *   - arrow form:  `old/path.ts => new/path.ts`
+ * We always attribute churn to the FINAL (post-rename) path.
+ *
+ * Aggregates per-file: churn = distinct commits touching the file, summed
+ * adds/dels, and a per-author commit-count map.
+ */
+export function parseGitLogNumstat(stdout: string): Map<string, GitFileStats> {
+  const result = new Map<string, GitFileStats>();
+  if (!stdout) return result;
+
+  let currentAuthor: string | null = null;
+  // Track which files this commit already counted, so a file appearing on
+  // multiple numstat lines within one commit (shouldn't normally happen, but
+  // be safe) still counts the commit only once toward churn / author count.
+  let seenThisCommit = new Set<string>();
+
+  const lines = stdout.split('\n');
+  for (const rawLine of lines) {
+    const line = rawLine.replace(/\r$/, '');
+    if (line === '') continue;
+
+    if (line.startsWith('C\0')) {
+      // New commit header. `git log` emits the header even with no numstat
+      // body (e.g. an empty commit) — that's fine, it just resets state.
+      currentAuthor = line.slice(2);
+      seenThisCommit = new Set<string>();
+      continue;
+    }
+
+    // numstat body line: <adds>\t<dels>\t<path>
+    if (currentAuthor === null) continue; // stray line before any header
+    const tab1 = line.indexOf('\t');
+    if (tab1 === -1) continue;
+    const tab2 = line.indexOf('\t', tab1 + 1);
+    if (tab2 === -1) continue;
+
+    const addsRaw = line.slice(0, tab1);
+    const delsRaw = line.slice(tab1 + 1, tab2);
+    const pathRaw = line.slice(tab2 + 1);
+
+    const adds = addsRaw === '-' ? 0 : parseInt(addsRaw, 10) || 0;
+    const dels = delsRaw === '-' ? 0 : parseInt(delsRaw, 10) || 0;
+    const filePath = resolveNumstatPath(pathRaw);
+    if (!filePath) continue;
+
+    let entry = result.get(filePath);
+    if (!entry) {
+      entry = { churn: 0, adds: 0, dels: 0, authors: new Map() };
+      result.set(filePath, entry);
+    }
+    entry.adds += adds;
+    entry.dels += dels;
+
+    if (!seenThisCommit.has(filePath)) {
+      seenThisCommit.add(filePath);
+      entry.churn += 1;
+      entry.authors.set(currentAuthor, (entry.authors.get(currentAuthor) ?? 0) + 1);
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Resolve a numstat path field to its final (post-rename) path.
+ *   - `src/{old => new}/file.ts` → `src/new/file.ts`
+ *   - `{old => new}`             → `new`
+ *   - `{ => new}/file.ts`        → `new/file.ts`
+ *   - `old/path.ts => new/path.ts` → `new/path.ts`
+ *   - plain path                 → unchanged
+ * Always returns forward-slash form (git numstat already uses forward slashes).
+ */
+function resolveNumstatPath(raw: string): string {
+  let p = raw;
+  // Brace rename form: collapse `{a => b}` to `b`, repeating for safety.
+  if (p.includes('{') && p.includes('=>')) {
+    p = p.replace(/\{[^{}]*=>\s*([^{}]*)\}/g, '$1');
+    // Collapse any doubled slashes introduced by an empty `{ => new}` side.
+    p = p.replace(/\/{2,}/g, '/');
+  } else if (p.includes('=>')) {
+    // Arrow rename without braces: `old => new`. Take the RHS.
+    const idx = p.indexOf('=>');
+    p = p.slice(idx + 2);
+  }
+  // Root-promotion form `{src => }/file.ts` collapses to `/file.ts`; the
+  // doubled-slash pass above only fixes interior `//`, so strip any leading
+  // slash here or the path never matches the root-relative node id.
+  return p.trim().replace(/^\/+/, '');
+}
+
+/**
+ * Run the windowed `git log --numstat` once and feed it to the pure parser.
+ * Mirrors gitListFiles' error handling: returns null when the project isn't a
+ * git repo or git is unavailable / errors. One spawn, generous maxBuffer.
+ */
+async function computeGitIntelligence(
+  projectRoot: string,
+  windowDays: number = CHURN_WINDOW_DAYS,
+): Promise<Map<string, GitFileStats> | null> {
+  // Defense-in-depth: windowDays is a constant today, but clamp so a future
+  // IPC-plumbed value can never land a non-numeric/hostile token in --since.
+  const days = Number.isFinite(windowDays)
+    ? Math.min(Math.max(Math.floor(windowDays), 1), 3650)
+    : CHURN_WINDOW_DAYS;
+  try {
+    const { stdout } = await execFileAsync(
+      'git',
+      [
+        'log',
+        '--no-merges',
+        '--numstat',
+        '--format=C%x00%an',
+        `--since=${days} days ago`,
+      ],
+      // 30s timeout so a pathologically large/slow repo can't pin the
+      // debounced live-sync rebuild slot (timeout-kill → clean null below).
+      { cwd: projectRoot, maxBuffer: 64 * 1024 * 1024, timeout: 30_000 },
+    );
+    return parseGitLogNumstat(stdout);
+  } catch {
+    return null;
+  }
+}
+
 const logger = createLogger('CodeflowGraph');
 
 // Fallback skip list, used only when `git ls-files` isn't available
@@ -1103,6 +1253,42 @@ export async function buildGraph(projectRoot: string): Promise<CodeflowGraph> {
   }
   // ─────────────────────────────────────────────────────────────────────────
 
+  // ─── Phase 2 (v0.34) git churn + ownership ───────────────────────────────
+  // Node ids are project-root-relative forward-slash; git numstat paths are
+  // repo-root-relative forward-slash. They match when repo root == projectRoot.
+  // If a node's path doesn't match (submodule / monorepo-root edge case) the
+  // file simply gets no churn — acceptable per the contract.
+  const gitStats = await computeGitIntelligence(projectRoot);
+  let gitAnalyzed = false;
+  let maxChurn = 0;
+  if (gitStats) {
+    gitAnalyzed = true;
+    for (const n of nodes) {
+      const stat = gitStats.get(n.id);
+      if (!stat) continue;
+      n.churn = stat.churn;
+      n.churnAdds = stat.adds;
+      n.churnDels = stat.dels;
+      n.authorCount = stat.authors.size;
+      // topOwner = author with the most commits touching this file; ownerShare
+      // = their fraction of the file's total commits (churn).
+      let topOwner: string | undefined;
+      let topCommits = 0;
+      for (const [author, commits] of stat.authors) {
+        if (commits > topCommits) {
+          topCommits = commits;
+          topOwner = author;
+        }
+      }
+      if (topOwner !== undefined && stat.churn > 0) {
+        n.topOwner = topOwner;
+        n.ownerShare = topCommits / stat.churn;
+      }
+      if (stat.churn > maxChurn) maxChurn = stat.churn;
+    }
+  }
+  // ─────────────────────────────────────────────────────────────────────────
+
   const totalLanguageNodes = Array.from(langCounts.values()).reduce(
     (a, b) => a + b,
     0,
@@ -1145,6 +1331,8 @@ export async function buildGraph(projectRoot: string): Promise<CodeflowGraph> {
       deadCodeCount,
       entryPoints,
       ...(blastSkipped ? { blastSkipped: true } : {}),
+      gitAnalyzed,
+      ...(gitAnalyzed ? { churnWindowDays: CHURN_WINDOW_DAYS, maxChurn } : {}),
     },
   };
 }
