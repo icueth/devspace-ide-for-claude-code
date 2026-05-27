@@ -23,6 +23,7 @@ import type {
   SetupStatus,
   SetupToolId,
 } from '@shared/setup';
+import type { DesignSeedingStatus } from '@shared/types';
 
 /**
  * Environment Setup wizard — Settings → Setup tab. Mirrors install-mempalace's
@@ -135,7 +136,7 @@ export function SetupSettings() {
   ).length;
 
   return (
-    <div className="flex h-full overflow-y-auto">
+    <div className="h-full overflow-y-auto">
       <div className="mx-auto flex w-full max-w-[760px] flex-col gap-5 px-6 py-6">
         <Header status={status} missingCount={missingCount} />
 
@@ -163,6 +164,8 @@ export function SetupSettings() {
           busy={busy}
           onInstall={handleInstall}
         />
+
+        <BundledPacksCard />
 
         {(log.length > 0 || error) && (
           <LogCard log={log} error={error} logRef={logRef} />
@@ -601,6 +604,133 @@ function LogCard({
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+function BundledPacksCard() {
+  const [info, setInfo] = useState<DesignSeedingStatus | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const refresh = useCallback(() => {
+    void api.designSeeding
+      .status()
+      .then(setInfo)
+      .catch((e: unknown) => setErr((e as Error).message));
+  }, []);
+
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  const toggle = useCallback(
+    async (enabled: boolean) => {
+      if (!info) return;
+      setInfo({ ...info, enabled }); // optimistic
+      try {
+        await api.designSeeding.setEnabled(enabled);
+      } catch (e) {
+        setErr((e as Error).message);
+      } finally {
+        refresh();
+      }
+    },
+    [info, refresh],
+  );
+
+  const reseed = useCallback(async () => {
+    setBusy(true);
+    setErr(null);
+    try {
+      await api.designSeeding.reseed();
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+      refresh();
+    }
+  }, [refresh]);
+
+  return (
+    <div className="overflow-hidden rounded-[10px] border border-border bg-surface-2/60">
+      <div className="border-b border-border-subtle px-3 py-1.5 text-[10.5px] font-semibold uppercase tracking-wide text-text-muted">
+        Bundled skills &amp; agents
+      </div>
+      <div className="flex flex-col gap-3 px-3 py-3">
+        <div className="grid grid-cols-3 gap-2">
+          <Stat icon={<Sparkles size={12} />} label="Skills" value={info?.skillCount ?? 0} />
+          <Stat icon={<Bot size={12} />} label="Agents" value={info?.agentCount ?? 0} />
+          <Stat
+            icon={<Download size={12} />}
+            label="Design systems"
+            value={info?.systemCount ?? 0}
+          />
+        </div>
+
+        <p className="text-[11px] text-text-muted">
+          DevSpace seeds the full bundled set into{' '}
+          <code className="font-mono">~/.claude</code> so Claude Code can
+          discover them — independent of the tool installers above.
+        </p>
+
+        <label className="flex items-center gap-2 text-[11.5px] text-text-secondary">
+          <input
+            type="checkbox"
+            checked={info?.enabled ?? true}
+            onChange={(e) => void toggle(e.target.checked)}
+            className="h-3.5 w-3.5 accent-accent"
+          />
+          Seed on launch
+        </label>
+
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => void reseed()}
+            disabled={busy}
+            className="inline-flex items-center gap-1.5 rounded-[6px] border border-border bg-surface-3 px-2.5 py-1 text-[10.5px] text-text-secondary transition hover:border-border-hi hover:bg-surface-4 hover:text-text disabled:pointer-events-none disabled:opacity-50"
+          >
+            {busy ? (
+              <Loader2 size={11} className="animate-spin" />
+            ) : (
+              <RefreshCw size={11} />
+            )}
+            {busy ? 'Re-seeding…' : 'Re-seed now'}
+          </button>
+          {info?.packVersion && (
+            <span className="font-mono text-[10px] text-text-muted">
+              v{info.packVersion}
+            </span>
+          )}
+        </div>
+
+        {err && (
+          <div className="text-[10.5px] text-semantic-error">{err}</div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function Stat({
+  icon,
+  label,
+  value,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  value: number;
+}) {
+  return (
+    <div className="flex flex-col gap-0.5 rounded-[7px] border border-border-subtle bg-surface-3/50 px-2.5 py-2">
+      <div className="flex items-center gap-1.5 text-text-muted">
+        {icon}
+        <span className="text-[9.5px] font-semibold uppercase tracking-wide">
+          {label}
+        </span>
+      </div>
+      <span className="text-[15px] font-semibold text-text">{value}</span>
     </div>
   );
 }

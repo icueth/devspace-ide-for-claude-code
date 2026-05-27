@@ -5,6 +5,44 @@ All notable changes to DevSpace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.35.4] — 2026-05-27
+
+Batteries-included install + a Settings scroll fix.
+
+### Added — a fresh install now seeds all bundled skills AND agents
+Previously only the 24 design skills auto-seeded into `~/.claude/skills`; the
+30 bundled agents and the 180 builtin skills were merely listed read-only.
+Now, on launch, DevSpace seeds **everything** so a new install is useful out of
+the box:
+- **Skills** → `~/.claude/skills`: 24 design + 180 builtin (union; design wins
+  name collisions).
+- **Agents** → `~/.claude/agents`: 30 bundled subagents (flat `.md`, separate
+  version-stamped manifest).
+- **Design systems** (150) unchanged.
+
+All seeding keeps the existing safety contract: **never clobbers a
+user-authored skill/agent** (name collisions are skipped), idempotent
+(version-stamped), clean-upgrade (managed entries that leave the bundle are
+removed; user files are never touched), symlink-rejecting, containment-guarded.
+The **"Seed on launch" toggle** (Settings → Skills, and now the Setup tab)
+remains the opt-out — turn it off for a lean `~/.claude`.
+
+Setup tab gains a **"Bundled skills & agents"** card showing seeded counts +
+the on-launch toggle + a "Re-seed now" button, working the same regardless of
+the Claude-assisted or deterministic install path.
+
+> Note: seeding the full set re-introduces the per-turn skill-metadata cost
+> that 0.35.3 trimmed (~12k tokens/turn for the full index). That's the
+> intended trade-off for out-of-box capability; toggle seeding off if you
+> prefer the lean set.
+
+### Fixed — Settings pages clipped content with no scrollbar
+The Setup and Memory tabs used a flex-row container with `overflow-y-auto` on
+the same element, which doesn't scroll reliably — tall content (the
+Claude-assisted install terminal, the progress log, long checklists) overflowed
+and was clipped by the page's `overflow-hidden` with no way to scroll. Both are
+now plain block scroll containers. Content scrolls correctly in every state.
+
 ## [0.35.3] — 2026-05-26
 
 Two user-reported chat issues.

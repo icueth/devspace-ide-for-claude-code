@@ -756,6 +756,7 @@ function makeStubApi(): DevspaceApi {
           seededAt: null,
           skillCount: 0,
           systemCount: 0,
+          agentCount: 0,
         }),
       setEnabled: notWired('designSeeding.setEnabled'),
       reseed: notWired('designSeeding.reseed'),

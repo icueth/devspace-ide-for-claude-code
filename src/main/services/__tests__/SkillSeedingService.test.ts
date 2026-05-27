@@ -6,7 +6,9 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
   getSeedingEnabled,
+  readAgentManifest,
   readSeedManifest,
+  seedBuiltinAgents,
   seedDesignSkills,
   setSeedingEnabled,
 } from '@main/services/SkillSeedingService';
@@ -165,6 +167,150 @@ describe('seedDesignSkills', () => {
   it('skips when the bundle is missing', async () => {
     fs.rmSync(bundleSkills, { recursive: true, force: true });
     const r = await seedDesignSkills(seedOpts());
+    expect(r.status).toBe('skipped-no-bundle');
+  });
+
+  it('seeds the union of design + builtin skills, design wins on a dup slug', async () => {
+    // Fresh, minimal bundles so the union is deterministic.
+    const designBundle = path.join(tmp, 'union', 'design', 'skills');
+    const builtinBundle = path.join(tmp, 'union', 'builtin', 'skills');
+    const unionHome = path.join(tmp, 'union', 'home', '.claude', 'skills');
+    fs.mkdirSync(designBundle, { recursive: true });
+    fs.mkdirSync(builtinBundle, { recursive: true });
+    // design: 2 skills (one — 'shared' — also in builtin)
+    writeSkill(designBundle, 'design-only', 'DESIGN-ONLY');
+    writeSkill(designBundle, 'shared', 'DESIGN-WINS');
+    // builtin: 3 skills (incl. the dup 'shared' + 2 unique)
+    writeSkill(builtinBundle, 'shared', 'BUILTIN-LOSES');
+    writeSkill(builtinBundle, 'builtin-a', 'BUILTIN-A');
+    writeSkill(builtinBundle, 'builtin-b', 'BUILTIN-B');
+
+    const r = await seedDesignSkills({
+      skillsBundleOverride: designBundle,
+      builtinSkillsBundleOverride: builtinBundle,
+      systemsBundleOverride: bundleSystems,
+      homeSkillsDirOverride: unionHome,
+      packVersion: '1.0.0',
+    });
+
+    // union = design-only, shared, builtin-a, builtin-b = 4
+    expect(r.status).toBe('seeded');
+    expect(r.seededSkills).toBe(4);
+
+    // dup slug carries the DESIGN body
+    const shared = fs.readFileSync(
+      path.join(unionHome, 'shared', 'SKILL.md'),
+      'utf8',
+    );
+    expect(shared).toContain('DESIGN-WINS');
+    expect(shared).not.toContain('BUILTIN-LOSES');
+
+    const manifest = await readSeedManifest(unionHome);
+    expect(manifest?.managedSlugs.sort()).toEqual([
+      'builtin-a',
+      'builtin-b',
+      'design-only',
+      'shared',
+    ]);
+  });
+});
+
+describe('seedBuiltinAgents', () => {
+  let agentsBundle: string;
+  let homeAgents: string;
+
+  function writeAgent(root: string, slug: string, body = 'v1'): void {
+    fs.mkdirSync(root, { recursive: true });
+    fs.writeFileSync(
+      path.join(root, `${slug}.md`),
+      `---\nname: ${slug}\ndescription: ${slug} agent\n---\n${body}\n`,
+    );
+  }
+
+  function agentOpts(extra: Record<string, unknown> = {}) {
+    return {
+      agentsBundleOverride: agentsBundle,
+      homeAgentsDirOverride: homeAgents,
+      packVersion: '1.0.0',
+      ...extra,
+    };
+  }
+
+  beforeEach(() => {
+    agentsBundle = path.join(tmp, 'agent-bundle');
+    homeAgents = path.join(tmp, 'home', '.claude', 'agents');
+    writeAgent(agentsBundle, 'backend-developer');
+    writeAgent(agentsBundle, 'frontend-developer');
+    writeAgent(agentsBundle, 'api-tester');
+  });
+
+  it('seeds flat .md agents and writes a manifest on first run', async () => {
+    const r = await seedBuiltinAgents(agentOpts());
+    expect(r.status).toBe('seeded');
+    expect(r.seededAgents).toBe(3);
+    expect(fs.existsSync(path.join(homeAgents, 'backend-developer.md'))).toBe(true);
+    expect(fs.statSync(path.join(homeAgents, 'backend-developer.md')).isFile()).toBe(true);
+
+    const manifest = await readAgentManifest(homeAgents);
+    expect(manifest?.packVersion).toBe('1.0.0');
+    expect(manifest?.managedAgents.sort()).toEqual([
+      'api-tester',
+      'backend-developer',
+      'frontend-developer',
+    ]);
+  });
+
+  it('is idempotent — same version short-circuits', async () => {
+    await seedBuiltinAgents(agentOpts());
+    const second = await seedBuiltinAgents(agentOpts());
+    expect(second.status).toBe('skipped-up-to-date');
+    expect(second.seededAgents).toBe(0);
+  });
+
+  it('re-seeds when force=true even at the same version', async () => {
+    await seedBuiltinAgents(agentOpts());
+    const forced = await seedBuiltinAgents(agentOpts({ force: true }));
+    expect(forced.status).toBe('seeded');
+    expect(forced.seededAgents).toBe(3);
+  });
+
+  it('NEVER clobbers a pre-existing unmanaged agent', async () => {
+    writeAgent(homeAgents, 'backend-developer', 'USER-AGENT');
+    const r = await seedBuiltinAgents(agentOpts());
+    expect(r.skippedCollisions).toContain('backend-developer');
+    const content = fs.readFileSync(
+      path.join(homeAgents, 'backend-developer.md'),
+      'utf8',
+    );
+    expect(content).toContain('USER-AGENT');
+    // non-colliding agents still seeded
+    expect(fs.existsSync(path.join(homeAgents, 'api-tester.md'))).toBe(true);
+    const manifest = await readAgentManifest(homeAgents);
+    expect(manifest?.managedAgents).not.toContain('backend-developer');
+  });
+
+  it('removes a managed agent that left the bundle, but never user agents', async () => {
+    await seedBuiltinAgents(agentOpts({ packVersion: '1.0.0' }));
+    // user adds their own agent after first seed
+    writeAgent(homeAgents, 'my-custom-agent', 'MINE');
+    // new bundle drops 'api-tester'
+    fs.rmSync(path.join(agentsBundle, 'api-tester.md'));
+    const r = await seedBuiltinAgents(agentOpts({ packVersion: '1.1.0' }));
+    expect(fs.existsSync(path.join(homeAgents, 'api-tester.md'))).toBe(false);
+    expect(r.removedStale).toBeGreaterThanOrEqual(1);
+    // user agent survives
+    expect(fs.existsSync(path.join(homeAgents, 'my-custom-agent.md'))).toBe(true);
+  });
+
+  it('skips when seeding disabled', async () => {
+    const r = await seedBuiltinAgents(agentOpts({ enabled: false }));
+    expect(r.status).toBe('skipped-disabled');
+    expect(fs.existsSync(path.join(homeAgents, 'backend-developer.md'))).toBe(false);
+  });
+
+  it('skips when the bundle is missing', async () => {
+    fs.rmSync(agentsBundle, { recursive: true, force: true });
+    const r = await seedBuiltinAgents(agentOpts());
     expect(r.status).toBe('skipped-no-bundle');
   });
 });

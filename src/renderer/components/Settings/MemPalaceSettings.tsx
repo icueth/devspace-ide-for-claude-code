@@ -119,7 +119,7 @@ export function MemPalaceSettings() {
   const running = busy !== 'idle';
 
   return (
-    <div className="flex h-full overflow-y-auto">
+    <div className="h-full overflow-y-auto">
       <div className="mx-auto flex w-full max-w-[720px] flex-col gap-5 px-6 py-6">
         <Header status={status} />
 

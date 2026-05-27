@@ -11,7 +11,9 @@ import {
 } from '@main/services/SkillsService';
 import {
   getSeedingEnabled,
+  readAgentManifest,
   readSeedManifest,
+  seedBuiltinAgents,
   seedDesignSkills,
   setSeedingEnabled,
 } from '@main/services/SkillSeedingService';
@@ -90,9 +92,10 @@ export function registerSkillsIpc(): void {
   ipcMain.handle(
     IPC.DESIGN_SEEDING_STATUS,
     async (): Promise<DesignSeedingStatus> => {
-      const [enabled, manifest] = await Promise.all([
+      const [enabled, manifest, agentManifest] = await Promise.all([
         getSeedingEnabled(),
         readSeedManifest(),
+        readAgentManifest(),
       ]);
       return {
         enabled,
@@ -100,6 +103,7 @@ export function registerSkillsIpc(): void {
         seededAt: manifest?.seededAt ?? null,
         skillCount: manifest?.managedSlugs.length ?? 0,
         systemCount: manifest?.managedSystems.length ?? 0,
+        agentCount: agentManifest?.managedAgents.length ?? 0,
       };
     },
   );
@@ -122,12 +126,14 @@ export function registerSkillsIpc(): void {
       // off (the button is an explicit "do it now" action). The pref is left
       // unchanged.
       const r = await seedDesignSkills({ enabled: true, force: true });
+      const a = await seedBuiltinAgents({ enabled: true, force: true });
       return {
         status: r.status,
         seededSkills: r.seededSkills,
         seededSystems: r.seededSystems,
-        skippedCollisions: r.skippedCollisions.length,
-        removedStale: r.removedStale,
+        seededAgents: a.seededAgents,
+        skippedCollisions: r.skippedCollisions.length + a.skippedCollisions.length,
+        removedStale: r.removedStale + a.removedStale,
       };
     },
   );

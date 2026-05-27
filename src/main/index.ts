@@ -62,6 +62,7 @@ import { init as initMemory } from '@main/services/MemoryService';
 import { shutdownAll as shutdownPtyPool } from '@main/services/PtyPool';
 import {
   getSeedingEnabled,
+  seedBuiltinAgents,
   seedDesignSkills,
 } from '@main/services/SkillSeedingService';
 import { pruneStaleSessions as pruneStaleTmuxSessions } from '@main/services/TmuxChatRunner';
@@ -297,19 +298,44 @@ app.whenReady().then(async () => {
   // Idempotent + version-stamped + never clobbers user-authored skills.
   // Background + best-effort: never blocks boot, never throws.
   void getSeedingEnabled()
-    .then((enabled) => seedDesignSkills({ enabled }))
-    .then((r) => {
-      if (r.status === 'seeded') {
-        console.log(
-          `[main] design skills seeded: ${r.seededSkills} skills + ${r.seededSystems} systems` +
-            (r.skippedCollisions.length
-              ? ` (kept ${r.skippedCollisions.length} user skills)`
-              : ''),
-        );
-      }
+    .then((enabled) => {
+      void seedDesignSkills({ enabled })
+        .then((r) => {
+          if (r.status === 'seeded') {
+            console.log(
+              `[main] design skills seeded: ${r.seededSkills} skills + ${r.seededSystems} systems` +
+                (r.skippedCollisions.length
+                  ? ` (kept ${r.skippedCollisions.length} user skills)`
+                  : ''),
+            );
+          }
+        })
+        .catch((err) => {
+          console.error(
+            '[main] design skill seeding failed:',
+            (err as Error).message,
+          );
+        });
+      void seedBuiltinAgents({ enabled })
+        .then((r) => {
+          if (r.status === 'seeded') {
+            console.log(
+              `[main] agents seeded: ${r.seededAgents}` +
+                (r.skippedCollisions.length
+                  ? ` (kept ${r.skippedCollisions.length} user agents)`
+                  : ''),
+            );
+          }
+        })
+        .catch((err) => {
+          console.error(
+            '[main] agent seeding failed:',
+            (err as Error).message,
+          );
+        });
     })
     .catch((err) => {
-      console.error('[main] design skill seeding failed:', (err as Error).message);
+      console.error('[main] seeding-pref read failed:', (err as Error).message);
     });
 
   // Pre-warm LLM config + chat profile caches so the first autocomplete

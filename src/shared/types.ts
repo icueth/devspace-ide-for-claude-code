@@ -701,6 +701,7 @@ export interface DesignSeedingStatus {
   seededAt: string | null;
   skillCount: number;
   systemCount: number;
+  agentCount: number;
 }
 
 export interface DesignSeedingReseedResult {
@@ -711,6 +712,7 @@ export interface DesignSeedingReseedResult {
     | 'skipped-disabled';
   seededSkills: number;
   seededSystems: number;
+  seededAgents: number;
   skippedCollisions: number;
   removedStale: number;
 }
