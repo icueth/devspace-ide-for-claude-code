@@ -5,6 +5,18 @@ All notable changes to DevSpace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.35.5] — 2026-05-27
+
+Fixed — Setup "Skills & agents" card showed misleading counts (e.g. "Agents 0").
+The card (and the Settings → Skills status line) reported the seeder's *managed*
+count — how many entries DevSpace itself wrote — instead of how many are
+actually present in `~/.claude`. On a machine that already had the packs, the
+seeder correctly skips them as collisions and manages 0, so the card read
+"Agents 0 / Skills 89" even though all 30 agents and 200+ skills were in place
+and discoverable. The status now counts what's actually present in
+`~/.claude/skills` and `~/.claude/agents` (availability — what Claude Code can
+discover), so the numbers reflect reality on both fresh and existing installs.
+
 ## [0.35.4] — 2026-05-27
 
 Batteries-included install + a Settings scroll fix.

@@ -5,6 +5,7 @@ import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
+  getPresentCounts,
   getSeedingEnabled,
   readAgentManifest,
   readSeedManifest,
@@ -327,5 +328,48 @@ describe('seeding preference', () => {
     expect(await getSeedingEnabled(home)).toBe(false);
     await setSeedingEnabled(true, home);
     expect(await getSeedingEnabled(home)).toBe(true);
+  });
+});
+
+describe('getPresentCounts (v0.35.5: report what is PRESENT, not managed)', () => {
+  let root: string;
+  let homeSkills: string;
+  let homeAgents: string;
+
+  beforeEach(() => {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), 'seed-present-'));
+    homeSkills = path.join(root, 'skills');
+    homeAgents = path.join(root, 'agents');
+    fs.mkdirSync(homeSkills, { recursive: true });
+    fs.mkdirSync(homeAgents, { recursive: true });
+  });
+  afterEach(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  it('counts skills + agents + systems actually present (regardless of who seeded them)', async () => {
+    // Mix of "seeded" and "user-authored" — getPresentCounts must not care.
+    writeSkill(homeSkills, 'ui-design');
+    writeSkill(homeSkills, 'my-own-skill');
+    writeSkill(homeSkills, 'backend-architect');
+    // design-systems live under the leading-underscore dir and must NOT be
+    // counted as skills.
+    writeSystem(path.join(homeSkills, '_design-systems'), 'apple');
+    writeSystem(path.join(homeSkills, '_design-systems'), 'stripe');
+    // agents are flat .md files
+    fs.writeFileSync(path.join(homeAgents, 'code-reviewer.md'), '---\nname: code-reviewer\n---\n');
+    fs.writeFileSync(path.join(homeAgents, 'my-agent.md'), '---\nname: my-agent\n---\n');
+
+    const counts = await getPresentCounts({
+      homeSkillsDirOverride: homeSkills,
+      homeAgentsDirOverride: homeAgents,
+    });
+    expect(counts).toEqual({ skills: 3, agents: 2, systems: 2 });
+  });
+
+  it('returns zeros for missing dirs (never throws)', async () => {
+    const counts = await getPresentCounts({
+      homeSkillsDirOverride: path.join(root, 'nope-skills'),
+      homeAgentsDirOverride: path.join(root, 'nope-agents'),
+    });
+    expect(counts).toEqual({ skills: 0, agents: 0, systems: 0 });
   });
 });

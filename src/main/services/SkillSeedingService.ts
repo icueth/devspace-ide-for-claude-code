@@ -576,6 +576,32 @@ export async function readAgentManifest(
   return readAgentManifestFile(path.join(home, AGENT_MANIFEST_NAME));
 }
 
+/**
+ * Count what is ACTUALLY present in `~/.claude` right now — not what this
+ * seeder manages. The manifest only tracks slugs WE seeded, so on a machine
+ * that already had the skills/agents (seeded 0 because they collided), the
+ * managed count reads a misleading 0 even though the files are all there.
+ * The Settings/Setup UI reports availability ("what Claude Code can discover")
+ * so it must count the home dirs directly. Best-effort: 0 on any read error.
+ */
+export async function getPresentCounts(overrides?: {
+  homeSkillsDirOverride?: string;
+  homeAgentsDirOverride?: string;
+}): Promise<{ skills: number; agents: number; systems: number }> {
+  const homeSkills = overrides?.homeSkillsDirOverride ?? defaultHomeSkillsDir();
+  const homeAgents = overrides?.homeAgentsDirOverride ?? defaultHomeAgentsDir();
+  const [skills, systems, agents] = await Promise.all([
+    // SLUG_RE rejects the leading-underscore `_design-systems` dir, so the
+    // skills count never double-counts the systems reference material.
+    listBundleEntries(homeSkills, 'SKILL.md').then((s) => s.length),
+    listBundleEntries(path.join(homeSkills, SYSTEMS_DIRNAME), 'DESIGN.md').then(
+      (s) => s.length,
+    ),
+    listAgentEntries(homeAgents).then((a) => a.length),
+  ]);
+  return { skills, agents, systems };
+}
+
 function safeAppVersion(): string {
   try {
     return app.getVersion();

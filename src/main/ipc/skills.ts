@@ -10,8 +10,8 @@ import {
   saveSkill,
 } from '@main/services/SkillsService';
 import {
+  getPresentCounts,
   getSeedingEnabled,
-  readAgentManifest,
   readSeedManifest,
   seedBuiltinAgents,
   seedDesignSkills,
@@ -92,18 +92,22 @@ export function registerSkillsIpc(): void {
   ipcMain.handle(
     IPC.DESIGN_SEEDING_STATUS,
     async (): Promise<DesignSeedingStatus> => {
-      const [enabled, manifest, agentManifest] = await Promise.all([
+      // Counts reflect what's PRESENT in ~/.claude (availability), not what
+      // the seeder manages — on a machine that already had the packs, the
+      // managed count reads a misleading 0/low even though every file is in
+      // place (the screenshot bug: "Agents 0" when all 30 are present).
+      const [enabled, manifest, present] = await Promise.all([
         getSeedingEnabled(),
         readSeedManifest(),
-        readAgentManifest(),
+        getPresentCounts(),
       ]);
       return {
         enabled,
         packVersion: manifest?.packVersion ?? null,
         seededAt: manifest?.seededAt ?? null,
-        skillCount: manifest?.managedSlugs.length ?? 0,
-        systemCount: manifest?.managedSystems.length ?? 0,
-        agentCount: agentManifest?.managedAgents.length ?? 0,
+        skillCount: present.skills,
+        systemCount: present.systems,
+        agentCount: present.agents,
       };
     },
   );

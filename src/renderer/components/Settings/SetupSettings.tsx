@@ -655,7 +655,7 @@ function BundledPacksCard() {
   return (
     <div className="overflow-hidden rounded-[10px] border border-border bg-surface-2/60">
       <div className="border-b border-border-subtle px-3 py-1.5 text-[10.5px] font-semibold uppercase tracking-wide text-text-muted">
-        Bundled skills &amp; agents
+        Skills &amp; agents in ~/.claude
       </div>
       <div className="flex flex-col gap-3 px-3 py-3">
         <div className="grid grid-cols-3 gap-2">
