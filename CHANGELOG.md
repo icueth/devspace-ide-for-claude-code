@@ -5,6 +5,35 @@ All notable changes to DevSpace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.35.3] — 2026-05-26
+
+Two user-reported chat issues.
+
+### Fixed — AskUserQuestion answer sometimes didn't submit (had to retype)
+Clicking an answer occasionally did nothing — the answer never reached the
+chat and the turn hung until the user typed it manually. Root cause: a race.
+When Claude calls AskUserQuestion we kill the run, but its per-thread lock
+takes ~100-200ms to release (a tmux poll tick); a fast answer-click landed in
+that window, so the answer's send was rejected with "a chat turn is already
+running for this thread" and silently parked. The answer submitter now retries
+on **that specific** error (it's thrown before any message is created, so a
+retry can't duplicate the answer); genuine failures still fail fast.
+
+### Changed — chat token use cut by curating the bundled design skills
+Chat had started consuming noticeably more tokens. Cause: the v0.31 design
+feature seeded **132** design-pack skills into `~/.claude/skills`, and Claude
+Code injects every discoverable skill's name+description into **every** chat
+turn — ~12k tokens/turn across all skills, roughly half of it the seeded pack
+(much of which — video, social, marketing, China-platform, image/audio gen —
+is irrelevant to coding or web design). The bundle is now curated to **24
+web/UI-design-core skills** (ui-design, artifacts-builder, design-review,
+apple-hig, web-design-guidelines, color-expert, brand-design-systems,
+shadcn-ui, frontend-design, common page layouts, …). On launch the seeder
+removes the 108 now-stale managed skills from `~/.claude/skills` automatically
+(user-authored skills are never touched). The 150 brand design-systems stay —
+they're `DESIGN.md`, referenced on-demand by ui-design, not injected per turn.
+Net: ~5-6k fewer tokens per chat turn, design capability preserved.
+
 ## [0.35.2] — 2026-05-26
 
 Bug-fix pass from a 4-surface audit (chat runtime, codeflow, renderer, services/IPC).

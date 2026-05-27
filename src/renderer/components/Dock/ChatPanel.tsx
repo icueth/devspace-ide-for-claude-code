@@ -58,6 +58,7 @@ import {
   type AnswerOutcome,
   autoSubmitsOnPick,
   buildAnswerText,
+  isThreadBusyError,
   needsSubmitButton as questionsNeedSubmitButton,
   parseQuestions,
   resolveAnswerOutcome,
@@ -1079,11 +1080,29 @@ export function ChatPanel({ projectPath }: ChatPanelProps) {
       // append fallback. submitText itself early-returns when activeId is
       // null, so we gate first to avoid a no-op pretending it succeeded.
       if (hasActiveThread && !isSending) {
-        try {
-          await submitText(text);
-        } catch (err) {
-          console.error('[chat] answer submit failed', err);
-          sendThrew = true;
+        // v0.35.3: the just-killed AskUserQuestion run may still be releasing
+        // its per-thread lock for ~100-200ms after the card appears. A fast
+        // answer-click races that release and the backend throws "already
+        // running for this thread". That's retryable — the lock check fires
+        // before any message is created, so re-sending can't duplicate the
+        // answer. Retry briefly on THAT error only; any other failure fails
+        // fast (it may have already mutated state — don't double-send).
+        const MAX_ATTEMPTS = 5;
+        const RETRY_DELAY_MS = 150;
+        for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+          try {
+            await submitText(text);
+            sendThrew = false;
+            break;
+          } catch (err) {
+            sendThrew = true;
+            if (attempt < MAX_ATTEMPTS && isThreadBusyError(err)) {
+              await new Promise((r) => setTimeout(r, RETRY_DELAY_MS));
+              continue;
+            }
+            console.error('[chat] answer submit failed', err);
+            break;
+          }
         }
       }
       const outcome = resolveAnswerOutcome({

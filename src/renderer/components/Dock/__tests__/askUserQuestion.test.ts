@@ -5,6 +5,7 @@ import {
   answeredCount,
   autoSubmitsOnPick,
   buildAnswerText,
+  isThreadBusyError,
   needsSubmitButton,
   parseQuestions,
   resolveAnswerOutcome,
@@ -182,6 +183,29 @@ describe('resolveAnswerOutcome (regression: card status must match reality)', ()
     for (const g of guards) {
       expect(resolveAnswerOutcome({ ...base, ...g })).not.toBe('sent');
     }
+  });
+});
+
+describe('isThreadBusyError (v0.35.3: retryable answer-submit lock race)', () => {
+  it('matches the backend per-thread lock rejection', () => {
+    expect(
+      isThreadBusyError(new Error('a chat turn is already running for this thread')),
+    ).toBe(true);
+    // Case-insensitive, tolerant of surrounding context.
+    expect(
+      isThreadBusyError(new Error('Error: Already Running For This Thread (x)')),
+    ).toBe(true);
+  });
+
+  it('does NOT match unrelated send failures (must fail fast, never retry)', () => {
+    expect(isThreadBusyError(new Error('thread not found: abc'))).toBe(false);
+    expect(isThreadBusyError(new Error('ENOSPC: no space left on device'))).toBe(false);
+    expect(isThreadBusyError(new Error('a chat turn is already running for this project'))).toBe(
+      false,
+    );
+    expect(isThreadBusyError(undefined)).toBe(false);
+    expect(isThreadBusyError(null)).toBe(false);
+    expect(isThreadBusyError('plain string')).toBe(false);
   });
 });
 

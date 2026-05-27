@@ -35,6 +35,21 @@ export function resolveAnswerOutcome(opts: {
   return 'sent';
 }
 
+/**
+ * v0.35.3: the backend rejects a send with "a chat turn is already running
+ * for this thread" while a run still holds the per-thread lock. When the
+ * user answers an AskUserQuestion, the just-killed question run can still be
+ * releasing that lock (~100-200ms after the card appears). That throw is a
+ * RETRYABLE race, not a real failure — the lock check fires before any
+ * message is created, so re-sending can't duplicate the answer. This
+ * predicate lets the submitter distinguish it from genuine send failures
+ * (which must NOT be retried, as they may have already mutated state).
+ */
+export function isThreadBusyError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err ?? '');
+  return /already running for this thread/i.test(msg);
+}
+
 export type AskQuestion = {
   question?: string;
   header?: string;

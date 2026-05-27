@@ -15,12 +15,22 @@ const logger = createLogger('SkillSeeding');
 // ─────────────────────────────────────────────────────────────────────────
 // Why this service exists
 //
-// v0.31 ships 132 design skills + 150 brand design-systems inside the .app
-// (resources/design-packs, via electron-builder extraResources). BUT the
-// Claude Code CLI only DISCOVERS skills under `~/.claude/skills` (+ project
-// `.claude/skills`) — it never looks inside `<App>/Contents/Resources`. So
-// to make Claude actually USE these skills when chatting, we must copy the
-// bundled packs into `~/.claude/skills` on boot.
+// We ship a curated CORE set of ~24 design skills + 150 brand design-systems
+// inside the .app (resources/design-packs, via electron-builder
+// extraResources). BUT the Claude Code CLI only DISCOVERS skills under
+// `~/.claude/skills` (+ project `.claude/skills`) — it never looks inside
+// `<App>/Contents/Resources`. So to make Claude actually USE these skills
+// when chatting, we must copy the bundled packs into `~/.claude/skills` on
+// boot.
+//
+// v0.35.3: the pack was curated down from the full nexu-io 132-skill set to
+// ~24 web/UI-design-core skills. Claude Code injects every discoverable
+// skill's name+description into EVERY chat turn's context, so the original
+// 132 (mostly non-coding: video/social/marketing/China-platform skills)
+// added ~6k tokens/turn of irrelevant metadata. The clean-upgrade path below
+// removes the now-stale managed slugs from `~/.claude/skills` automatically.
+// The 150 brand design-systems are DESIGN.md (not SKILL.md) — referenced
+// on-demand by ui-design, NOT injected per turn — so they stay.
 //
 // Safety contract (this writes into the user's home — treat with care):
 //   • NEVER clobber a user-authored skill. We only overwrite slugs we
