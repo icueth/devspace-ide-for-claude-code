@@ -964,6 +964,9 @@ export interface TmuxConfig {
   /** v0.36.0: minutes a claude-cli PTY may sit idle before the reaper kills it.
    * Clamped to [15, 720]. Default 120 (2h). */
   idleCliTabTimeoutMinutes?: number;
+  /** v0.36.1: minutes an UNPINNED claude-cli PTY (no column displays it) may
+   * sit idle before the reaper kills it. Clamped to [1, 60]. Default 10. */
+  unpinnedCliTabTimeoutMinutes?: number;
 }
 
 export interface TmuxSession {

@@ -177,6 +177,11 @@ export interface DevspaceApi {
     onAutoClosed: (
       cb: (ev: { ids: string[]; thresholdMinutes: number }) => void,
     ) => () => void;
+    // v0.36.1 — push the renderer's pinned claude-cli session-id set to
+    // main. Fire-and-forget. Called from the cliTabs store on every
+    // change to `columns` so the dual-tier reaper can distinguish visible
+    // vs. background tabs.
+    setPinned: (ids: string[]) => void;
   };
   tmux: {
     listPanes: (sessionName?: string) => Promise<TmuxPane[]>;
@@ -681,6 +686,7 @@ function makeStubApi(): DevspaceApi {
       onData: () => () => undefined,
       onExit: () => () => undefined,
       onAutoClosed: () => () => undefined,
+      setPinned: () => undefined,
     },
     tmux: {
       listPanes: () => Promise.resolve([]),

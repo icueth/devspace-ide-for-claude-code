@@ -489,3 +489,49 @@ if (typeof window !== 'undefined' && api?.pty?.onAutoClosed) {
     }
   });
 }
+
+// v0.36.1: push the renderer's pinned-session set to main on every change
+// to `columns` (and `tabsByProject`, since a column's pin → session-id
+// resolution depends on the referenced tab still existing). Source of
+// truth is the renderer — main has no way to know which (project, tab)
+// pair is currently visible in some dock column.
+function computePinnedSessionIds(state: PersistedShape): string[] {
+  const out: string[] = [];
+  for (const col of state.columns) {
+    if (!col.pin) continue;
+    const tabs = state.tabsByProject[col.pin.projectId];
+    if (!tabs?.some((t) => t.id === col.pin!.tabId)) continue;
+    out.push(claudeCliSessionId(col.pin.projectId, col.pin.tabId));
+  }
+  return out;
+}
+function arraysEqualUnordered(a: string[], b: string[]): boolean {
+  if (a.length !== b.length) return false;
+  const set = new Set(a);
+  for (const x of b) if (!set.has(x)) return false;
+  return true;
+}
+if (typeof window !== 'undefined' && api?.pty?.setPinned) {
+  let prevIds = computePinnedSessionIds(useCliTabsStore.getState());
+  try {
+    api.pty.setPinned(prevIds);
+  } catch {
+    /* preload not yet wired — non-fatal */
+  }
+  useCliTabsStore.subscribe((state, prevState) => {
+    if (
+      state.columns === prevState.columns &&
+      state.tabsByProject === prevState.tabsByProject
+    ) {
+      return;
+    }
+    const next = computePinnedSessionIds(state);
+    if (arraysEqualUnordered(prevIds, next)) return;
+    prevIds = next;
+    try {
+      api.pty.setPinned(next);
+    } catch {
+      /* preload bridge unavailable — non-fatal */
+    }
+  });
+}

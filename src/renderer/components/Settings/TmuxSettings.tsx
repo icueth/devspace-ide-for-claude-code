@@ -27,6 +27,18 @@ const IDLE_TIMEOUT_OPTIONS: Array<{ label: string; minutes: number }> = [
   { label: '8h', minutes: 480 },
 ];
 
+// v0.36.1 — unpinned threshold choices. Tabs not visible in any dock column
+// close faster; the backend clamps to [1, 60] so a renderer typo can't
+// silently disable this tier.
+const UNPINNED_TIMEOUT_OPTIONS: Array<{ label: string; minutes: number }> = [
+  { label: '1m', minutes: 1 },
+  { label: '5m', minutes: 5 },
+  { label: '10m', minutes: 10 },
+  { label: '20m', minutes: 20 },
+  { label: '30m', minutes: 30 },
+  { label: '60m', minutes: 60 },
+];
+
 type Status =
   | { kind: 'idle' }
   | { kind: 'ok'; message: string; ts: number }
@@ -71,6 +83,7 @@ export function TmuxSettings() {
 
   const autoCloseEnabled = tmuxCfg?.autoCloseIdleCliTabs ?? true;
   const idleTimeoutMinutes = tmuxCfg?.idleCliTabTimeoutMinutes ?? 120;
+  const unpinnedTimeoutMinutes = tmuxCfg?.unpinnedCliTabTimeoutMinutes ?? 10;
 
   const patchTmuxConfig = async (patch: Partial<TmuxConfig>) => {
     if (!tmuxCfg) return;
@@ -353,8 +366,43 @@ export function TmuxSettings() {
               </select>
             </div>
           </div>
-          <p className="mt-3 text-[11px] leading-relaxed text-text-muted">
-            When a CLI tab has had no I/O for {formatMinutes(idleTimeoutMinutes)},
+          {/* v0.36.1 — dual-tier reaper. Tabs not visible in any dock column
+              close much faster than pinned tabs the user is actually looking
+              at. Same patch flow as the master select above. */}
+          <div className="mt-3 flex flex-wrap items-center gap-2 text-[12px] text-text-secondary">
+            <span>Background tab timeout (not visible in dock columns)</span>
+            <select
+              value={unpinnedTimeoutMinutes}
+              disabled={!autoCloseEnabled}
+              onChange={(e) =>
+                void patchTmuxConfig({
+                  unpinnedCliTabTimeoutMinutes: Number(e.target.value),
+                })
+              }
+              className={cn(
+                'rounded-[6px] border border-border bg-surface-3 px-2 py-[3px] text-[11.5px] text-text outline-none transition focus:border-accent',
+                !autoCloseEnabled && 'cursor-not-allowed opacity-50',
+              )}
+            >
+              {UNPINNED_TIMEOUT_OPTIONS.map((opt) => (
+                <option key={opt.minutes} value={opt.minutes}>
+                  {opt.label}
+                </option>
+              ))}
+              {!UNPINNED_TIMEOUT_OPTIONS.some(
+                (o) => o.minutes === unpinnedTimeoutMinutes,
+              ) && (
+                <option value={unpinnedTimeoutMinutes}>
+                  {unpinnedTimeoutMinutes}m (custom)
+                </option>
+              )}
+            </select>
+          </div>
+          <p className="mt-1 text-[11px] leading-relaxed text-text-muted">
+            Tabs you can't see in any column close faster — frees ≈400 MB each.
+          </p>
+          <p className="mt-2 text-[11px] leading-relaxed text-text-muted">
+            When a visible CLI tab has had no I/O for {formatMinutes(idleTimeoutMinutes)},
             it'll close automatically. Frees ≈400 MB per closed tab (claude + MCP children).
           </p>
         </section>

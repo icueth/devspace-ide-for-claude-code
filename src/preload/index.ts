@@ -137,6 +137,12 @@ const api = {
       ipcRenderer.on(IPC.PTY_AUTO_CLOSED, listener);
       return () => ipcRenderer.off(IPC.PTY_AUTO_CLOSED, listener);
     },
+    // v0.36.1: push the renderer's pinned-session set to main. Fire-and-
+    // forget — no response, no await — so a reaper tick can race with the
+    // push without blocking either side.
+    setPinned: (ids: string[]) => {
+      ipcRenderer.send(IPC.PTY_SET_PINNED, { ids });
+    },
   },
   tmux: {
     listPanes: (sessionName?: string) =>

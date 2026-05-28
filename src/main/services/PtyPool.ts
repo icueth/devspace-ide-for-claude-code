@@ -445,9 +445,17 @@ const IDLE_REAPER_TICK_MS = 60_000;
 let _idleReaperTimer: NodeJS.Timeout | null = null;
 let _idleReaperEnabled = true;
 let _idleThresholdMinutes = 120;
+// v0.36.1: dual-tier reaper. Tabs not present in any dock column close much
+// faster — they're the chips the user can't see. Renderer pushes the pinned
+// set whenever its `columns` array changes; main starts with an empty set so
+// nothing is treated as pinned until that arrives.
+let _unpinnedThresholdMinutes = 10;
+const _pinnedSessionIds: Set<string> = new Set();
 
 const IDLE_THRESHOLD_MIN_MINUTES = 15;
 const IDLE_THRESHOLD_MAX_MINUTES = 720;
+const UNPINNED_THRESHOLD_MIN_MINUTES = 1;
+const UNPINNED_THRESHOLD_MAX_MINUTES = 60;
 
 /** Read-only stats snapshot — used by the reaper + tests. Cheap to compute
  * (one pass over the map) so callers can poll without worrying about cost. */
@@ -468,31 +476,72 @@ export function getSessionStats(): Array<{
 }
 
 /**
- * Pure helper: given a snapshot of session stats, the current time, and an
- * idle threshold in ms, return the set of claude-cli session ids that the
- * reaper should kill. Extracted so tests can exercise the decision logic
- * without spinning up actual ptys or fake-timing the interval.
+ * Pure helper: given a snapshot of session stats, the current time, and the
+ * two idle thresholds in ms, return the set of claude-cli session ids that
+ * the reaper should kill. Dual-tier as of v0.36.1: pinned tabs (visible in
+ * some dock column) get the longer threshold; unpinned tabs (dock chips the
+ * user hasn't surfaced) close much faster. A non-finite or non-positive
+ * threshold disables kills for THAT tier only, not both.
  */
 export function selectIdleClaudeCliVictims(
   sessions: Array<{ id: string; kind: PtySessionKind; lastActivityAt: number }>,
   nowMs: number,
-  thresholdMs: number,
+  pinnedThresholdMs: number,
+  unpinnedThresholdMs: number,
+  pinnedIds: ReadonlySet<string>,
 ): string[] {
-  if (!Number.isFinite(thresholdMs) || thresholdMs <= 0) return [];
+  const pinnedOk =
+    Number.isFinite(pinnedThresholdMs) && pinnedThresholdMs > 0;
+  const unpinnedOk =
+    Number.isFinite(unpinnedThresholdMs) && unpinnedThresholdMs > 0;
+  if (!pinnedOk && !unpinnedOk) return [];
   const victims: string[] = [];
   for (const s of sessions) {
     if (s.kind !== 'claude-cli') continue;
-    if (nowMs - s.lastActivityAt > thresholdMs) victims.push(s.id);
+    const idleMs = nowMs - s.lastActivityAt;
+    if (pinnedIds.has(s.id)) {
+      if (pinnedOk && idleMs > pinnedThresholdMs) victims.push(s.id);
+    } else {
+      if (unpinnedOk && idleMs > unpinnedThresholdMs) victims.push(s.id);
+    }
   }
   return victims;
 }
 
+/**
+ * Replace the set of session ids treated as "pinned" (visible in some dock
+ * column). Pushed from the renderer whenever its columns layout changes.
+ * Non-string entries are silently dropped so a misbehaving caller can't
+ * poison the set.
+ */
+export function setPinnedSessions(ids: string[]): void {
+  if (!Array.isArray(ids)) {
+    logger.debug('setPinnedSessions: ignoring non-array payload');
+    return;
+  }
+  _pinnedSessionIds.clear();
+  for (const id of ids) {
+    if (typeof id === 'string') _pinnedSessionIds.add(id);
+  }
+  logger.debug(`pinned set updated: ${_pinnedSessionIds.size} session(s)`);
+}
+
+/** Test-only getter — lets unit tests confirm setPinnedSessions wired the
+ * private set without exporting the mutable state directly. */
+export function getPinnedSessionsForTest(): ReadonlySet<string> {
+  return _pinnedSessionIds;
+}
+
 /** Apply a new enabled/threshold config to the running reaper. Clamps the
- * threshold into [15, 720] minutes so a misconfigured renderer can't disable
- * the reaper by stealth (threshold of 0 / negative / Infinity). */
+ * pinned threshold into [15, 720] minutes and the unpinned threshold into
+ * [1, 60] minutes so a misconfigured renderer can't disable either tier by
+ * stealth (threshold of 0 / negative / Infinity). Either threshold may be
+ * omitted — missing fields keep their current value, so callers can pass
+ * partial updates without re-reading state. */
 export function configureIdleReaper(opts: {
   enabled: boolean;
   thresholdMinutes: number;
+  unpinnedThresholdMinutes?: number;
 }): void {
   _idleReaperEnabled = !!opts.enabled;
   const raw = Number(opts.thresholdMinutes);
@@ -502,8 +551,17 @@ export function configureIdleReaper(opts: {
       Math.min(IDLE_THRESHOLD_MAX_MINUTES, Math.floor(raw)),
     );
   }
+  if (opts.unpinnedThresholdMinutes !== undefined) {
+    const rawUnpinned = Number(opts.unpinnedThresholdMinutes);
+    if (Number.isFinite(rawUnpinned)) {
+      _unpinnedThresholdMinutes = Math.max(
+        UNPINNED_THRESHOLD_MIN_MINUTES,
+        Math.min(UNPINNED_THRESHOLD_MAX_MINUTES, Math.floor(rawUnpinned)),
+      );
+    }
+  }
   logger.info(
-    `idle reaper configured: enabled=${_idleReaperEnabled} threshold=${_idleThresholdMinutes}m`,
+    `idle reaper configured: enabled=${_idleReaperEnabled} pinned=${_idleThresholdMinutes}m unpinned=${_unpinnedThresholdMinutes}m`,
   );
 }
 
@@ -521,22 +579,29 @@ export function startIdleReaper(
     _idleReaperTimer = null;
   }
   _idleReaperTimer = setInterval(() => {
-    if (!_idleReaperEnabled || _idleThresholdMinutes <= 0) return;
-    const thresholdMs = _idleThresholdMinutes * 60 * 1000;
+    if (!_idleReaperEnabled) return;
+    const pinnedMs = _idleThresholdMinutes * 60 * 1000;
+    const unpinnedMs = _unpinnedThresholdMinutes * 60 * 1000;
     const victims = selectIdleClaudeCliVictims(
       getSessionStats(),
       Date.now(),
-      thresholdMs,
+      pinnedMs,
+      unpinnedMs,
+      _pinnedSessionIds,
     );
     if (victims.length === 0) return;
     logger.info(
-      `idle reaper: closing ${victims.length} idle claude-cli session(s) (threshold=${_idleThresholdMinutes}m)`,
+      `idle reaper: closing ${victims.length} idle claude-cli session(s) (pinned=${_idleThresholdMinutes}m unpinned=${_unpinnedThresholdMinutes}m)`,
     );
     for (const id of victims) {
       killPty(id).catch(() => undefined);
     }
     try {
-      broadcast(victims, _idleThresholdMinutes);
+      // Report the smaller threshold to the renderer toast. The exact
+      // number doesn't matter to users — they want to know "~M MB freed",
+      // and the smaller threshold is the worst case for "this could have
+      // been kept open longer". Keeps the broadcast contract unchanged.
+      broadcast(victims, Math.min(_idleThresholdMinutes, _unpinnedThresholdMinutes));
     } catch (err) {
       logger.warn(`idle reaper broadcast threw: ${(err as Error).message}`);
     }
@@ -546,7 +611,7 @@ export function startIdleReaper(
   // unref() is safe and makes the reaper invisible to graceful-exit logic.
   _idleReaperTimer.unref?.();
   logger.info(
-    `idle reaper started (tick=${IDLE_REAPER_TICK_MS}ms threshold=${_idleThresholdMinutes}m enabled=${_idleReaperEnabled})`,
+    `idle reaper started (tick=${IDLE_REAPER_TICK_MS}ms pinned=${_idleThresholdMinutes}m unpinned=${_unpinnedThresholdMinutes}m enabled=${_idleReaperEnabled})`,
   );
 }
 

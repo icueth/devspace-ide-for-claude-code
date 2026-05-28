@@ -15,11 +15,26 @@ export const IDLE_CLI_TAB_MIN_MINUTES = 15;
 export const IDLE_CLI_TAB_MAX_MINUTES = 720;
 export const IDLE_CLI_TAB_DEFAULT_MINUTES = 120;
 
+// v0.36.1: bounds for the unpinned-CLI-tab reaper threshold (minutes).
+// Tabs not visible in any column close much faster — they're the dock
+// chips the user hasn't surfaced, and each one still holds claude + MCP.
+export const UNPINNED_CLI_TAB_MIN_MINUTES = 1;
+export const UNPINNED_CLI_TAB_MAX_MINUTES = 60;
+export const UNPINNED_CLI_TAB_DEFAULT_MINUTES = 10;
+
 function clampIdleMinutes(n: number): number {
   if (!Number.isFinite(n)) return IDLE_CLI_TAB_DEFAULT_MINUTES;
   return Math.max(
     IDLE_CLI_TAB_MIN_MINUTES,
     Math.min(IDLE_CLI_TAB_MAX_MINUTES, Math.floor(n)),
+  );
+}
+
+function clampUnpinnedMinutes(n: number): number {
+  if (!Number.isFinite(n)) return UNPINNED_CLI_TAB_DEFAULT_MINUTES;
+  return Math.max(
+    UNPINNED_CLI_TAB_MIN_MINUTES,
+    Math.min(UNPINNED_CLI_TAB_MAX_MINUTES, Math.floor(n)),
   );
 }
 
@@ -39,6 +54,8 @@ export const DEFAULT_TMUX_CONFIG: TmuxConfig = {
   // v0.36.0: default ON, 2h timeout — see RAM-overhead context in the PR.
   autoCloseIdleCliTabs: true,
   idleCliTabTimeoutMinutes: IDLE_CLI_TAB_DEFAULT_MINUTES,
+  // v0.36.1: unpinned tabs close faster — they're not visible in any column.
+  unpinnedCliTabTimeoutMinutes: UNPINNED_CLI_TAB_DEFAULT_MINUTES,
 };
 
 let cached: TmuxConfig | null = null;
@@ -85,6 +102,11 @@ function sanitize(raw: unknown): TmuxConfig {
   if (typeof r.idleCliTabTimeoutMinutes === 'number') {
     base.idleCliTabTimeoutMinutes = clampIdleMinutes(r.idleCliTabTimeoutMinutes);
   }
+  if (typeof r.unpinnedCliTabTimeoutMinutes === 'number') {
+    base.unpinnedCliTabTimeoutMinutes = clampUnpinnedMinutes(
+      r.unpinnedCliTabTimeoutMinutes,
+    );
+  }
   return base;
 }
 
@@ -128,6 +150,8 @@ export async function saveTmuxConfig(next: TmuxConfig): Promise<TmuxConfig> {
       enabled: clean.autoCloseIdleCliTabs ?? true,
       thresholdMinutes:
         clean.idleCliTabTimeoutMinutes ?? IDLE_CLI_TAB_DEFAULT_MINUTES,
+      unpinnedThresholdMinutes:
+        clean.unpinnedCliTabTimeoutMinutes ?? UNPINNED_CLI_TAB_DEFAULT_MINUTES,
     });
   } catch (err) {
     logger.warn(

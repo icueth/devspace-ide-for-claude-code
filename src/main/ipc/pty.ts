@@ -5,6 +5,7 @@ import {
   createPty,
   killPty,
   resizePty,
+  setPinnedSessions,
   subscribe,
   writeToPty,
 } from '@main/services/PtyPool';
@@ -67,5 +68,22 @@ export function registerPtyIpc(): void {
   ipcMain.handle(IPC.PTY_KILL, async (_e, sessionId: string) => {
     logger.info(`kill requested for ${sessionId}`);
     await killPty(sessionId);
+  });
+
+  // v0.36.1: renderer pushes the set of pinned claude-cli session ids on
+  // every change to its columns layout. Fire-and-forget (ipcMain.on, not
+  // .handle) — no response is needed and we don't want a slow reaper tick
+  // to block the renderer's next push.
+  ipcMain.on(IPC.PTY_SET_PINNED, (_e, payload: unknown) => {
+    if (!payload || typeof payload !== 'object') {
+      setPinnedSessions([]);
+      return;
+    }
+    const ids = (payload as { ids?: unknown }).ids;
+    if (!Array.isArray(ids)) {
+      setPinnedSessions([]);
+      return;
+    }
+    setPinnedSessions(ids.filter((x): x is string => typeof x === 'string'));
   });
 }

@@ -61,6 +61,11 @@ export const IPC = {
   // Renderer's CliTabs store listens to remove the tabs from the dock and a
   // toast surfaces the resource freed.
   PTY_AUTO_CLOSED: 'pty:auto-closed',
+  // v0.36.1: renderer → main fire-and-forget push of the set of claude-cli
+  // session ids currently pinned by some dock column. Sent after every
+  // change to useCliTabsStore.columns so the dual-tier reaper knows which
+  // tabs the user is actually looking at vs. which are off-screen chips.
+  PTY_SET_PINNED: 'pty:set-pinned',
 
   // tmux inspection + interaction (for native Claude CLI agent teams)
   TMUX_LIST_PANES: 'tmux:list-panes',

@@ -61,6 +61,7 @@ import { preloadProfiles as preloadCliProfiles } from '@main/services/CliProfile
 import { init as initMemory } from '@main/services/MemoryService';
 import {
   configureIdleReaper,
+  setPinnedSessions,
   shutdownAll as shutdownPtyPool,
   startIdleReaper,
   stopIdleReaper,
@@ -364,6 +365,7 @@ app.whenReady().then(async () => {
       configureIdleReaper({
         enabled: cfg.autoCloseIdleCliTabs ?? true,
         thresholdMinutes: cfg.idleCliTabTimeoutMinutes ?? 120,
+        unpinnedThresholdMinutes: cfg.unpinnedCliTabTimeoutMinutes ?? 10,
       });
       startIdleReaper((ids, mins) => {
         // Fan the event out to every renderer window — multi-window users

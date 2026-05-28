@@ -5,6 +5,55 @@ All notable changes to DevSpace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.36.1] — 2026-05-28
+
+Background CLI tabs now close 12× faster than visible ones.
+
+### Added — dual-tier idle reaper for claude-cli tabs
+v0.36.0 closed any idle claude-cli tab after 2 h. Reality check: each tab
+spawns `claude` (~250 MB) **plus** its full MCP server tree (playwright,
+context7, postgres, brave-search, …, ~70 MB each). With 10+ tabs that's
+~4 GB held hostage by chats the user can't even see — only 1–3 tabs fit in
+the dock columns at once. A single coarse threshold treated a tab the user
+is staring at the same as one buried under 9 others.
+
+v0.36.1 splits the threshold into two tiers:
+- **Pinned** (the tab IS the active pin of some dock column → the user is
+  currently looking at it): default **2 h**, range 15 m–12 h. Unchanged.
+- **Unpinned** (the tab exists in the dock chip rail but no column displays
+  it): default **10 minutes**, range 1–60 m.
+
+Result: on a 13-tab session, the 10 tabs off-screen reclaim ~4 GB within
+minutes of being unpinned. The 3 you're actively working in get the same
+patient treatment they had before.
+
+### Added — Settings → Tmux → Auto-cleanup
+A second select appears below the existing "Idle timeout":
+**"Background tab timeout (not visible in dock columns)"** — 1 m / 5 m /
+**10 m** (default) / 20 m / 30 m / 60 m. Disabled when the master toggle
+is off. Subtitle: *"Tabs you can't see in any column close faster — frees
+≈400 MB each."*
+
+### Internal
+- `PtyPool` gains `setPinnedSessions(ids)` + `getPinnedSessionsForTest()`;
+  `selectIdleClaudeCliVictims` now takes both thresholds + a pinned-id set.
+  `configureIdleReaper` accepts an optional `unpinnedThresholdMinutes`
+  clamped to [1, 60] (defaults to current value if omitted, so callers can
+  pass partial config). Tick guard moved from "any threshold > 0" to
+  "enabled" — per-tier zero is handled by the pure selector.
+- New IPC `pty:set-pinned` (fire-and-forget, payload `{ ids: string[] }`).
+  The renderer's `cliTabs` store subscribes to its own changes (zustand v4
+  `subscribe`), recomputes the pinned id set from `columns[*].pin`, and
+  pushes to main only when the set actually changes (unordered-array
+  equality guard). String filter on the main side rejects malformed payloads.
+- `TmuxConfig` gains `unpinnedCliTabTimeoutMinutes` with a [1, 60] clamp.
+  Saved config re-configures the running reaper without restart.
+- ResourceToast payload unchanged (`{ ids, thresholdMinutes }`). The
+  broadcast now sends `Math.min(pinnedThreshold, unpinnedThreshold)` —
+  accurate enough for the "~M MB freed" line.
+- `+12 unit tests` covering pinned/unpinned tier behavior, mixed-tier
+  ticks, clamp edges, and `setPinnedSessions` mutation. Full suite: 1020.
+
 ## [0.36.0] — 2026-05-28
 
 Auto-reclaim RAM from idle CLI tabs — out of the box.
