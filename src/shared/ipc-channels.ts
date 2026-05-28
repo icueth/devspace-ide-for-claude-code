@@ -56,6 +56,11 @@ export const IPC = {
   PTY_KILL: 'pty:kill',
   PTY_DATA: 'pty:data',
   PTY_EXIT: 'pty:exit',
+  // v0.36.0: emitted when the PtyPool idle reaper auto-closes one or more
+  // claude-cli tabs. Payload: { ids: string[]; thresholdMinutes: number }.
+  // Renderer's CliTabs store listens to remove the tabs from the dock and a
+  // toast surfaces the resource freed.
+  PTY_AUTO_CLOSED: 'pty:auto-closed',
 
   // tmux inspection + interaction (for native Claude CLI agent teams)
   TMUX_LIST_PANES: 'tmux:list-panes',

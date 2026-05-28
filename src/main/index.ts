@@ -59,14 +59,23 @@ import { preloadLlmConfig } from '@main/services/LlmConfigService';
 import { preloadProfiles } from '@main/services/LlmChatProfilesService';
 import { preloadProfiles as preloadCliProfiles } from '@main/services/CliProfilesService';
 import { init as initMemory } from '@main/services/MemoryService';
-import { shutdownAll as shutdownPtyPool } from '@main/services/PtyPool';
+import {
+  configureIdleReaper,
+  shutdownAll as shutdownPtyPool,
+  startIdleReaper,
+  stopIdleReaper,
+} from '@main/services/PtyPool';
 import {
   getSeedingEnabled,
   seedBuiltinAgents,
   seedDesignSkills,
 } from '@main/services/SkillSeedingService';
 import { pruneStaleSessions as pruneStaleTmuxSessions } from '@main/services/TmuxChatRunner';
-import { getTmuxConfigSync } from '@main/services/TmuxConfigService';
+import {
+  getTmuxConfigSync,
+  loadTmuxConfig,
+} from '@main/services/TmuxConfigService';
+import { IPC } from '@shared/ipc-channels';
 import { resolveInteractiveShellEnv } from '@main/utils/shellEnv';
 
 declare const __APP_VERSION__: string;
@@ -345,6 +354,37 @@ app.whenReady().then(async () => {
   preloadProfiles();
   preloadCliProfiles();
 
+  // v0.36.0: start the idle-CLI-tab reaper. Killing the PTY is process-
+  // group-kill — claude + every MCP server child die together — so each
+  // closed tab frees ~400 MB on average. We load the persisted tmux
+  // config so the user's saved preferences (toggle off, custom timeout)
+  // are honored on boot; the reaper itself never blocks app start.
+  void loadTmuxConfig()
+    .then((cfg) => {
+      configureIdleReaper({
+        enabled: cfg.autoCloseIdleCliTabs ?? true,
+        thresholdMinutes: cfg.idleCliTabTimeoutMinutes ?? 120,
+      });
+      startIdleReaper((ids, mins) => {
+        // Fan the event out to every renderer window — multi-window users
+        // have a CLI dock in each, so all of them need to react.
+        for (const win of BrowserWindow.getAllWindows()) {
+          if (!win.isDestroyed()) {
+            win.webContents.send(IPC.PTY_AUTO_CLOSED, {
+              ids,
+              thresholdMinutes: mins,
+            });
+          }
+        }
+      });
+    })
+    .catch((err) => {
+      console.error(
+        '[main] idle reaper boot failed:',
+        (err as Error).message,
+      );
+    });
+
   // Prune stale tmux sessions older than 2 days. Sessions are created by
   // chat runs, design generations, and CLI launchers — without this, a
   // user who runs DevSpace daily ends up with hundreds of dead `devspace-*`
@@ -385,6 +425,13 @@ app.on('before-quit', (event) => {
   // short-circuit instead of firing spurious 'crashed' events on quit.
   // The two shutdowns return promises — we await them so node/vite child
   // workers are actually gone before app.exit() pulls the rug out.
+  // v0.36.0: stop the idle reaper FIRST so a tick can't race the shutdown
+  // path and try to kill an already-killed PTY mid-teardown.
+  try {
+    stopIdleReaper();
+  } catch {
+    /* best-effort */
+  }
   const shutdownTask = (async () => {
     try {
       await Promise.all([

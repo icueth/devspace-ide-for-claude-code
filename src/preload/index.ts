@@ -124,6 +124,19 @@ const api = {
       ipcRenderer.on(channel, listener);
       return () => ipcRenderer.off(channel, listener);
     },
+    // v0.36.0: subscribe to the idle-reaper broadcast. Fires once per
+    // reaper tick that closed at least one claude-cli session. Returns
+    // an unsubscribe — caller is responsible for tearing down on unmount.
+    onAutoClosed: (
+      cb: (ev: { ids: string[]; thresholdMinutes: number }) => void,
+    ) => {
+      const listener = (
+        _e: unknown,
+        ev: { ids: string[]; thresholdMinutes: number },
+      ) => cb(ev);
+      ipcRenderer.on(IPC.PTY_AUTO_CLOSED, listener);
+      return () => ipcRenderer.off(IPC.PTY_AUTO_CLOSED, listener);
+    },
   },
   tmux: {
     listPanes: (sessionName?: string) =>

@@ -959,6 +959,11 @@ export interface TmuxConfig {
   // When true, kills every devspace-* session on app quit. When false (default)
   // sessions persist so re-opening the app reattaches with state intact.
   killSessionsOnQuit: boolean;
+  /** v0.36.0: auto-close CLI tabs idle longer than the threshold below. */
+  autoCloseIdleCliTabs?: boolean;
+  /** v0.36.0: minutes a claude-cli PTY may sit idle before the reaper kills it.
+   * Clamped to [15, 720]. Default 120 (2h). */
+  idleCliTabTimeoutMinutes?: number;
 }
 
 export interface TmuxSession {

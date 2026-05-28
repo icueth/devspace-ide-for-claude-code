@@ -5,6 +5,48 @@ All notable changes to DevSpace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.36.0] — 2026-05-28
+
+Auto-reclaim RAM from idle CLI tabs — out of the box.
+
+### Added — auto-close idle claude-cli tabs (default ON)
+Every claude-cli tab carries a live `claude` process plus its MCP server tree
+(Playwright alone is ~165 MB). Power users routinely sit with 10+ tabs open,
+spending ~4 GB on chats they haven't touched in hours. DevSpace now closes
+claude-cli tabs that have had no terminal activity for **2 hours** (default),
+reclaiming ~400 MB per tab — `claude` and every MCP descendant — via
+process-group SIGTERM→SIGKILL escalation. The dock chip disappears, a toast
+surfaces how much was freed, and re-opening the project gives a fresh Chat 1.
+
+Only **claude-cli** PTYs are eligible. Plain shell PTYs and dev-server PTYs
+are never auto-closed, and the reaper only fires while at least one renderer
+window is open. Activity is tracked per-PTY (every write or output byte) so an
+agent that's quietly thinking, streaming, or waiting on an answer is **not**
+considered idle. The reaper ticks once per minute, off the event loop.
+
+### Added — Settings → Tmux → Auto-cleanup
+A single card with two controls:
+- **Auto-close idle CLI tabs** (default ON) — kill switch.
+- **Idle timeout** — 30 m / 1 h / **2 h** (default) / 4 h / 8 h.
+
+Changes save instantly and re-configure the running reaper without a restart.
+Disabling the toggle stops the timer entirely; re-enabling restarts it from
+the persisted threshold. Below the controls: *"Frees ≈400 MB per closed tab
+(claude + MCP children)."*
+
+### Internal
+- `PtyPool` learned a kind-aware `lastActivityAt` per session and exports
+  `configureIdleReaper`, `startIdleReaper`, `stopIdleReaper`. The selector is
+  pure (`selectIdleClaudeCliVictims`) and unit-tested. Threshold is clamped to
+  `[15, 720]` minutes; values outside the range or invalid types fall back to
+  the 2 h default. `+11 unit tests` (`PtyPoolIdleReaper.test.ts`).
+- New IPC channel `pty:auto-closed` (payload `{ ids, thresholdMinutes }`)
+  fan-broadcasts to every renderer; the `CliTabs` store removes the chips
+  from the dock and `ResourceToastHost` shows a bottom-right toast.
+- `TmuxConfig` gains `autoCloseIdleCliTabs` + `idleCliTabTimeoutMinutes`,
+  persisted alongside existing tmux settings. Defaults are applied on first
+  load so existing installs get the new behavior automatically.
+
 ## [0.35.5] — 2026-05-27
 
 Fixed — Setup "Skills & agents" card showed misleading counts (e.g. "Agents 0").

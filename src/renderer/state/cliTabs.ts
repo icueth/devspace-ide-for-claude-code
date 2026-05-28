@@ -477,3 +477,15 @@ export const useCliTabsStore = create<CliTabsState>((set, get) => {
     },
   };
 });
+
+const CLAUDE_CLI_ID_RE = /^(.+):claude-cli:([^:]+)$/;
+if (typeof window !== 'undefined' && api?.pty?.onAutoClosed) {
+  api.pty.onAutoClosed(({ ids }) => {
+    const store = useCliTabsStore.getState();
+    for (const id of ids) {
+      const m = CLAUDE_CLI_ID_RE.exec(id);
+      if (!m) continue;
+      store.removeTab(m[1]!, m[2]!);
+    }
+  });
+}

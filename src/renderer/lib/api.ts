@@ -170,6 +170,13 @@ export interface DevspaceApi {
     kill: (sessionId: string) => Promise<void>;
     onData: (sessionId: string, cb: (data: string) => void) => () => void;
     onExit: (sessionId: string, cb: (code: number | null) => void) => () => void;
+    // v0.36.0 — fires once per reaper tick that closed at least one
+    // claude-cli session because it was idle longer than the configured
+    // threshold. Renderer uses this to drop the tab from the dock store
+    // and surface a resource-freed toast.
+    onAutoClosed: (
+      cb: (ev: { ids: string[]; thresholdMinutes: number }) => void,
+    ) => () => void;
   };
   tmux: {
     listPanes: (sessionName?: string) => Promise<TmuxPane[]>;
@@ -673,6 +680,7 @@ function makeStubApi(): DevspaceApi {
       kill: notWired('pty.kill'),
       onData: () => () => undefined,
       onExit: () => () => undefined,
+      onAutoClosed: () => () => undefined,
     },
     tmux: {
       listPanes: () => Promise.resolve([]),

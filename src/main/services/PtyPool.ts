@@ -12,7 +12,7 @@ import {
 import { resolveInteractiveShellEnv } from '@main/utils/shellEnv';
 import { IPC } from '@shared/ipc-channels';
 import { createLogger } from '@shared/logger';
-import type { PtyCreateOptions, PtySession } from '@shared/types';
+import type { PtyCreateOptions, PtySession, PtySessionKind } from '@shared/types';
 
 const execFileP = promisify(execFile);
 
@@ -56,6 +56,11 @@ interface PoolEntry {
   buffer: string;
   pending: string;
   flushTimer: NodeJS.Timeout | null;
+  // v0.36.0: ms-epoch of the last observed I/O activity on this PTY —
+  // either incoming data from the child OR a write() from the renderer.
+  // The idle reaper reads this to decide which claude-cli sessions have
+  // been forgotten by the user and can be reclaimed.
+  lastActivityAt: number;
 }
 
 const entries = new Map<string, PoolEntry>();
@@ -119,6 +124,7 @@ export async function createPty(opts: PtyCreateOptions): Promise<PtySession> {
     buffer: '',
     pending: '',
     flushTimer: null,
+    lastActivityAt: Date.now(),
   };
   entries.set(key, entry);
 
@@ -136,6 +142,11 @@ export async function createPty(opts: PtyCreateOptions): Promise<PtySession> {
   };
 
   proc.onData((data) => {
+    // v0.36.0: any output from the PTY counts as activity — even a single
+    // prompt redraw or spinner tick keeps the reaper at bay. We update here
+    // BEFORE batching so a session that's producing data but whose flush is
+    // throttled still looks "live".
+    entry.lastActivityAt = Date.now();
     entry.buffer += data;
     if (entry.buffer.length > BUFFER_CAP) {
       entry.buffer = entry.buffer.slice(entry.buffer.length - BUFFER_CAP);
@@ -204,7 +215,13 @@ export function unsubscribe(key: string, wc: WebContents): void {
 }
 
 export function writeToPty(key: string, data: string): void {
-  entries.get(key)?.pty.write(data);
+  const entry = entries.get(key);
+  if (!entry) return;
+  // v0.36.0: any keystroke / paste from the renderer is the strongest
+  // possible "user is still here" signal. Stamp activity BEFORE writing
+  // so a reaper tick racing with the write can't kill the session.
+  entry.lastActivityAt = Date.now();
+  entry.pty.write(data);
 }
 
 /**
@@ -408,4 +425,136 @@ export async function shutdownAll(): Promise<void> {
     kills.push(killPty(key));
   }
   await Promise.all(kills);
+}
+
+// ─── v0.36.0 — Idle CLI-tab reaper ─────────────────────────────────────────
+//
+// Each `claude` CLI process pulls in ~245 MB plus an MCP server tree (the
+// Playwright MCP commonly adds ~165 MB) — with 13 idle tabs the dock alone
+// holds ~5 GB the user can't easily reclaim. This reaper walks every claude-
+// cli PTY on a 60s tick and kills any whose lastActivityAt is older than the
+// configured threshold. Killing the PTY goes through killPty → process-group
+// kill, so claude + its MCP children die together.
+//
+// Scoped narrowly to kind === 'claude-cli'. Shell tabs, dev-server PTYs, the
+// AskUserQuestion-aware chat-run reaper, and setup-claude flows are off
+// limits — they have their own lifecycle expectations.
+
+const IDLE_REAPER_TICK_MS = 60_000;
+
+let _idleReaperTimer: NodeJS.Timeout | null = null;
+let _idleReaperEnabled = true;
+let _idleThresholdMinutes = 120;
+
+const IDLE_THRESHOLD_MIN_MINUTES = 15;
+const IDLE_THRESHOLD_MAX_MINUTES = 720;
+
+/** Read-only stats snapshot — used by the reaper + tests. Cheap to compute
+ * (one pass over the map) so callers can poll without worrying about cost. */
+export function getSessionStats(): Array<{
+  id: string;
+  kind: PtySessionKind;
+  lastActivityAt: number;
+}> {
+  const out: Array<{ id: string; kind: PtySessionKind; lastActivityAt: number }> = [];
+  for (const [id, entry] of entries) {
+    out.push({
+      id,
+      kind: entry.session.kind,
+      lastActivityAt: entry.lastActivityAt,
+    });
+  }
+  return out;
+}
+
+/**
+ * Pure helper: given a snapshot of session stats, the current time, and an
+ * idle threshold in ms, return the set of claude-cli session ids that the
+ * reaper should kill. Extracted so tests can exercise the decision logic
+ * without spinning up actual ptys or fake-timing the interval.
+ */
+export function selectIdleClaudeCliVictims(
+  sessions: Array<{ id: string; kind: PtySessionKind; lastActivityAt: number }>,
+  nowMs: number,
+  thresholdMs: number,
+): string[] {
+  if (!Number.isFinite(thresholdMs) || thresholdMs <= 0) return [];
+  const victims: string[] = [];
+  for (const s of sessions) {
+    if (s.kind !== 'claude-cli') continue;
+    if (nowMs - s.lastActivityAt > thresholdMs) victims.push(s.id);
+  }
+  return victims;
+}
+
+/** Apply a new enabled/threshold config to the running reaper. Clamps the
+ * threshold into [15, 720] minutes so a misconfigured renderer can't disable
+ * the reaper by stealth (threshold of 0 / negative / Infinity). */
+export function configureIdleReaper(opts: {
+  enabled: boolean;
+  thresholdMinutes: number;
+}): void {
+  _idleReaperEnabled = !!opts.enabled;
+  const raw = Number(opts.thresholdMinutes);
+  if (Number.isFinite(raw)) {
+    _idleThresholdMinutes = Math.max(
+      IDLE_THRESHOLD_MIN_MINUTES,
+      Math.min(IDLE_THRESHOLD_MAX_MINUTES, Math.floor(raw)),
+    );
+  }
+  logger.info(
+    `idle reaper configured: enabled=${_idleReaperEnabled} threshold=${_idleThresholdMinutes}m`,
+  );
+}
+
+/**
+ * Start the idle-reaper interval. Idempotent — calling twice replaces the
+ * previous interval. `broadcast` is invoked whenever the reaper kills one
+ * or more claude-cli sessions, with the killed ids + the threshold (so the
+ * renderer toast can say "Closed N idle CLI tabs · ~M MB freed").
+ */
+export function startIdleReaper(
+  broadcast: (ids: string[], thresholdMinutes: number) => void,
+): void {
+  if (_idleReaperTimer) {
+    clearInterval(_idleReaperTimer);
+    _idleReaperTimer = null;
+  }
+  _idleReaperTimer = setInterval(() => {
+    if (!_idleReaperEnabled || _idleThresholdMinutes <= 0) return;
+    const thresholdMs = _idleThresholdMinutes * 60 * 1000;
+    const victims = selectIdleClaudeCliVictims(
+      getSessionStats(),
+      Date.now(),
+      thresholdMs,
+    );
+    if (victims.length === 0) return;
+    logger.info(
+      `idle reaper: closing ${victims.length} idle claude-cli session(s) (threshold=${_idleThresholdMinutes}m)`,
+    );
+    for (const id of victims) {
+      killPty(id).catch(() => undefined);
+    }
+    try {
+      broadcast(victims, _idleThresholdMinutes);
+    } catch (err) {
+      logger.warn(`idle reaper broadcast threw: ${(err as Error).message}`);
+    }
+  }, IDLE_REAPER_TICK_MS);
+  // Don't keep the event loop alive solely for this interval — Electron's
+  // main process has its own keepalive (uv_run with active handles), so
+  // unref() is safe and makes the reaper invisible to graceful-exit logic.
+  _idleReaperTimer.unref?.();
+  logger.info(
+    `idle reaper started (tick=${IDLE_REAPER_TICK_MS}ms threshold=${_idleThresholdMinutes}m enabled=${_idleReaperEnabled})`,
+  );
+}
+
+/** Stop the idle reaper. Idempotent — safe to call from before-quit even
+ * when start was never reached (e.g. boot-time crash before whenReady). */
+export function stopIdleReaper(): void {
+  if (_idleReaperTimer) {
+    clearInterval(_idleReaperTimer);
+    _idleReaperTimer = null;
+  }
 }

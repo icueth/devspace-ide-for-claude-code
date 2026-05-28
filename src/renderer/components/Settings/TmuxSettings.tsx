@@ -12,7 +12,20 @@ import { useEffect, useMemo, useState } from 'react';
 import { api } from '@renderer/lib/api';
 import { cn } from '@renderer/lib/utils';
 import { useWorkspaceStore } from '@renderer/state/workspace';
-import type { TmuxSession } from '@shared/types';
+import type { TmuxConfig, TmuxSession } from '@shared/types';
+
+// v0.36.0 — idle-timeout choices for the auto-cleanup section. Kept in
+// sync with the [15, 720] clamp in TmuxConfigService / PtyPool — 30m
+// shows up here because users may legitimately want aggressive cleanup
+// on a small RAM laptop; the backend clamps anything below 15m on save
+// so a renderer typo can't disable the reaper by stealth.
+const IDLE_TIMEOUT_OPTIONS: Array<{ label: string; minutes: number }> = [
+  { label: '30m', minutes: 30 },
+  { label: '1h', minutes: 60 },
+  { label: '2h', minutes: 120 },
+  { label: '4h', minutes: 240 },
+  { label: '8h', minutes: 480 },
+];
 
 type Status =
   | { kind: 'idle' }
@@ -34,6 +47,45 @@ export function TmuxSettings() {
   const [status, setStatus] = useState<Status>({ kind: 'idle' });
   const [renamingName, setRenamingName] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
+
+  // v0.36.0 — auto-cleanup section state. We hold a full TmuxConfig in
+  // local state and mutate the two new fields. Updates are optimistic: we
+  // patch local state immediately, then call setConfig — on failure we
+  // restore the prior config snapshot and surface the error inline.
+  const [tmuxCfg, setTmuxCfg] = useState<TmuxConfig | null>(null);
+  const [cfgError, setCfgError] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    void api.tmux
+      .getConfig()
+      .then((cfg) => {
+        if (!cancelled) setTmuxCfg(cfg);
+      })
+      .catch((err) => {
+        if (!cancelled) setCfgError((err as Error).message);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const autoCloseEnabled = tmuxCfg?.autoCloseIdleCliTabs ?? true;
+  const idleTimeoutMinutes = tmuxCfg?.idleCliTabTimeoutMinutes ?? 120;
+
+  const patchTmuxConfig = async (patch: Partial<TmuxConfig>) => {
+    if (!tmuxCfg) return;
+    const prev = tmuxCfg;
+    const next: TmuxConfig = { ...tmuxCfg, ...patch };
+    setTmuxCfg(next); // optimistic
+    setCfgError(null);
+    try {
+      const saved = await api.tmux.setConfig(next);
+      setTmuxCfg(saved);
+    } catch (err) {
+      setTmuxCfg(prev);
+      setCfgError((err as Error).message);
+    }
+  };
 
   const refresh = async (showSpinner = true) => {
     if (showSpinner) setLoading(true);
@@ -239,6 +291,74 @@ export function TmuxSettings() {
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
+        {/* v0.36.0 — Auto-cleanup of idle Claude CLI tabs. Each tab holds
+            ~245 MB (claude) + commonly ~165 MB (Playwright MCP) of RAM the
+            user can't see — closing them on idle is the most reliable
+            single-tap way to reclaim memory on a busy session. */}
+        <section className="mb-4 rounded-[10px] border border-border bg-surface-2/60 p-4">
+          <div className="mb-3 flex items-center gap-2">
+            <span className="text-[10.5px] font-semibold uppercase tracking-wide text-text-muted">
+              Auto-cleanup
+            </span>
+            {cfgError && (
+              <span className="truncate text-[10.5px] text-semantic-error">
+                {cfgError}
+              </span>
+            )}
+          </div>
+          <div className="flex flex-wrap items-center gap-4">
+            <label className="flex cursor-pointer items-center gap-2 text-[12px] text-text">
+              <input
+                type="checkbox"
+                checked={autoCloseEnabled}
+                onChange={(e) =>
+                  void patchTmuxConfig({
+                    autoCloseIdleCliTabs: e.target.checked,
+                  })
+                }
+                className="h-3.5 w-3.5 cursor-pointer rounded border-border bg-surface-3 text-accent focus:ring-accent"
+              />
+              <span>Auto-close idle CLI tabs</span>
+            </label>
+            <div className="flex items-center gap-2 text-[12px] text-text-secondary">
+              <span>Idle timeout</span>
+              <select
+                value={idleTimeoutMinutes}
+                disabled={!autoCloseEnabled}
+                onChange={(e) =>
+                  void patchTmuxConfig({
+                    idleCliTabTimeoutMinutes: Number(e.target.value),
+                  })
+                }
+                className={cn(
+                  'rounded-[6px] border border-border bg-surface-3 px-2 py-[3px] text-[11.5px] text-text outline-none transition focus:border-accent',
+                  !autoCloseEnabled && 'cursor-not-allowed opacity-50',
+                )}
+              >
+                {IDLE_TIMEOUT_OPTIONS.map((opt) => (
+                  <option key={opt.minutes} value={opt.minutes}>
+                    {opt.label}
+                  </option>
+                ))}
+                {/* Round-trip a non-standard value the user set via JSON edit
+                    so the picker doesn't silently snap it. Hidden if it
+                    matches a preset. */}
+                {!IDLE_TIMEOUT_OPTIONS.some(
+                  (o) => o.minutes === idleTimeoutMinutes,
+                ) && (
+                  <option value={idleTimeoutMinutes}>
+                    {idleTimeoutMinutes}m (custom)
+                  </option>
+                )}
+              </select>
+            </div>
+          </div>
+          <p className="mt-3 text-[11px] leading-relaxed text-text-muted">
+            When a CLI tab has had no I/O for {formatMinutes(idleTimeoutMinutes)},
+            it'll close automatically. Frees ≈400 MB per closed tab (claude + MCP children).
+          </p>
+        </section>
+
         {sessions === null && (
           <div className="py-10 text-center text-[12px] text-text-muted">Loading…</div>
         )}
@@ -409,6 +529,16 @@ export function TmuxSettings() {
       </div>
     </div>
   );
+}
+
+// v0.36.0 — render a minute count as the friendliest unit. Matches the
+// labels in IDLE_TIMEOUT_OPTIONS for the preset values; falls back to a
+// raw "Nm" for custom values the user typed via JSON edit.
+function formatMinutes(minutes: number): string {
+  if (!Number.isFinite(minutes) || minutes <= 0) return `${minutes}m`;
+  if (minutes < 60) return `${minutes}m`;
+  if (minutes % 60 === 0) return `${minutes / 60}h`;
+  return `${minutes}m`;
 }
 
 function formatRelative(unixSeconds: number): string {

@@ -35,6 +35,7 @@ import { FileTree } from '@renderer/components/Sidebar/FileTree';
 import { ProjectList } from '@renderer/components/Sidebar/ProjectList';
 import { SidebarFooter } from '@renderer/components/Sidebar/SidebarFooter';
 import { WorkspacePicker } from '@renderer/components/Sidebar/WorkspacePicker';
+import { ResourceToastHost } from '@renderer/components/Toast/ResourceToast';
 import { UpdateBadge } from '@renderer/components/UpdateBadge';
 import { Welcome } from '@renderer/components/Welcome/Welcome';
 import { api } from '@renderer/lib/api';
@@ -973,6 +974,10 @@ function AppInner() {
       />
       <GoToLineDialog open={goToLine} onOpenChange={setGoToLine} />
       <PromptHost />
+      {/* v0.36.0 — resource-management toast surface (idle-CLI auto-close,
+          future cleanup events). App-root scoped so it sits above every
+          panel and isn't bound to any one feature's mount lifecycle. */}
+      <ResourceToastHost />
     </div>
   );
 }

@@ -10,6 +10,19 @@ const logger = createLogger('TmuxConfigService');
 
 const CONFIG_FILE = path.join(os.homedir(), '.devspace', 'tmux-config.json');
 
+// v0.36.0: bounds for the idle-CLI-tab reaper threshold (minutes).
+export const IDLE_CLI_TAB_MIN_MINUTES = 15;
+export const IDLE_CLI_TAB_MAX_MINUTES = 720;
+export const IDLE_CLI_TAB_DEFAULT_MINUTES = 120;
+
+function clampIdleMinutes(n: number): number {
+  if (!Number.isFinite(n)) return IDLE_CLI_TAB_DEFAULT_MINUTES;
+  return Math.max(
+    IDLE_CLI_TAB_MIN_MINUTES,
+    Math.min(IDLE_CLI_TAB_MAX_MINUTES, Math.floor(n)),
+  );
+}
+
 export const DEFAULT_TMUX_CONFIG: TmuxConfig = {
   enabled: true,
   binaryPath: null,
@@ -23,6 +36,9 @@ export const DEFAULT_TMUX_CONFIG: TmuxConfig = {
   historyLimit: 50000,
   statusBar: false,
   killSessionsOnQuit: false,
+  // v0.36.0: default ON, 2h timeout — see RAM-overhead context in the PR.
+  autoCloseIdleCliTabs: true,
+  idleCliTabTimeoutMinutes: IDLE_CLI_TAB_DEFAULT_MINUTES,
 };
 
 let cached: TmuxConfig | null = null;
@@ -61,6 +77,14 @@ function sanitize(raw: unknown): TmuxConfig {
   if (typeof r.killSessionsOnQuit === 'boolean') {
     base.killSessionsOnQuit = r.killSessionsOnQuit;
   }
+  // v0.36.0: auto-close idle CLI tabs. Both fields are optional in the
+  // shared type so older configs migrate cleanly — undefined → default.
+  if (typeof r.autoCloseIdleCliTabs === 'boolean') {
+    base.autoCloseIdleCliTabs = r.autoCloseIdleCliTabs;
+  }
+  if (typeof r.idleCliTabTimeoutMinutes === 'number') {
+    base.idleCliTabTimeoutMinutes = clampIdleMinutes(r.idleCliTabTimeoutMinutes);
+  }
   return base;
 }
 
@@ -94,6 +118,23 @@ export async function saveTmuxConfig(next: TmuxConfig): Promise<TmuxConfig> {
   await atomicWriteAsync(CONFIG_FILE, JSON.stringify(clean, null, 2));
   cached = clean;
   logger.info('saved tmux config');
+  // v0.36.0: push the new idle-reaper config to PtyPool so toggling the
+  // setting takes effect without an app restart. Imported lazily here to
+  // avoid an import cycle (PtyPool already imports from this module via
+  // ClaudeCliLauncher).
+  try {
+    const { configureIdleReaper } = await import('@main/services/PtyPool');
+    configureIdleReaper({
+      enabled: clean.autoCloseIdleCliTabs ?? true,
+      thresholdMinutes:
+        clean.idleCliTabTimeoutMinutes ?? IDLE_CLI_TAB_DEFAULT_MINUTES,
+    });
+  } catch (err) {
+    logger.warn(
+      'configureIdleReaper after save failed:',
+      (err as Error).message,
+    );
+  }
   return clean;
 }
 
