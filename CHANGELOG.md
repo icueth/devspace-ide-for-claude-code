@@ -5,6 +5,25 @@ All notable changes to DevSpace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.38.0-beta.4] — 2026-05-29 (prod branch, local beta — not on GH)
+
+**Ruflo overlay fixed for ruflo v3.10.5.** The Phase-3 Terminal overlay's
+dashboard was written against ruflo 3.7's text output; the installed binary
+is v3.10.5 which renders ASCII pipe-tables and renamed `hive-mind sessions`.
+Verified by running the real commands against the live install.
+
+### Fixed
+- **Swarms** tab queried the removed `hive-mind sessions` subcommand (got
+  help text) → now uses `session list`.
+- Agents / Swarms / Memory parsers now read v3.10.5 ASCII pipe-tables
+  (with a legacy ≤3.7 line-format fallback, so older installs still work).
+- Memory search no longer turns `[INFO]`/`✅`/`[WARN]` status chatter into
+  fake results — an empty search correctly shows nothing.
+
+### Chore
+- gitignore ruflo's per-project artifacts (`.claude-flow/`, `.mcp.json`,
+  root `CLAUDE.md`, `.swarm/`, `ruvector.db`) — all local runtime, not source.
+
 ## [0.38.0-beta.3] — 2026-05-29 (prod branch, local beta — not on GH)
 
 **Terminal-only cleanup (phase 5.2).** Removes features left orphaned by the
