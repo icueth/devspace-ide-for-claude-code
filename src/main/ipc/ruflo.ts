@@ -1,6 +1,12 @@
 import { BrowserWindow, ipcMain } from 'electron';
 
 import {
+  isRufloInstalled,
+  listAgents,
+  listSwarms,
+  searchMemory,
+} from '@main/services/RufloDashboardService';
+import {
   addMarketplace,
   getMarketplaceStatus,
   installPlugin,
@@ -105,4 +111,66 @@ export function registerRufloIpc(): void {
   ipcMain.handle(IPC.RUFLO_MARKETPLACE_ADD, async () => {
     return addMarketplace();
   });
+
+  // Phase 3 — Terminal-mode overlay drawer. Each handler returns a tagged
+  // result; failures (missing binary, timeout, parser miss) surface inline
+  // in the drawer rather than as a renderer-side throw.
+  ipcMain.handle(IPC.RUFLO_DASH_INSTALLED, async () => {
+    try {
+      return await isRufloInstalled();
+    } catch (err) {
+      logger.warn(`dash-installed failed: ${(err as Error).message}`);
+      return false;
+    }
+  });
+
+  ipcMain.handle(IPC.RUFLO_DASH_AGENTS, async () => {
+    try {
+      return await listAgents();
+    } catch (err) {
+      logger.error(`dash-agents failed: ${(err as Error).message}`);
+      return { ok: false, agents: [], error: (err as Error).message };
+    }
+  });
+
+  ipcMain.handle(IPC.RUFLO_DASH_SWARMS, async (_e, projectPath: unknown) => {
+    if (!validatePath(projectPath)) {
+      throw new Error('projectPath must be a non-empty string');
+    }
+    try {
+      return await listSwarms(projectPath);
+    } catch (err) {
+      logger.error(`dash-swarms failed: ${(err as Error).message}`);
+      return { ok: false, sessions: [], error: (err as Error).message };
+    }
+  });
+
+  ipcMain.handle(
+    IPC.RUFLO_DASH_MEMORY_SEARCH,
+    async (_e, payload: unknown) => {
+      if (
+        !payload ||
+        typeof payload !== 'object' ||
+        typeof (payload as { projectPath?: unknown }).projectPath !== 'string' ||
+        typeof (payload as { query?: unknown }).query !== 'string'
+      ) {
+        throw new Error(
+          'memory-search payload must be { projectPath: string, query: string, limit?: number }',
+        );
+      }
+      const { projectPath, query, limit } = payload as {
+        projectPath: string;
+        query: string;
+        limit?: number;
+      };
+      if (!projectPath) throw new Error('projectPath must be a non-empty string');
+      if (!query) throw new Error('query must be a non-empty string');
+      try {
+        return await searchMemory(projectPath, query, limit ?? 10);
+      } catch (err) {
+        logger.error(`dash-memory-search failed: ${(err as Error).message}`);
+        return { ok: false, results: [], error: (err as Error).message };
+      }
+    },
+  );
 }

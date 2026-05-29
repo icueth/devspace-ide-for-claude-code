@@ -667,6 +667,27 @@ const api = {
           import('@shared/ruflo').RufloActionResult
         >,
     },
+    // Phase 3 — Terminal-mode overlay drawer. Read-only inspectors wrapping
+    // `ruflo {agent list, hive-mind sessions, memory search}` with a 5s
+    // server-side timeout. Called on-demand from RufloOverlay.
+    dashboard: {
+      isInstalled: () =>
+        ipcRenderer.invoke(IPC.RUFLO_DASH_INSTALLED) as Promise<boolean>,
+      listAgents: () =>
+        ipcRenderer.invoke(IPC.RUFLO_DASH_AGENTS) as Promise<
+          import('@shared/ruflo').RufloDashAgentsResult
+        >,
+      listSwarms: (projectPath: string) =>
+        ipcRenderer.invoke(IPC.RUFLO_DASH_SWARMS, projectPath) as Promise<
+          import('@shared/ruflo').RufloDashSwarmsResult
+        >,
+      searchMemory: (projectPath: string, query: string, limit?: number) =>
+        ipcRenderer.invoke(IPC.RUFLO_DASH_MEMORY_SEARCH, {
+          projectPath,
+          query,
+          limit,
+        }) as Promise<import('@shared/ruflo').RufloDashMemoryResult>,
+    },
   },
   forge: {
     listDrafts: (projectPath: string) =>

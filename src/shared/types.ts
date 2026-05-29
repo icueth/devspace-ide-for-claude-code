@@ -952,6 +952,11 @@ export interface CliTab {
   // selected. The actual `/effort <level>` slash command is sent into the
   // PTY when the user picks — this field is for UI continuity only.
   effort?: ClaudeEffort;
+  // Phase 3 (Ruflo overlay): whether the Ruflo side drawer is open on this
+  // tab. Persisted per-tab so the user's drawer choice survives reloads.
+  // Default false — drawer is fully unmounted when closed (zero render
+  // cost).
+  overlayOpen?: boolean;
 }
 
 // Per-project shell terminal tab. The bottom-panel terminal supports many

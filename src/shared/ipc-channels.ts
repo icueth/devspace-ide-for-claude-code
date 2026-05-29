@@ -334,6 +334,15 @@ export const IPC = {
   RUFLO_PLUGINS_TOGGLE: 'ruflo:plugins-toggle',
   RUFLO_MARKETPLACE_ADD: 'ruflo:marketplace-add',
   RUFLO_MARKETPLACE_STATUS: 'ruflo:marketplace-status',
+
+  // Phase 3: Terminal-mode side-drawer overlay (RufloOverlay). Read-only
+  // inspectors that shell out to `ruflo {agent list, hive-mind sessions,
+  // memory search}` with a 5s timeout. Each call is on-demand from the
+  // visible drawer — no subscription channel, no global state.
+  RUFLO_DASH_INSTALLED: 'ruflo:dash-installed',
+  RUFLO_DASH_AGENTS: 'ruflo:dash-agents',
+  RUFLO_DASH_SWARMS: 'ruflo:dash-swarms',
+  RUFLO_DASH_MEMORY_SEARCH: 'ruflo:dash-memory-search',
 } as const;
 
 export type IpcChannel = (typeof IPC)[keyof typeof IPC];

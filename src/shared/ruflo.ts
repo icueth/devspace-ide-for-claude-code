@@ -212,3 +212,48 @@ export interface RufloActionResult {
   ok: boolean;
   error?: string;
 }
+
+// ---------------------------------------------------------------------------
+// Phase 3: Terminal-mode overlay drawer (RufloOverlay).
+//
+// Read-only inspector built on `ruflo agent list`, `ruflo hive-mind sessions`,
+// and `ruflo memory search`. Each command has no `--json` flag in the 3.7
+// USERGUIDE, so the service parses human-readable text into these shapes.
+// Results are returned per-call (no global store) — the overlay calls main
+// on demand when the user opens a tab or hits refresh.
+// ---------------------------------------------------------------------------
+
+export interface RufloAgent {
+  name: string;
+  role?: string;
+}
+
+export interface RufloSwarmSession {
+  id: string;
+  objective?: string;
+  status?: string;
+}
+
+export interface RufloMemoryResult {
+  text: string;
+  score?: number;
+  namespace?: string;
+}
+
+export interface RufloDashAgentsResult {
+  ok: boolean;
+  agents: RufloAgent[];
+  error?: string;
+}
+
+export interface RufloDashSwarmsResult {
+  ok: boolean;
+  sessions: RufloSwarmSession[];
+  error?: string;
+}
+
+export interface RufloDashMemoryResult {
+  ok: boolean;
+  results: RufloMemoryResult[];
+  error?: string;
+}

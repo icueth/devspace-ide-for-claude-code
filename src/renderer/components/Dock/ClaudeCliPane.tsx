@@ -1,5 +1,6 @@
 import {
   MessageSquare,
+  PanelRight,
   RefreshCw,
   Target,
   Terminal as TerminalIcon,
@@ -29,6 +30,13 @@ const RawTerminalView = lazy(() =>
 const ChatPanel = lazy(() =>
   import('@renderer/components/Dock/ChatPanel').then((m) => ({
     default: m.ChatPanel,
+  })),
+);
+// Phase 3: Ruflo side-drawer overlay. Lazy so tabs that never open it pay
+// nothing for the bundle.
+const RufloOverlay = lazy(() =>
+  import('@renderer/components/Dock/RufloOverlay').then((m) => ({
+    default: m.RufloOverlay,
   })),
 );
 
@@ -129,6 +137,15 @@ export function ClaudeCliPane({
   const persistedEffort = useCliTabsStore(
     (s) => s.tabsByProject[projectId]?.find((t) => t.id === tabId)?.effort,
   );
+
+  // Phase 3: Ruflo overlay open state — persisted per tab via cliTabs.
+  // Default false on tabs that never had the field set.
+  const overlayOpen = useCliTabsStore(
+    (s) =>
+      s.tabsByProject[projectId]?.find((t) => t.id === tabId)?.overlayOpen ??
+      false,
+  );
+  const setTabOverlay = useCliTabsStore((s) => s.setTabOverlay);
   const { meets } = useClaudeVersion();
   const effortSupported = meets(MIN_CLAUDE_FOR_NEW_SLASH);
   useEffect(() => {
@@ -212,6 +229,21 @@ export function ClaudeCliPane({
           disabled={status !== 'running'}
         />
         <ModeToggle mode={mode} onChange={setMode} />
+        <button
+          type="button"
+          onClick={() => setTabOverlay(projectId, tabId, !overlayOpen)}
+          title="Toggle Ruflo overlay"
+          aria-label="Toggle Ruflo overlay"
+          aria-pressed={overlayOpen}
+          className={cn(
+            'inline-flex h-[22px] w-[22px] items-center justify-center rounded-[6px] border transition',
+            overlayOpen
+              ? 'border-accent/50 bg-accent/15 text-accent'
+              : 'border-border-subtle bg-surface-3 text-text-secondary hover:border-border-hi hover:bg-surface-4 hover:text-text',
+          )}
+        >
+          <PanelRight size={11} />
+        </button>
       </div>
       <ContextChips shortCwd={shortCwd} branch={branch} ahead={ahead} dirty={dirty} />
       <div className="relative min-h-0 flex-1 overflow-hidden bg-surface">
@@ -225,6 +257,18 @@ export function ClaudeCliPane({
               <RawTerminalView sessionId={sessionId} isActive={isActive ?? false} />
             </Suspense>
           )
+        )}
+        {/* Drawer overlays the body — absolute positioning anchored to this
+            relative container. Fully unmounted when closed so the lazy
+            chunk only loads after the first open. */}
+        {overlayOpen && (
+          <Suspense fallback={null}>
+            <RufloOverlay
+              open={overlayOpen}
+              projectPath={projectPath}
+              onClose={() => setTabOverlay(projectId, tabId, false)}
+            />
+          </Suspense>
         )}
       </div>
       {/* Slash actions only make sense in TTY mode — chat surface sends

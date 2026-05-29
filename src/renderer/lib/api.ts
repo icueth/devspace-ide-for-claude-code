@@ -91,6 +91,9 @@ import type {
 } from '@shared/mempalace';
 import type {
   RufloActionResult,
+  RufloDashAgentsResult,
+  RufloDashMemoryResult,
+  RufloDashSwarmsResult,
   RufloInitProgressEvent,
   RufloInitResult,
   RufloMarketplaceStatus,
@@ -606,6 +609,18 @@ export interface DevspaceApi {
       marketplaceStatus: () => Promise<RufloMarketplaceStatus>;
       marketplaceAdd: () => Promise<RufloActionResult>;
     };
+    // Phase 3 — Terminal-mode overlay drawer. Read-only `ruflo …` wrappers
+    // with a 5s server-side timeout.
+    dashboard: {
+      isInstalled: () => Promise<boolean>;
+      listAgents: () => Promise<RufloDashAgentsResult>;
+      listSwarms: (projectPath: string) => Promise<RufloDashSwarmsResult>;
+      searchMemory: (
+        projectPath: string,
+        query: string,
+        limit?: number,
+      ) => Promise<RufloDashMemoryResult>;
+    };
   };
   forge: {
     listDrafts: (projectPath: string) => Promise<ForgeDraft[]>;
@@ -1018,6 +1033,15 @@ function makeStubApi(): DevspaceApi {
         // preload bridge wires up.
         marketplaceStatus: () => Promise.resolve({ added: true }),
         marketplaceAdd: () => Promise.resolve({ ok: false, error: 'no-bridge' }),
+      },
+      dashboard: {
+        isInstalled: () => Promise.resolve(false),
+        listAgents: () =>
+          Promise.resolve({ ok: false, agents: [], error: 'no-bridge' }),
+        listSwarms: () =>
+          Promise.resolve({ ok: false, sessions: [], error: 'no-bridge' }),
+        searchMemory: () =>
+          Promise.resolve({ ok: false, results: [], error: 'no-bridge' }),
       },
     },
     forge: {
