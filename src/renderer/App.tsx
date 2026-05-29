@@ -12,7 +12,6 @@ import {
   PanelRightOpen,
   Search,
   Terminal as TerminalIcon,
-  Users,
   Workflow,
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -45,6 +44,7 @@ import { pickLatestPreview } from '@renderer/components/Editor/HtmlPreviewView';
 import { useEditorStore } from '@renderer/state/editor';
 import { useCliTabsStore } from '@renderer/state/cliTabs';
 import { useEditorViewStore } from '@renderer/state/editorView';
+import { useForgePrefillStore } from '@renderer/state/forgePrefill';
 import { useGitStore } from '@renderer/state/git';
 import { useLayoutStore } from '@renderer/state/layout';
 import { usePromptStore } from '@renderer/state/prompt';
@@ -141,7 +141,6 @@ function AppInner() {
     | 'mcp'
     | 'memory'
     | 'skills'
-    | 'teams'
   >('account');
 
   useEffect(() => {
@@ -158,7 +157,6 @@ function AppInner() {
       'mcp',
       'memory',
       'skills',
-      'teams',
     ] as const);
     type AllowedTab = typeof ALLOWED_TABS extends Set<infer T> ? T : never;
     const handler = (e: Event) => {
@@ -410,6 +408,25 @@ function AppInner() {
       window.dispatchEvent(
         new CustomEvent('devspace:open-settings', { detail: { tab } }),
       );
+    // Terminal-mode replacement for the old chat `/skill` `/agent` prefill:
+    // ask for a brief, stash it in the forge-prefill store, then open the
+    // matching Settings tab — Skills/AgentsSettings auto-open their Generate
+    // dialog with the brief filled in (one-shot, consumed on read).
+    const askForgeBrief = (kind: 'skill' | 'agent') =>
+      askPrompt({
+        title: kind === 'skill' ? 'Generate a skill' : 'Generate an agent',
+        placeholder:
+          kind === 'skill'
+            ? 'Describe the skill — e.g. "lint Tailwind class order on save"'
+            : 'Describe the agent — e.g. "write vitest specs from a git diff"',
+        confirmLabel: 'Generate',
+        onConfirm: (brief) => {
+          const b = brief.trim();
+          if (!b) return;
+          useForgePrefillStore.getState().set(kind, b);
+          openSettings(kind === 'skill' ? 'skills' : 'agents');
+        },
+      });
     const cmds: SpotlightCommand[] = [
       // Navigation (top of mind for most flows)
       {
@@ -562,14 +579,15 @@ function AppInner() {
       { id: 'settings.files', title: 'Open Files settings', keywords: 'workspace ignore patterns', group: 'Settings', run: () => openSettings('files') },
       { id: 'settings.tmux', title: 'Open tmux settings', keywords: 'sessions chat runner', group: 'Settings', run: () => openSettings('tmux') },
       { id: 'settings.llm', title: 'Open LLM settings', keywords: 'openai anthropic profiles api', group: 'Settings', run: () => openSettings('llm') },
-      { id: 'settings.agents', title: 'Open Agents settings', keywords: 'subagent task team', group: 'Settings', run: () => openSettings('agents') },
+      { id: 'settings.agents', title: 'Open Agents settings', keywords: 'subagent task', group: 'Settings', run: () => openSettings('agents') },
       { id: 'settings.mcp', title: 'Open MCP settings', keywords: 'model context protocol server', group: 'Settings', run: () => openSettings('mcp') },
       { id: 'settings.memory', title: 'Open Memory settings', keywords: 'remember devlog notes', group: 'Settings', run: () => openSettings('memory') },
       { id: 'settings.skills', title: 'Open Skills settings', keywords: 'skill catalog forge', group: 'Settings', run: () => openSettings('skills') },
-      { id: 'settings.teams', title: 'Open Teams settings', keywords: 'multi-agent team', group: 'Settings', run: () => openSettings('teams') },
+      { id: 'forge.skill', title: 'Generate a skill from a brief…', keywords: 'create skill forge generate claude ai new', group: 'Settings', run: () => askForgeBrief('skill') },
+      { id: 'forge.agent', title: 'Generate an agent from a brief…', keywords: 'create agent subagent forge generate claude ai new', group: 'Settings', run: () => askForgeBrief('agent') },
     ];
     return cmds;
-  }, [activeProject, openCodeflow, openLivePreview, openDevlog, openHtmlPreview]);
+  }, [activeProject, openCodeflow, openLivePreview, openDevlog, openHtmlPreview, askPrompt]);
 
   const dockVisible = openedProjectIds.length > 0;
   const showBottom = bottomOpen && activeProject;
@@ -667,30 +685,6 @@ function AppInner() {
           >
             <BookOpen size={11} />
             <span>Devlog</span>
-          </button>
-          <button
-            onClick={() => {
-              // Teams now live in the new chat-based system at
-              // Settings → Teams. Jump there directly so this button
-              // doubles as both "create a team" and "manage teams".
-              setSettingsInitialTab('teams');
-              setSettingsOpen(true);
-            }}
-            disabled={!activeProject}
-            className={cn(
-              'inline-flex h-[26px] items-center gap-1.5 rounded-[7px] px-3 text-[11.5px] font-medium text-white transition',
-              !activeProject
-                ? 'cursor-not-allowed opacity-40'
-                : 'hover:brightness-110',
-            )}
-            style={{
-              background: 'linear-gradient(135deg, var(--color-accent), var(--color-accent-3))',
-              boxShadow: '0 2px 8px var(--color-accent-glow)',
-            }}
-            title="Manage teams — Settings → Teams"
-          >
-            <Users size={11.5} strokeWidth={2.2} />
-            <span>Create team</span>
           </button>
           {dockVisible && (
             <button

@@ -37,8 +37,6 @@ import type {
   SearchResult,
   SettingsCategory,
   SkillDef,
-  TeamDef,
-  TeamScope,
   TmuxConfig,
   TmuxPane,
   TmuxSession,
@@ -55,7 +53,6 @@ import type {
   MemorySettings,
   MemoryStats,
   MemoryType,
-  ThreadSummary,
 } from '@shared/types';
 import type {
   DevlogEntry,
@@ -260,23 +257,6 @@ export interface DevspaceApi {
       targetScope: 'global' | 'project',
       projectPath: string | null,
     ) => Promise<AgentDef>;
-  };
-  teams: {
-    list: (projectPath: string | null) => Promise<TeamDef[]>;
-    get: (
-      projectPath: string | null,
-      teamId: string,
-    ) => Promise<TeamDef | null>;
-    save: (
-      scope: TeamScope,
-      projectPath: string | null,
-      team: TeamDef,
-    ) => Promise<TeamDef>;
-    delete: (
-      scope: TeamScope,
-      projectPath: string | null,
-      teamId: string,
-    ) => Promise<void>;
   };
   skills: {
     list: (
@@ -485,12 +465,6 @@ export interface DevspaceApi {
       projectPath?: string;
       body: string;
     }) => Promise<DiaryEntry>;
-    listThreads: (projectPath: string) => Promise<ThreadSummary[]>;
-    getThread: (threadId: string) => Promise<ThreadSummary | null>;
-    summarizeThread: (input: {
-      projectPath: string;
-      threadId: string;
-    }) => Promise<ThreadSummary>;
     buildRecallContext: (input: {
       query: string;
       projectPath?: string;
@@ -780,12 +754,6 @@ function makeStubApi(): DevspaceApi {
       setEnabled: notWired('designSeeding.setEnabled'),
       reseed: notWired('designSeeding.reseed'),
     },
-    teams: {
-      list: () => Promise.resolve([]),
-      get: () => Promise.resolve(null),
-      save: notWired('teams.save'),
-      delete: notWired('teams.delete'),
-    },
     devServer: {
       // Permissive idle stub so the LivePreview pane doesn't blow up
       // before the backend agent wires the preload binding.
@@ -864,7 +832,6 @@ function makeStubApi(): DevspaceApi {
         Promise.resolve({
           totalProjects: 0,
           totalMemories: 0,
-          totalThreads: 0,
           totalDiaryDays: 0,
           diaryStreak: 0,
           topTags: [],
@@ -876,9 +843,6 @@ function makeStubApi(): DevspaceApi {
       listDiary: () => Promise.resolve([]),
       getDiary: () => Promise.resolve(null),
       writeDiary: notWired('memory.writeDiary'),
-      listThreads: () => Promise.resolve([]),
-      getThread: () => Promise.resolve(null),
-      summarizeThread: notWired('memory.summarizeThread'),
       buildRecallContext: () => Promise.resolve(''),
       buildInjectPreamble: () => Promise.resolve(''),
       getSettings: () =>

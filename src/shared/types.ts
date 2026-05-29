@@ -299,192 +299,6 @@ export interface ChatEvent {
   ts: number;
 }
 
-// Ordered visual segments of one assistant turn. Each segment renders as
-// its own card in the UI. The full sequence preserves the chronological
-// order text / tool-use blocks arrived from the model, so a turn that
-// reads as "explain → call 3 tools → explain more → call 2 more tools"
-// renders as 4 cards in that order instead of a single wall of text
-// stacked on top of all tools.
-//
-// `tool_group` segments only reference tool calls by id — the full tool
-// detail lives in ChatMessage.toolCalls[] / TeamStep.toolCalls[] (single
-// source of truth, no duplication). Renderer joins them at render time.
-//
-// Optional for back-compat. Messages persisted before v0.11.0 don't have
-// segments[]; renderers fall back to flat `content + toolCalls[]` and
-// show the legacy single-bubble layout for those.
-export type ChatMessageSegment =
-  | { kind: 'text'; id: string; text: string }
-  | { kind: 'tool_group'; id: string; toolUseIds: string[] };
-
-// Persisted message. The renderer also keeps an in-memory `streaming`
-// shape that mirrors this but with partial text; once the turn completes,
-// the streaming view is committed into the chat thread.
-export interface ChatMessage {
-  id: string;
-  role: 'user' | 'assistant';
-  // Final flattened text after streaming completed. For assistant, also
-  // includes everything except thinking blocks. In team mode this stays
-  // empty — per-step content lives in teamRun.steps[].content.
-  //
-  // Note: `content` is the concatenated text across all text-segments,
-  // kept in sync for back-compat readers (search, copy-to-clipboard,
-  // legacy rendering when `segments` is absent). New code reading the
-  // turn should prefer `segments`.
-  content: string;
-  // Tool use + tool result pairs in order. Renderer renders as collapsible
-  // "Reading … (3)" pills.
-  toolCalls: Array<{
-    id: string;
-    name: string;
-    input: Record<string, unknown>;
-    result?: string;
-    isError?: boolean;
-    // Cursor-style additions / deletions for file-mutating tools
-    // (Edit, Write, MultiEdit, NotebookEdit). Computed in
-    // ChatLineHandler from the tool_use input; null for tools that
-    // don't touch the filesystem. `path` is project-relative when
-    // possible, absolute otherwise.
-    diffStats?: {
-      additions: number;
-      deletions: number;
-      path: string;
-    };
-    // Inline unified diff for the same set of file-mutating tools.
-    // Renderer expands ToolCard to show a red/green/context diff view.
-    // Absent for non-mutating tools and when the input exceeds caps.
-    diffPreview?: ToolDiffPreview;
-  }>;
-  // Ordered text / tool_group segments — see ChatMessageSegment. Optional
-  // so messages from v0.10.x and earlier still parse cleanly.
-  segments?: ChatMessageSegment[];
-  thinking?: string;
-  createdAt: number;
-  // Token usage if the upstream model reported it.
-  usage?: { input: number; output: number };
-  // Terminal state for the turn — drives the spinner / retry button.
-  status: 'streaming' | 'done' | 'error' | 'cancelled';
-  error?: string;
-  // Set when claude emitted an AskUserQuestion tool_use that DevSpace
-  // can't programmatically answer in --print mode. We early-finalize the
-  // run so the "Working…" indicator clears and the user sees the
-  // "Waiting for your answer" hint instead. The next user message
-  // resumes the conversation with full history.
-  awaitingUserAnswer?: boolean;
-  // Present when this message was produced by a team run (sequential or
-  // parallel). Orchestrator mode does NOT set this — the entire run is
-  // a single claude turn whose Task tool calls already show up in
-  // toolCalls[].
-  teamRun?: TeamRun;
-  // v0.24: Forge stats keys for every skill/agent loaded into the
-  // system prompt when this assistant turn was constructed. Format:
-  // `<scope>:<kind>:<slug>` (e.g. 'project:skill:refactor-css'). The
-  // implicit signal pipeline reads this off the prior assistant
-  // message when the user's next turn matches a thanks/correction/
-  // abandoned heuristic — every loaded skill gets its counter bumped.
-  // Optional + back-compat: turns persisted before v0.24 omit it.
-  loadedSkillKeys?: string[];
-}
-
-// Snapshot of a team execution attached to one assistant message. Each
-// step mirrors a regular ChatMessage's content/toolCalls but scoped to
-// the agent that produced it. The renderer treats this as the source of
-// truth and ignores message.content when teamRun is present.
-export interface TeamRun {
-  teamId: string;
-  teamName: string;
-  mode: TeamMode;
-  steps: TeamStep[];
-}
-
-export interface TeamStep {
-  agentSlug: string;
-  // Frozen at run start so the renderer can show the agent name even if
-  // the agent file gets renamed / deleted while the run is in flight.
-  agentName: string;
-  status: 'queued' | 'running' | 'done' | 'error' | 'cancelled';
-  content: string;
-  toolCalls: Array<{
-    id: string;
-    name: string;
-    input: Record<string, unknown>;
-    result?: string;
-    isError?: boolean;
-    diffStats?: {
-      additions: number;
-      deletions: number;
-      path: string;
-    };
-    // Inline unified diff for the same set of file-mutating tools.
-    // Renderer expands ToolCard to show a red/green/context diff view.
-    // Absent for non-mutating tools and when the input exceeds caps.
-    diffPreview?: ToolDiffPreview;
-  }>;
-  // Same chronological segmentation as ChatMessage.segments — present
-  // for v0.11+ runs, absent for legacy steps where the renderer falls
-  // back to flat content+toolCalls.
-  segments?: ChatMessageSegment[];
-  thinking?: string;
-  startedAt?: number;
-  finishedAt?: number;
-  error?: string;
-  usage?: { input: number; output: number };
-}
-
-export interface ChatThread {
-  id: string;
-  projectId: string;
-  title: string;       // first user-message prefix or user-chosen
-  createdAt: number;
-  updatedAt: number;
-  messages: ChatMessage[];
-  // Per-thread config override. When unset, the project-level default
-  // from .devspace/chat-config.json is used. Lets the user pin a
-  // different model / system prompt / tool set to a specific thread.
-  config?: ChatConfig;
-  // v0.29: when set, this thread is bound to a non-Claude chat profile
-  // (OpenAI, local Ollama via openai-compatible, anthropic-direct, etc.)
-  // — sendMessage branches to LlmChatRunner instead of TmuxChatRunner.
-  // Provider lock is per-thread: switching the chat-panel dropdown to a
-  // different profile creates a NEW thread, never mutates an existing
-  // one. Undefined = Claude (default, backward compat).
-  llmProfileId?: string;
-  // v0.30: non-Claude CLI runtime lock (paired with cliProfileId). When
-  // set, ChatService routes to the CliRunner for this cliId instead of
-  // TmuxChatRunner or LlmChatRunner. Mutually exclusive with llmProfileId
-  // — a thread is bound to exactly one of (Claude default, LLM profile,
-  // CLI profile). 'claude' is never persisted (default = absent).
-  cliId?: Exclude<CliId, 'claude'>;
-  // Matching CliProfile.id. Required when cliId is set. Validated against
-  // the profiles list at the IPC layer (same pattern as llmProfileId).
-  cliProfileId?: string;
-  // Set while a tmux-backed run is in flight for this thread. Persists
-  // across app restarts so on next boot ChatService can re-attach its
-  // watcher to the still-running tmux session and continue streaming
-  // events into the assistant message. Cleared when the run terminates
-  // (done / error / cancelled).
-  activeRun?: ChatActiveRun;
-  // v0.19: set true after the project's memory preamble has been
-  // injected into a turn on this thread. Inject is one-shot per thread
-  // (not per turn) so a user can resume a long thread without the
-  // memory file getting tacked on every send. Set explicitly rather
-  // than inferred from messages.length so retries / errors don't cause
-  // double-inject or skipped-inject edge cases.
-  memoryInjected?: boolean;
-  // v0.32: native claude session reuse. The first Claude turn on this
-  // thread SEEDS a session (claude --session-id <uuid>, full history
-  // replayed once); every later turn RESUMES it (claude --resume <uuid>,
-  // sending ONLY the new user message) so claude carries context disk-
-  // side instead of us re-serializing the whole transcript each turn —
-  // turns token cost from quadratic to linear. Lowercase UUID (claude
-  // won't match uppercase). Absent = not seeded yet (legacy threads
-  // seed-on-next-turn = automatic migration). If a resume fails with
-  // "No conversation found" (e.g. ~/.claude cleared), this is reset and
-  // the thread re-seeds with full history. Claude-path only — LLM/CLI
-  // runners are stateless-per-turn.
-  claudeSessionId?: string;
-}
-
 // v0.30: multi-CLI support. Each CLI runtime is identified by a stable id;
 // 'claude' is the default and is built-in (no profile needed, uses tmux-
 // backed runner). Other CLIs (currently only 'opencode') require a
@@ -539,159 +353,6 @@ export interface CliDetectionResult {
   installed: boolean;
   version?: string;
   bin?: string;                // resolved absolute path if installed
-}
-
-// v0.27: lightweight thread descriptor for the thread LIST. `listThreads`
-// returns these instead of full `ChatThread[]` so opening a project no
-// longer ships every thread's entire transcript over IPC + holds it all
-// in renderer memory. The full thread (with `messages`) is fetched lazily
-// per-thread via `getThread` when the user actually opens it.
-export interface ChatThreadMeta {
-  id: string;
-  projectId: string;
-  title: string;
-  createdAt: number;
-  updatedAt: number;
-  messageCount: number;
-  config?: ChatConfig;
-  // True when this thread has a persisted in-flight run (activeRun on any
-  // message) so the list can show a "running" affordance without messages.
-  hasActiveRun?: boolean;
-  // v0.29: provider lock — mirrors ChatThread.llmProfileId so the thread
-  // list can show a small provider badge without fetching full threads.
-  llmProfileId?: string;
-  // v0.30: non-Claude CLI runtime mirror (paired with cliProfileId on the
-  // full thread). Lets the list show e.g. an "OpenCode" badge.
-  cliId?: Exclude<CliId, 'claude'>;
-  cliProfileId?: string;
-}
-
-// Metadata describing an in-flight chat run that was spawned inside a
-// detached tmux session. Persisted on disk so the watcher can resume
-// after an app restart — without this, closing the app would orphan the
-// tmux session (still running, still writing to disk) but the renderer
-// would have no way to find it again.
-export interface ChatActiveRun {
-  // Stable identifier (timestamp + randomness) — also the leaf dirname
-  // for runDir and a component of sessionName.
-  runId: string;
-  // Tmux session name. `tmux has-session -t <sessionName>` is how the
-  // watcher decides whether the run is still alive.
-  sessionName: string;
-  // Absolute path to the per-run directory holding prompt.txt /
-  // out.jsonl / stderr.log / done. Reading out.jsonl from offset 0 is
-  // sufficient to reconstruct the assistant's output on resume.
-  runDir: string;
-  // ms-epoch when the run was spawned. Used for stale-run cleanup
-  // heuristics (e.g. a run that's been "active" for >24h is almost
-  // certainly an orphaned record from a crash).
-  startedAt: number;
-  // id of the assistant ChatMessage whose state is being filled by this
-  // run. Solo runs target message.content / message.toolCalls; team
-  // runs target one step inside message.teamRun.steps.
-  assistantMessageId: string;
-  // 'solo'      — single claude --print spawn
-  // 'team-step' — one step inside a sequential pipeline. stepIndex is
-  //               required and points into message.teamRun.steps. After
-  //               this step finishes successfully on resume, the
-  //               pipeline does NOT continue past it (the post-restart
-  //               continuation is intentionally minimal — user can
-  //               always resend if they want more steps).
-  kind: 'solo' | 'team-step';
-  stepIndex?: number;
-}
-
-// Chat-time configuration applied to the claude --print spawn. Every
-// field is optional: undefined / empty means "let claude use its own
-// default" (i.e. the flag isn't passed). Persisted at the project level
-// in `<projectRoot>/.devspace/chat-config.json` and optionally per-thread
-// inside ChatThread.config.
-export interface ChatConfig {
-  // Maps to `--model <id>`. Accepts the alias (`sonnet`, `opus`, `haiku`)
-  // or a fully-qualified model id like `claude-sonnet-4-5`.
-  model?: string;
-  // Maps to `--append-system-prompt "..."`. Preserves Claude's built-in
-  // system prompt and tacks ours on the end (vs. `--system-prompt` which
-  // replaces it wholesale — too disruptive for everyday use).
-  systemPromptAppend?: string;
-  // Maps to `--allowed-tools "Read,Edit,Bash,…"`. Empty / undefined = all
-  // tools allowed. Non-empty list = ONLY these tools are usable.
-  allowedTools?: string[];
-  // Maps to `--disallowed-tools "Bash"`. Subtractive layer on top of the
-  // allow-list. Use to block a specific dangerous tool without re-listing
-  // every other tool in `allowedTools`.
-  disallowedTools?: string[];
-  // Escape hatch for power users — raw CLI tokens appended verbatim at
-  // the end of the args array. Each entry is one shell token, so a flag
-  // and its value are two entries: ['--max-turns', '20'].
-  extraArgs?: string[];
-}
-
-export interface ChatSendRequest {
-  projectId: string;
-  threadId: string;
-  // Just the new user text — backend appends history from the persisted
-  // thread before spawning the agent.
-  text: string;
-  // Optional override of which agent to use for this turn — for now
-  // always 'claude'; the adapter table is the seam for future codex /
-  // gemini / etc. backends.
-  agent?: 'claude';
-  // Per-turn config override. Highest precedence: turn > thread > project
-  // default. Mostly unused by the UI today (the gear drawer writes to
-  // project or thread config); reserved for slash-palette commands like
-  // `/model X` that swap a single turn without persisting.
-  config?: ChatConfig;
-  // When set, the turn runs in team mode using this team's config from
-  // <projectRoot>/.devspace/teams.json. Behavior depends on team.mode:
-  //   • orchestrator — single claude turn with system prompt instructing
-  //     claude to dispatch to listed agents via the Task tool
-  //   • sequential   — N claude spawns chained, each step's output
-  //     feeding the next step's prompt as context
-  //   • parallel     — (not implemented in this pass)
-  teamId?: string;
-}
-
-// ─── Teams (multi-agent workflows) ──────────────────────────────────────────
-//
-// A team coordinates multiple sub-agents to handle one user task.
-// Stored at <projectRoot>/.devspace/teams.json so teams are per-project
-// (different repos want different review squads).
-//
-// Three execution modes:
-//   • orchestrator — claude itself decides who to call via the Task tool
-//   • sequential   — DevSpace runs each member in order, piping outputs
-//   • parallel     — DevSpace fans out, then runs an aggregator pass
-//
-// Members reference agent files by slug. The agent's frontmatter
-// (description, model, tools) is read at turn time so renaming an agent
-// or changing its model is picked up automatically.
-
-export type TeamMode = 'orchestrator' | 'sequential' | 'parallel';
-export type TeamScope = 'global' | 'project';
-
-export interface TeamMember {
-  // Matches AgentDef.slug — the basename of <slug>.md in ~/.claude/agents/.
-  agentSlug: string;
-  // Optional per-member model override (otherwise uses the agent's own
-  // frontmatter, otherwise claude's default).
-  modelOverride?: string;
-}
-
-export interface TeamDef {
-  id: string;
-  name: string;
-  mode: TeamMode;
-  members: TeamMember[];
-  // Parallel only — slug of the member that produces the final merged
-  // summary. Falls back to the first member when unset.
-  aggregatorSlug?: string;
-  // Computed at read time from which file the team lives in. NOT
-  // persisted in JSON — set by TeamsService.listTeams so the renderer
-  // can render scope badges without an extra round-trip.
-  //   • 'global'  — ~/.devspace/teams.json (available to every project)
-  //   • 'project' — <projectPath>/.devspace/teams.json (this repo only)
-  scope?: TeamScope;
 }
 
 // ─── MCP servers (Model Context Protocol — claude tool extensibility) ──────
@@ -1423,10 +1084,9 @@ export interface CodeflowGraphUpdate {
 // Storage layout:
 //   ~/.devspace/
 //     projects/<sha1-of-abspath>/
-//       manifest.json              {path, name, lastAccessedAt, threadCount}
+//       manifest.json              {path, name, lastAccessedAt}
 //       memory/MEMORY.md           index, like auto-memory
 //       memory/<type>_<slug>.md    individual entries
-//       threads/<thread-id>.md     thread summaries (not raw transcripts)
 //       diary/YYYY-MM-DD.md        chronological diary
 //       pinned.json                ["slug-1", "slug-2"]
 //     global/
@@ -1478,19 +1138,6 @@ export interface DiaryEntry {
   updatedAt: number;
 }
 
-export interface ThreadSummary {
-  threadId: string;
-  projectHash: string;
-  // Human-readable title (first user message or model-derived).
-  title: string;
-  // 1-3 sentence summary of what happened in the thread.
-  summary: string;
-  // Decisions/learnings the auto-capture flagged.
-  highlights: string[];
-  createdAt: number;
-  updatedAt: number;
-}
-
 export interface MemoryProject {
   hash: string;
   path: string;
@@ -1498,8 +1145,6 @@ export interface MemoryProject {
   lastAccessedAt: number;
   // How many memory entries this project has (across types).
   memoryCount: number;
-  // How many thread summaries.
-  threadCount: number;
   // How many diary entries.
   diaryCount: number;
   // False when the manifest's `path` no longer exists on disk (e.g. an
@@ -1537,7 +1182,6 @@ export interface MemorySearchHit {
 export interface MemoryStats {
   totalProjects: number;
   totalMemories: number;
-  totalThreads: number;
   totalDiaryDays: number;
   // Day-streak: consecutive days with at least one diary entry, ending today.
   diaryStreak: number;
@@ -1571,7 +1215,6 @@ export interface MemoryEvent {
     | 'inbox_added'
     | 'inbox_resolved'
     | 'diary_updated'
-    | 'thread_summarized'
     | 'index_rebuilt'
     | 'project_list_changed';
   // The affected entry/inbox-item/thread id, when applicable.

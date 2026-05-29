@@ -9,7 +9,6 @@
 //       manifest.json              {path, name, lastAccessedAt}
 //       memory/MEMORY.md           generated index pointing at entries
 //       memory/<type>_<slug>.md    individual entries with frontmatter
-//       threads/<thread-id>.md     thread summaries (not raw transcripts)
 //       diary/YYYY-MM-DD.md        chronological diary
 //       pinned.json                ["slug-1", "slug-2"]
 //     global/
@@ -19,8 +18,8 @@
 //
 // MemPalace sync is queue-handoff only — main never calls MCP tools.
 // Settings cache invalidates on setSettings(); proposeFromTurn /
-// buildInjectPreamble / summarizeThread never throw (chat finalize must
-// not be blocked by capture).
+// buildInjectPreamble never throw (chat finalize must not be blocked by
+// capture).
 
 import { createHash, randomUUID } from 'node:crypto';
 import * as fs from 'node:fs';
@@ -40,7 +39,6 @@ import type {
   MemorySettings,
   MemoryStats,
   MemoryType,
-  ThreadSummary,
 } from '@shared/types';
 
 const logger = createLogger('Memory');
@@ -61,7 +59,6 @@ const THREAD_ID_RE = /^[0-9a-zA-Z][0-9a-zA-Z._-]{0,127}$/;
 const MAX_BODY_BYTES = 100 * 1024;
 const DEFAULT_INJECT_LINES = 200;
 const MAX_DIARY_BYTES = 200 * 1024;
-const MAX_THREAD_BODY_BYTES = 50 * 1024;
 const MAX_INDEX_FILES_PER_DIR = 5000;
 const MAX_DIARY_STREAK_DAYS = 365;
 // Cap inbox items in memory. A runaway auto-capture loop or a hostile
@@ -134,10 +131,6 @@ function diaryDir(scope: MemoryScope, hash: string): string {
   return scope === 'global'
     ? path.join(globalRoot(), 'diary')
     : path.join(projectDir(hash), 'diary');
-}
-
-function threadsDir(hash: string): string {
-  return path.join(projectDir(hash), 'threads');
 }
 
 function manifestFile(hash: string): string {
@@ -363,13 +356,12 @@ interface IndexState {
   byScope: Map<string, Set<string>>;
   projects: Map<string, MemoryProject>;
   inbox: Map<string, MemoryInboxItem>;
-  threads: Map<string, ThreadSummary>;
   settings: MemorySettings;
   initPromise: Promise<void>;
   initialized: boolean;
   subscribers: Set<WebContents>;
   // ─── lazy-load tracking (M1, v0.30.7) ───────────────────────────────────
-  // Per-project hash that has had its memory + threads dirs walked. init()
+  // Per-project hash that has had its memory dir walked. init()
   // only enumerates manifests (cheap); the actual file-content walk happens
   // on first access via ensureProjectLoaded().
   loadedProjects: Set<string>;
@@ -389,7 +381,6 @@ const state: IndexState = {
   byScope: new Map(),
   projects: new Map(),
   inbox: new Map(),
-  threads: new Map(),
   settings: defaultSettings(),
   initPromise: Promise.resolve(),
   initialized: false,
@@ -418,7 +409,6 @@ export function __resetForTests(root?: string): void {
   state.byScope.clear();
   state.projects.clear();
   state.inbox.clear();
-  state.threads.clear();
   state.settings = defaultSettings();
   state.initialized = false;
   state.initPromise = Promise.resolve();
@@ -561,7 +551,6 @@ async function readManifest(hash: string): Promise<MemoryProject | null> {
       lastAccessedAt:
         typeof parsed.lastAccessedAt === 'number' ? parsed.lastAccessedAt : 0,
       memoryCount: 0,
-      threadCount: 0,
       diaryCount: 0,
       // Filled in by loadProjects / ensureProjectHash via fs.stat — defaults
       // to false so a manifest with no follow-up check renders as ghost
@@ -591,12 +580,11 @@ async function writeManifest(
 // ─── ghost detection ───────────────────────────────────────────────────────
 
 // True when a project is safe to delete: its on-disk path is gone AND it
-// has no memory/thread/diary content the user might still want.
+// has no memory/diary content the user might still want.
 function projectIsEmptyGhost(p: MemoryProject): boolean {
   return (
     !p.pathExists &&
     p.memoryCount === 0 &&
-    p.threadCount === 0 &&
     p.diaryCount === 0
   );
 }
@@ -687,40 +675,6 @@ async function walkEntries(
   }
 }
 
-async function walkThreads(hash: string): Promise<void> {
-  const dir = threadsDir(hash);
-  let files: fs.Dirent[];
-  try {
-    files = await fs.promises.readdir(dir, { withFileTypes: true });
-  } catch {
-    return;
-  }
-  let processed = 0;
-  for (const f of files) {
-    if (processed >= MAX_INDEX_FILES_PER_DIR) break;
-    processed += 1;
-    if (!f.isFile() || !f.name.endsWith('.md')) continue;
-    const threadId = f.name.slice(0, -'.md'.length);
-    if (!THREAD_ID_RE.test(threadId)) continue;
-    const filePath = path.join(dir, f.name);
-    try {
-      const raw = await fs.promises.readFile(filePath, 'utf8');
-      const { frontmatter, body } = parseFile(raw);
-      state.threads.set(threadId, {
-        threadId,
-        projectHash: hash,
-        title: sanitizeSingleLine(frontmatter.name ?? threadId, 120),
-        summary: sanitizeSingleLine(frontmatter.description ?? '', 400),
-        highlights: extractBullets(body),
-        createdAt: frontmatter.createdAt ?? 0,
-        updatedAt: frontmatter.updatedAt ?? 0,
-      });
-    } catch (err) {
-      logger.warn(`thread parse failed for ${filePath}: ${(err as Error).message}`);
-    }
-  }
-}
-
 function extractLinks(body: string): string[] {
   const out: string[] = [];
   const re = /\[\[([a-z0-9][a-z0-9-]{0,79})\]\]/gi;
@@ -728,18 +682,6 @@ function extractLinks(body: string): string[] {
   while ((m = re.exec(body)) !== null) {
     out.push(m[1].toLowerCase());
     if (out.length >= 64) break;
-  }
-  return out;
-}
-
-function extractBullets(body: string): string[] {
-  const out: string[] = [];
-  for (const line of body.split('\n')) {
-    const m = /^\s*[-*]\s+(.+?)\s*$/.exec(line);
-    if (m) {
-      out.push(sanitizeSingleLine(m[1], 240));
-      if (out.length >= 24) break;
-    }
   }
   return out;
 }
@@ -808,14 +750,12 @@ async function ensureProjectLoaded(hash: string): Promise<void> {
   if (inflight) return inflight;
   const promise = (async () => {
     try {
-      // walkEntries + walkThreads touch disjoint dirs; safe to run in
-      // parallel for a single project.
       // CR-H2 hardening (v0.30.7): match pre-M1 init() behavior — log and
       // continue on walk failures (EACCES / EIO) instead of throwing. A
       // flaky disk on one project's memory/ dir should NOT cause every
       // listEntries / search / getStats IPC to error out.
       try {
-        await Promise.all([walkEntries('project', hash), walkThreads(hash)]);
+        await walkEntries('project', hash);
       } catch (err) {
         console.warn(`[MemoryService] walk failed for project ${hash}:`, err);
       }
@@ -890,7 +830,6 @@ async function refreshProjectCounts(): Promise<void> {
     if (!sk.startsWith('project:')) continue;
     const hash = sk.slice('project:'.length);
     project.memoryCount = await countDir(memoryDir('project', hash), '.md');
-    project.threadCount = await countDir(threadsDir(hash), '.md');
     project.diaryCount = await countDir(diaryDir('project', hash), '.md');
     // Refresh ghost flag on every list so users see paths that vanish
     // mid-session (Finder move/delete) without restarting the app.
@@ -943,7 +882,6 @@ async function ensureProjectHash(absPath: string): Promise<string> {
       name,
       lastAccessedAt: Date.now(),
       memoryCount: 0,
-      threadCount: 0,
       diaryCount: 0,
       pathExists: true,
     });
@@ -1550,8 +1488,8 @@ export async function search(input: {
 
 export async function getStats(): Promise<MemoryStats> {
   await ensureInit();
-  // Stats aggregate tags across all entries + thread counts → need every
-  // project hydrated. Parallel load via ensureAllProjectsLoaded.
+  // Stats aggregate tags across all entries → need every project
+  // hydrated. Parallel load via ensureAllProjectsLoaded.
   await ensureAllProjectsLoaded();
   let totalDiaryDays = 0;
   for (const [sk] of state.projects) {
@@ -1572,7 +1510,6 @@ export async function getStats(): Promise<MemoryStats> {
   return {
     totalProjects: state.projects.size,
     totalMemories: state.entries.size,
-    totalThreads: state.threads.size,
     totalDiaryDays,
     diaryStreak,
     topTags,
@@ -1964,140 +1901,6 @@ export async function writeDiary(input: {
     wordCount: countWords(body),
     updatedAt: Date.now(),
   };
-}
-
-// ─── public: thread summaries ──────────────────────────────────────────────
-
-export async function listThreads(projectPath: string): Promise<ThreadSummary[]> {
-  await ensureInit();
-  const hash = projectHashFor(projectPath);
-  await ensureProjectLoaded(hash);
-  return [...state.threads.values()]
-    .filter((t) => t.projectHash === hash)
-    .sort((a, b) => b.updatedAt - a.updatedAt);
-}
-
-export async function getThread(threadId: string): Promise<ThreadSummary | null> {
-  await ensureInit();
-  // CR-H3 (v0.30.7): probe per-project threads/<id>.md on disk to find the
-  // owning project — only hydrate THAT one. Pre-fix called
-  // ensureAllProjectsLoaded() which negated the lazy-load win every time a
-  // user opened a thread from the chat sidebar.
-  if (!THREAD_ID_RE.test(threadId)) return null;
-  const hashes: string[] = [];
-  for (const sk of state.projects.keys()) {
-    if (sk.startsWith('project:')) hashes.push(sk.slice('project:'.length));
-  }
-  if (hashes.length === 0) return null;
-  // Probe each project's threads dir in parallel — cheap stat per project.
-  const probes = await Promise.all(
-    hashes.map(async (h) => {
-      try {
-        await fs.promises.stat(path.join(threadsDir(h), `${threadId}.md`));
-        return h;
-      } catch {
-        return null;
-      }
-    }),
-  );
-  const ownerHash = probes.find((h): h is string => h !== null);
-  if (!ownerHash) return null;
-  await ensureProjectLoaded(ownerHash);
-  return state.threads.get(threadId) ?? null;
-}
-
-export async function summarizeThread(input: {
-  projectPath: string;
-  threadId: string;
-}): Promise<ThreadSummary | null> {
-  try {
-    await ensureInit();
-    if (!input.projectPath) return null;
-    assertValidThreadId(input.threadId);
-    const hash = await ensureProjectHash(input.projectPath);
-    // Read the source chat thread if it exists so we can derive a real
-    // title + first-user / last-assistant blurb. Failure is acceptable —
-    // we fall back to a placeholder so the threads dir at least has the
-    // entry.
-    const threadFile = path.join(
-      input.projectPath,
-      '.devspace',
-      'chat',
-      `${input.threadId}.json`,
-    );
-    let title = input.threadId;
-    let summary = '';
-    let createdAt = Date.now();
-    let updatedAt = Date.now();
-    try {
-      const raw = await fs.promises.readFile(threadFile, 'utf8');
-      const thread = JSON.parse(raw) as {
-        id?: string;
-        title?: string;
-        createdAt?: number;
-        updatedAt?: number;
-        messages?: Array<{ role?: string; content?: string }>;
-      };
-      title = sanitizeSingleLine(thread.title ?? input.threadId, 120);
-      const messages = Array.isArray(thread.messages) ? thread.messages : [];
-      const firstUser = messages.find((m) => m.role === 'user')?.content ?? '';
-      const lastAssistant =
-        [...messages].reverse().find((m) => m.role === 'assistant')?.content ?? '';
-      summary =
-        [
-          firstUser ? `Started: ${firstUser.split('\n')[0]!.slice(0, 200)}` : null,
-          lastAssistant
-            ? `Ended: ${lastAssistant.split('\n')[0]!.slice(0, 200)}`
-            : null,
-        ]
-          .filter(Boolean)
-          .join(' / ') || '(empty thread)';
-      createdAt = typeof thread.createdAt === 'number' ? thread.createdAt : createdAt;
-      updatedAt = typeof thread.updatedAt === 'number' ? thread.updatedAt : updatedAt;
-    } catch (err) {
-      const code = (err as NodeJS.ErrnoException).code;
-      if (code !== 'ENOENT') {
-        logger.warn(`summarizeThread read: ${(err as Error).message}`);
-      }
-    }
-    const out: ThreadSummary = {
-      threadId: input.threadId,
-      projectHash: hash,
-      title,
-      summary,
-      highlights: [],
-      createdAt,
-      updatedAt,
-    };
-    state.threads.set(input.threadId, out);
-    const fm: Frontmatter = {
-      name: title,
-      description: summary,
-      createdAt,
-      updatedAt,
-    };
-    let payload = serializeFile(fm, '');
-    if (Buffer.byteLength(payload, 'utf8') > MAX_THREAD_BODY_BYTES) {
-      payload = Buffer.from(payload, 'utf8')
-        .slice(0, MAX_THREAD_BODY_BYTES)
-        .toString('utf8');
-    }
-    const file = path.join(threadsDir(hash), `${input.threadId}.md`);
-    assertUnderRoot(file);
-    await atomicWrite(file, payload);
-    setImmediate(() =>
-      emit({
-        kind: 'thread_summarized',
-        targetId: input.threadId,
-        scopeKey: `project:${hash}`,
-        ts: Date.now(),
-      }),
-    );
-    return out;
-  } catch (err) {
-    logger.warn(`summarizeThread failed: ${(err as Error).message}`);
-    return null;
-  }
 }
 
 // ─── public: recall context + inject preamble ──────────────────────────────

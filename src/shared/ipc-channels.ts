@@ -139,12 +139,6 @@ export const IPC = {
   DESIGN_SEEDING_SET_ENABLED: 'design-seeding:set-enabled',
   DESIGN_SEEDING_RESEED: 'design-seeding:reseed',
 
-  // Teams (.devspace/teams.json)
-  TEAMS_LIST: 'teams:list',
-  TEAMS_GET: 'teams:get',
-  TEAMS_SAVE: 'teams:save',
-  TEAMS_DELETE: 'teams:delete',
-
   // Phase C: Live preview against a real project dev-server. Main detects
   // the framework (Vite / Next / Astro / Remix), spawns the dev script
   // through PtyPool, parses the emitted URL, and exposes lifecycle events.
@@ -219,9 +213,6 @@ export const IPC = {
   MEMORY_LIST_DIARY: 'memory:list-diary',
   MEMORY_GET_DIARY: 'memory:get-diary',
   MEMORY_WRITE_DIARY: 'memory:write-diary',
-  MEMORY_LIST_THREADS: 'memory:list-threads',
-  MEMORY_GET_THREAD: 'memory:get-thread',
-  MEMORY_SUMMARIZE_THREAD: 'memory:summarize-thread',
   MEMORY_BUILD_RECALL_CONTEXT: 'memory:build-recall-context',
   MEMORY_BUILD_INJECT_PREAMBLE: 'memory:build-inject-preamble',
   MEMORY_GET_SETTINGS: 'memory:get-settings',

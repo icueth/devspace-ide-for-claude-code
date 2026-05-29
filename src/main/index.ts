@@ -42,7 +42,6 @@ import { registerPreviewIpc } from '@main/ipc/preview';
 import { registerRufloIpc } from '@main/ipc/ruflo';
 import { registerSetupIpc } from '@main/ipc/setup';
 import { registerSkillsIpc } from '@main/ipc/skills';
-import { registerTeamsIpc } from '@main/ipc/teams';
 import { registerPtyIpc } from '@main/ipc/pty';
 import { registerSearchIpc } from '@main/ipc/search';
 import { registerSettingsIpc } from '@main/ipc/settings';
@@ -282,7 +281,6 @@ app.whenReady().then(async () => {
   registerAgentsIpc();
   registerMcpIpc();
   registerSkillsIpc();
-  registerTeamsIpc();
   registerDevServerIpc();
   registerPreviewIpc();
   registerMemoryIpc();

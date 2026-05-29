@@ -20,13 +20,11 @@ import {
   getEntry,
   getSettings,
   getStats,
-  getThread,
   init as initMemory,
   listDiary,
   listEntries,
   listInbox,
   listProjects,
-  listThreads,
   openDir,
   proposeFromTurn,
   pruneGhostProjects,
@@ -34,7 +32,6 @@ import {
   search,
   setSettings,
   subscribe as subscribeWebContents,
-  summarizeThread,
   togglePin,
   updateEntry,
   writeDiary,
@@ -329,30 +326,6 @@ export function registerMemoryIpc(): void {
         scope: asScope(input?.scope),
         projectPath: await gateProjectPath(asOptString(input?.projectPath)),
         body: typeof input?.body === 'string' ? input.body : '',
-      });
-    },
-  );
-
-  ipcMain.handle(
-    IPC.MEMORY_LIST_THREADS,
-    async (event, projectPath: unknown) => {
-      setupSubscriber(event);
-      return listThreads(await assertInWorkspace(asString(projectPath)));
-    },
-  );
-
-  ipcMain.handle(IPC.MEMORY_GET_THREAD, (event, threadId: unknown) => {
-    setupSubscriber(event);
-    return getThread(asString(threadId));
-  });
-
-  ipcMain.handle(
-    IPC.MEMORY_SUMMARIZE_THREAD,
-    async (event, input: { projectPath: unknown; threadId: unknown }) => {
-      setupSubscriber(event);
-      return summarizeThread({
-        projectPath: await assertInWorkspace(asString(input?.projectPath)),
-        threadId: asString(input?.threadId),
       });
     },
   );

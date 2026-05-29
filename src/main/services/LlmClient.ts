@@ -1,12 +1,6 @@
 import { assertSafeBaseUrl } from '@main/utils/urlSafety';
 import { createLogger } from '@shared/logger';
-import {
-  EFFORT_BUDGET_TOKENS,
-  modelSupportsThinking,
-} from '@shared/types';
 import type {
-  ClaudeEffort,
-  LlmChatProfile,
   LlmCompleteRequest,
   LlmCompleteResponse,
   LlmConfig,
@@ -16,13 +10,6 @@ import type {
 } from '@shared/types';
 
 const logger = createLogger('LlmClient');
-
-// SSE safety caps — defense against hostile/buggy upstream that streams
-// forever, never emits a newline, or sends a single 1-GB "line". Hitting
-// either cap throws and is converted to `{ error }` by the caller's
-// non-throwing contract.
-const MAX_SSE_LINE_BYTES = 1 << 20;        // 1 MB per line
-const MAX_RESPONSE_BYTES = 16 * 1024 * 1024; // 16 MB aggregate text
 
 // All call sites allow loopback by default so users running local
 // Ollama / LM Studio / vLLM aren't broken. The metadata/private-network

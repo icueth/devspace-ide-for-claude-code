@@ -234,22 +234,6 @@ const api = {
     ) =>
       ipcRenderer.invoke(IPC.AGENTS_DUPLICATE, filePath, targetScope, projectPath),
   },
-  teams: {
-    list: (projectPath: string | null) =>
-      ipcRenderer.invoke(IPC.TEAMS_LIST, projectPath),
-    get: (projectPath: string | null, teamId: string) =>
-      ipcRenderer.invoke(IPC.TEAMS_GET, projectPath, teamId),
-    save: (
-      scope: 'global' | 'project',
-      projectPath: string | null,
-      team: unknown,
-    ) => ipcRenderer.invoke(IPC.TEAMS_SAVE, scope, projectPath, team),
-    delete: (
-      scope: 'global' | 'project',
-      projectPath: string | null,
-      teamId: string,
-    ) => ipcRenderer.invoke(IPC.TEAMS_DELETE, scope, projectPath, teamId),
-  },
   skills: {
     list: (projectPath: string | null, includePlugins?: boolean) =>
       ipcRenderer.invoke(IPC.SKILLS_LIST, projectPath, includePlugins),
@@ -472,12 +456,6 @@ const api = {
       ipcRenderer.invoke(IPC.MEMORY_GET_DIARY, date, projectPath),
     writeDiary: (input: unknown) =>
       ipcRenderer.invoke(IPC.MEMORY_WRITE_DIARY, input),
-    listThreads: (projectPath: string) =>
-      ipcRenderer.invoke(IPC.MEMORY_LIST_THREADS, projectPath),
-    getThread: (threadId: string) =>
-      ipcRenderer.invoke(IPC.MEMORY_GET_THREAD, threadId),
-    summarizeThread: (input: unknown) =>
-      ipcRenderer.invoke(IPC.MEMORY_SUMMARIZE_THREAD, input),
     buildRecallContext: (input: unknown) =>
       ipcRenderer.invoke(IPC.MEMORY_BUILD_RECALL_CONTEXT, input),
     buildInjectPreamble: (projectPath: string) =>

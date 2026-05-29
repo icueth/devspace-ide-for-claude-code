@@ -280,7 +280,7 @@ describe('MemoryService — review hardening (v0.30.7 pre-commit)', () => {
   });
 
   it('CR-H2: ensureProjectLoaded does NOT throw when walks fail mid-hydration', async () => {
-    // Pre-fix: if walkEntries/walkThreads threw (EACCES/EIO), the whole
+    // Pre-fix: if walkEntries threw (EACCES/EIO), the whole
     // ensureProjectLoaded promise rejected and every downstream IPC
     // (listEntries, search, getStats) would surface the error to the
     // renderer. Pre-M1 init() caught + logged, so we restore that
@@ -288,24 +288,25 @@ describe('MemoryService — review hardening (v0.30.7 pre-commit)', () => {
     const [hash] = seedProjectsOnDisk(1, 3);
     await init();
 
-    // Replace the project's threads dir with a file to force readdir
+    // Replace the project's memory dir with a file to force readdir
     // to throw ENOTDIR mid-walk.
     const projDir = path.join(tmpRoot, 'projects', hash);
-    const threadsPath = path.join(projDir, 'threads');
-    fs.rmSync(threadsPath, { recursive: true, force: true });
-    fs.writeFileSync(threadsPath, 'not a directory');
+    const memoryPath = path.join(projDir, 'memory');
+    fs.rmSync(memoryPath, { recursive: true, force: true });
+    fs.writeFileSync(memoryPath, 'not a directory');
 
     // ensureProjectLoaded must complete cleanly + mark loaded so we
     // don't thrash retries every IPC call.
     await expect(__testHooks.ensureProjectLoaded(hash)).resolves.toBeUndefined();
     expect(__testHooks.loadedProjects().has(hash)).toBe(true);
 
-    // listEntries must still succeed and return the entries from the
-    // half-walked project (memory dir walked, threads dir failed).
+    // listEntries must still succeed (return cleanly, not throw) even
+    // though the memory dir is unreadable — the walk failure is logged
+    // and swallowed, leaving the project with zero hydrated entries.
     const entries = await listEntries({
       scope: 'project',
       projectPath: projectAbsPaths[0],
     });
-    expect(entries.length).toBe(3);
+    expect(entries.length).toBe(0);
   });
 });

@@ -32,7 +32,6 @@ import {
   Save,
   Server,
   Settings as SettingsIcon,
-  Users,
   Waves,
   Wrench,
 } from 'lucide-react';
@@ -47,7 +46,6 @@ import { MemPalaceSettings } from '@renderer/components/Settings/MemPalaceSettin
 import { RufloSettings } from '@renderer/components/Settings/RufloSettings';
 import { SetupSettings } from '@renderer/components/Settings/SetupSettings';
 import { SkillsSettings } from '@renderer/components/Settings/SkillsSettings';
-import { TeamsSettings } from '@renderer/components/Settings/TeamsSettings';
 import { TmuxSection } from '@renderer/components/Settings/TmuxSection';
 import { api } from '@renderer/lib/api';
 import { cn } from '@renderer/lib/utils';
@@ -65,8 +63,7 @@ type Tab =
   | 'mcp'
   | 'ruflo'
   | 'memory'
-  | 'skills'
-  | 'teams';
+  | 'skills';
 
 interface SettingsPageProps {
   onClose: () => void;
@@ -198,11 +195,6 @@ export function SettingsPage({ onClose, initialTab = 'account' }: SettingsPagePr
             <SkillsSettings />
           </RouteErrorBoundary>
         </TabContainer>
-        <TabContainer active={tab === 'teams'}>
-          <RouteErrorBoundary label="Settings · teams">
-            <TeamsSettings />
-          </RouteErrorBoundary>
-        </TabContainer>
       </div>
     </section>
   );
@@ -255,7 +247,6 @@ function TabSwitch({ tab, onChange }: { tab: Tab; onChange: (t: Tab) => void }) 
     { id: 'setup', label: 'Setup', icon: <Wrench size={11} /> },
     { id: 'account', label: 'Account', icon: <KeyRound size={11} /> },
     { id: 'agents', label: 'Agents', icon: <Bot size={11} /> },
-    { id: 'teams', label: 'Teams', icon: <Users size={11} /> },
     { id: 'skills', label: 'Skills', icon: <Lightbulb size={11} /> },
     { id: 'mcp', label: 'MCP', icon: <Plug size={11} /> },
     { id: 'ruflo', label: 'Ruflo', icon: <Waves size={11} /> },
