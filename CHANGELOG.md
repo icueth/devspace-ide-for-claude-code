@@ -5,6 +5,18 @@ All notable changes to DevSpace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.38.0-beta.5] — 2026-05-29 (prod branch, local beta — not on GH)
+
+**Ruflo memory overlay fix.** Confirmed ruflo's memory/vectorDB works (store →
+384-dim vector, HNSW index active, semantic search returns scored hits). The
+v3.10.5 parser pass mis-mapped the search-result text column, so the Memory
+tab would have shown nothing even on real hits.
+
+### Fixed
+- Map the `memory search` **Preview** column (v3.10.5 returns
+  Key | Score | Namespace | Preview) so the Memory tab shows real hits +
+  scores. Added a real-hit fixture test.
+
 ## [0.38.0-beta.4] — 2026-05-29 (prod branch, local beta — not on GH)
 
 **Ruflo overlay fixed for ruflo v3.10.5.** The Phase-3 Terminal overlay's
