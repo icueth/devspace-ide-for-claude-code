@@ -317,10 +317,19 @@ export function parseMemoryResults(stdout: string): RufloMemoryResult[] {
   if (table.length) {
     const out: RufloMemoryResult[] = [];
     for (const r of table) {
-      const text = (r.value ?? r.content ?? r.text ?? r.data ?? '').trim();
+      // v3.10.5 `memory search`: columns Key | Score | Namespace | Preview.
+      // The result text lives in the Preview column; older/other shapes may
+      // call it value/content/text/data.
+      const text = (
+        r.preview ??
+        r.value ??
+        r.content ??
+        r.text ??
+        r.data ??
+        ''
+      ).trim();
       if (!text) continue;
-      const namespace =
-        (r.namespace ?? r.ns ?? r.key ?? '').trim() || undefined;
+      const namespace = (r.namespace ?? r.ns ?? '').trim() || undefined;
       const scoreRaw = (r.score ?? r.similarity ?? '').trim();
       const scoreNum = scoreRaw ? Number(scoreRaw) : NaN;
       out.push({

@@ -253,6 +253,36 @@ describe('RufloDashboardService.parseMemoryResults', () => {
     expect(parseMemoryResults('')).toEqual([]);
   });
 
+  it('parses the v3.10.5 `memory search` pipe-table (real hits)', async () => {
+    const { parseMemoryResults } = await import(
+      '@main/services/RufloDashboardService'
+    );
+    // Real v3.10.5 output: columns Key | Score | Namespace | Preview.
+    const out = parseMemoryResults(
+      '[INFO] Searching: "jwt" (semantic)\n\n' +
+        '  Search time: 3ms\n\n' +
+        '+----------+-------+-----------+-------------------------------------+\n' +
+        '| Key      | Score | Namespace | Preview                             |\n' +
+        '+----------+-------+-----------+-------------------------------------+\n' +
+        '| auth/jwt |  0.37 | default   | the auth service signs JWTs with... |\n' +
+        '| testkey1 |  0.33 | default   | auth service uses RS256 jwt signing |\n' +
+        '+----------+-------+-----------+-------------------------------------+\n\n' +
+        '[INFO] Found 2 results\n',
+    );
+    expect(out).toEqual([
+      {
+        text: 'the auth service signs JWTs with...',
+        score: 0.37,
+        namespace: 'default',
+      },
+      {
+        text: 'auth service uses RS256 jwt signing',
+        score: 0.33,
+        namespace: 'default',
+      },
+    ]);
+  });
+
   it('skips v3.10.5 search chatter — a no-hit search yields [] (not garbage)', async () => {
     const { parseMemoryResults } = await import(
       '@main/services/RufloDashboardService'
