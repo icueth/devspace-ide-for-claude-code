@@ -9,6 +9,7 @@
  *   • jq        — required by the rtk Claude Code hook
  *   • rtkHook   — ~/.claude/hooks/rtk-rewrite.sh + matching PreToolUse entry
  *   • mempalace — checked via MemPalaceService.getStatus (no duplicate logic)
+ *   • ruflo     — multi-agent orchestration for Claude Code (npm -g ruflo)
  */
 
 export type SetupToolId =
@@ -18,7 +19,8 @@ export type SetupToolId =
   | 'rtk'
   | 'jq'
   | 'rtkHook'
-  | 'mempalace';
+  | 'mempalace'
+  | 'ruflo';
 
 export type SetupCheckState =
   /** Installed and verified. */
