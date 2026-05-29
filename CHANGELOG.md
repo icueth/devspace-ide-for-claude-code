@@ -5,6 +5,20 @@ All notable changes to DevSpace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.38.0-beta.6] — 2026-05-29 (prod branch, local beta — not on GH)
+
+**Ruflo onboarding guard.** The Setup-tab Ruflo card now makes the fresh-user
+order self-guiding instead of a silent footgun.
+
+### Changed
+- Per-project Ruflo card checks whether the `ruflo` binary is on PATH (the
+  same resolution the Terminal overlay uses). If it's missing, **Init is
+  disabled** with an "Install Ruflo first" notice pointing at the Setup
+  checklist — so you can't create a half-working project where init succeeds
+  via `npx` but the overlay can't find `ruflo`.
+- After a successful init, the card shows a **"Next: install plugins in the
+  Ruflo tab"** shortcut (init does not install the claude plugins).
+
 ## [0.38.0-beta.5] — 2026-05-29 (prod branch, local beta — not on GH)
 
 **Ruflo memory overlay fix.** Confirmed ruflo's memory/vectorDB works (store →
