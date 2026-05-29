@@ -5,6 +5,33 @@ All notable changes to DevSpace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.38.0-beta.3] — 2026-05-29 (prod branch, local beta — not on GH)
+
+**Terminal-only cleanup (phase 5.2).** Removes features left orphaned by the
+Chat-mode deletion and the dead types behind them. Not a public release —
+local-only dmg for icueit's testing.
+
+### Removed
+- **Teams** feature entirely (Settings → Teams tab, TeamsService, teams
+  IPC/API). Team runs went through the deleted ChatService, so the tab was
+  configure-but-can't-run.
+- **Memory per-conversation thread-summaries** (`summarizeThread` /
+  `listThreads` / `getThread` + `threads/` walk + `memory:*-thread` IPC +
+  `ThreadSummary`). The writer was chat-turn finalize; recall/inject never
+  read them, so memory recall is unchanged. Diaries, entries, inbox, and
+  knowledge-graph recall all keep working.
+- Dead type cluster in `shared/types.ts` (ChatThread/Message/ActiveRun,
+  TeamRun/TeamStep/TeamMode/TeamDef/…) + `LlmClient`'s leftover streaming
+  imports.
+
+### Changed
+- **Generate skill/agent from a brief** now lives in the Command Palette
+  ("Generate a skill/agent from a brief…") — replaces the old chat `/skill`
+  `/agent` slash-commands. It opens a brief prompt, then the Settings →
+  Skills/Agents Generate dialog with the brief pre-filled.
+
+~1.6k more LOC removed. typecheck clean, 760 tests pass, build green.
+
 ## [0.38.0-beta.2] — 2026-05-29 (prod branch, local beta — not on GH)
 
 **Terminal-only milestone.** Chat mode and the alternative LLM/CLI backends
