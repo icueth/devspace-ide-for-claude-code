@@ -5,6 +5,33 @@ All notable changes to DevSpace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.38.0-beta.2] — 2026-05-29 (prod branch, local beta — not on GH)
+
+**Terminal-only milestone.** Chat mode and the alternative LLM/CLI backends
+are hard-removed — DevSpace is now **Terminal + Ruflo only**, with the
+Settings → LLM tab kept solely for code-auto (editor autocomplete + Cmd+K).
+Not a public release — local-only dmg for icueit's testing.
+
+### Removed
+- **Chat mode** (legacy parsed stream-json dock): ChatPanel, ChatService,
+  ChatLineHandler, ChatTranscript, chat IPC, and all chat-exclusive
+  renderer support (SlashPalette, AtMentionPicker, chatQueue, chatBridge,
+  chatAttach, …). The `devspace:enableChatMode` escape hatch is gone — there
+  is no longer a way back to Chat mode.
+- **Settings → LLM** "Chat profiles" + "CLI runtimes" sections, plus their
+  services (LlmChatProfilesService, LlmChatRunner, CliProfilesService,
+  OpenCodeRunner, the OpenCode adapter, CliConfigGenerator), `LlmClient`'s
+  SSE streaming path, and IPC `chat:*` / `llm:chat-profiles:*` / `cli:profiles:*`.
+
+### Kept
+- Code-auto LLM connection (editor inline autocomplete + Cmd+K edit) and its
+  `llm:get-config/set-config/test/complete/edit` IPC.
+- `cli:detect` + the claude adapter — drives the Terminal version-gate for
+  the Effort / Goal / Reload-skills buttons.
+
+~18.4k LOC removed (47 files deleted, 14 edited). typecheck clean, 760 tests
+pass, build green.
+
 ## [0.38.0-beta.1] — 2026-05-29 (prod branch, local beta — not on GH)
 
 Beta build of the **`prod` branch** ruflo roadmap (phases 0–5 soft).
