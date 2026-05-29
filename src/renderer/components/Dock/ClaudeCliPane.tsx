@@ -39,6 +39,14 @@ const RufloOverlay = lazy(() =>
     default: m.RufloOverlay,
   })),
 );
+// Phase 4a: tool-approval banner. Lives in Terminal mode only — Chat mode
+// already auto-approves through stream-json events. Lazy so chat-only
+// users never pay its bundle cost.
+const ToolApprovalBanner = lazy(() =>
+  import('@renderer/components/Dock/ToolApprovalBanner').then((m) => ({
+    default: m.ToolApprovalBanner,
+  })),
+);
 
 type CliPaneMode = 'terminal' | 'chat';
 
@@ -253,9 +261,20 @@ export function ClaudeCliPane({
           </Suspense>
         ) : (
           status !== 'starting' && (
-            <Suspense fallback={null}>
-              <RawTerminalView sessionId={sessionId} isActive={isActive ?? false} />
-            </Suspense>
+            <>
+              <Suspense fallback={null}>
+                <RawTerminalView sessionId={sessionId} isActive={isActive ?? false} />
+              </Suspense>
+              {/* Phase 4a: bottom-anchored approval banner. Subscribes when
+                  the PTY is actually running so we don't fire listeners
+                  against a session that's still being spawned. */}
+              <Suspense fallback={null}>
+                <ToolApprovalBanner
+                  sessionId={sessionId}
+                  enabled={status === 'running'}
+                />
+              </Suspense>
+            </>
           )
         )}
         {/* Drawer overlays the body — absolute positioning anchored to this

@@ -9,6 +9,10 @@ import {
   resolveTmuxBinary,
   tmuxSocketArgs,
 } from '@main/services/ClaudeCliLauncher';
+import {
+  ApprovalDetector,
+  type ApprovalRequest,
+} from '@main/services/ClaudeToolApprovalParser';
 import { resolveInteractiveShellEnv } from '@main/utils/shellEnv';
 import { IPC } from '@shared/ipc-channels';
 import { createLogger } from '@shared/logger';
@@ -61,6 +65,12 @@ interface PoolEntry {
   // The idle reaper reads this to decide which claude-cli sessions have
   // been forgotten by the user and can be reclaimed.
   lastActivityAt: number;
+  // Phase 4a: lazily-created per-session detector for Claude's tool
+  // approval prompts. Null for non-claude-cli sessions — we skip the
+  // regex sweep entirely on shell / dev-server PTYs where it would only
+  // waste cycles. Reset on every writeToPty() so a user-typed `y` doesn't
+  // leave the detector waiting for ITS own response.
+  approvals: ApprovalDetector | null;
 }
 
 const entries = new Map<string, PoolEntry>();
@@ -125,6 +135,10 @@ export async function createPty(opts: PtyCreateOptions): Promise<PtySession> {
     pending: '',
     flushTimer: null,
     lastActivityAt: Date.now(),
+    // Only claude-cli PTYs print approval prompts. Allocating the detector
+    // for unrelated sessions would mean running the regex sweep on every
+    // shell keystroke for no benefit.
+    approvals: opts.kind === 'claude-cli' ? new ApprovalDetector() : null,
   };
   entries.set(key, entry);
 
@@ -156,6 +170,30 @@ export async function createPty(opts: PtyCreateOptions): Promise<PtySession> {
       flush();
     } else if (!entry.flushTimer) {
       entry.flushTimer = setTimeout(flush, BATCH_MS);
+    }
+    // Phase 4a: scan claude-cli output for a fresh tool-approval prompt.
+    // The detector is cheap (regex array over a 1024 B rolling buffer) and
+    // we run it BEFORE the broadcast so the banner can race the terminal
+    // repaint — both arrive in the same IPC frame.
+    if (entry.approvals) {
+      let hit: ApprovalRequest | null = null;
+      try {
+        hit = entry.approvals.feed(data);
+      } catch (err) {
+        logger.warn(
+          `approval detector threw on ${key}: ${(err as Error).message}`,
+        );
+      }
+      if (hit) {
+        for (const wc of entry.subscribers) {
+          if (!wc.isDestroyed()) {
+            wc.send(`${IPC.PTY_TOOL_APPROVAL}:${key}`, {
+              sessionId: key,
+              request: hit,
+            });
+          }
+        }
+      }
     }
     // Programmatic listeners get every chunk immediately (no batching) —
     // they're used for line-oriented parsing (URL extraction) where
@@ -221,6 +259,10 @@ export function writeToPty(key: string, data: string): void {
   // possible "user is still here" signal. Stamp activity BEFORE writing
   // so a reaper tick racing with the write can't kill the session.
   entry.lastActivityAt = Date.now();
+  // Phase 4a: the user (or our own banner) just typed into the PTY. Either
+  // way, the detector's "waiting for response" assumption is now stale —
+  // reset so the next approval prompt fires cleanly. Cheap (clears 4 fields).
+  entry.approvals?.reset();
   entry.pty.write(data);
 }
 

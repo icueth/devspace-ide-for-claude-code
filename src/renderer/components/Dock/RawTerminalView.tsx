@@ -1,7 +1,7 @@
 import { FitAddon } from '@xterm/addon-fit';
 import { Unicode11Addon } from '@xterm/addon-unicode11';
 import { WebLinksAddon } from '@xterm/addon-web-links';
-import { Terminal } from '@xterm/xterm';
+import { Terminal, type IDecoration, type IMarker } from '@xterm/xterm';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import '@xterm/xterm/css/xterm.css';
 
@@ -55,6 +55,21 @@ interface ContextMenuState {
   x: number;
   y: number;
 }
+
+// Phase 4b: cap on how many simultaneous turn dividers we keep in the
+// terminal. Each decoration is a DOM node + a marker; 50 covers any
+// realistic scrollback window the user actually looks at, and the
+// FIFO eviction below keeps memory bounded on long-running sessions.
+const MAX_TURN_DIVIDERS = 50;
+
+// Regex matching claude's per-turn prompt prefix. Claude has used `❯ `
+// (current), `> ` (older builds), and `│ ` (when wrapped inside its
+// rounded-box UI). We anchor on a line that STARTS with one of these
+// after optional ANSI cursor codes — the leading `(?:\x1b\[[0-9;]*m)*`
+// tolerates color escapes like `\x1b[36m❯\x1b[0m ` without missing the
+// match. The trailing space is required: it distinguishes a real prompt
+// from claude's tree-drawing characters elsewhere in the TUI.
+const TURN_PROMPT_RE = /(?:^|\n)(?:\x1b\[[0-9;]*m)*[❯>│]\s/;
 
 /**
  * Mounts xterm against an existing PTY session. Lazy-rendered by the parent
@@ -124,6 +139,66 @@ export function RawTerminalView({ sessionId, isActive }: RawTerminalViewProps) {
       void api.pty.resize(sessionId, cols, rows);
     });
 
+    // Phase 4b: rolling state for per-turn divider decorations. Each entry
+    // owns a marker + a decoration; xterm tracks scroll position via the
+    // marker so the divider sticks to the right row without us doing any
+    // bookkeeping on onScroll. FIFO bounded by MAX_TURN_DIVIDERS — once we
+    // hit the cap we dispose the oldest before adding a new one.
+    const turnDividers: Array<{
+      marker: IMarker;
+      decoration: IDecoration;
+    }> = [];
+    // Suppress dividers that would fire on the SAME row we already
+    // marked — claude redraws its prompt line on every keystroke, and
+    // without this we'd register a fresh decoration per redraw.
+    let lastTurnAbsY = -1;
+
+    const tryRegisterTurnDivider = (): void => {
+      try {
+        // After write(), the cursor is AT the line that just gained the
+        // prompt prefix. baseY shifts as the scrollback grows, so we
+        // compute the absolute row index for dedup, and pass cursorYOffset
+        // of 0 to anchor the marker on the current cursor row.
+        const absY = term.buffer.active.baseY + term.buffer.active.cursorY;
+        if (absY === lastTurnAbsY) return;
+        const marker = term.registerMarker(0);
+        if (!marker) return;
+        const decoration = term.registerDecoration({
+          marker,
+          width: term.cols,
+          height: 1,
+          layer: 'bottom',
+        });
+        if (!decoration) {
+          marker.dispose();
+          return;
+        }
+        decoration.onRender((el) => {
+          // Style the cell-wide decoration as a faint gradient hairline.
+          // Pointer-events disabled so it never swallows clicks meant for
+          // selection / link-following. The transform pulls the line down
+          // so it visually sits BETWEEN turns rather than under the prompt.
+          el.style.pointerEvents = 'none';
+          el.style.background =
+            'linear-gradient(90deg, transparent, rgba(76,141,255,0.35) 20%, rgba(168,85,247,0.35) 80%, transparent)';
+          el.style.height = '1px';
+          el.style.transform = 'translateY(-1px)';
+          el.style.opacity = '0.55';
+        });
+        lastTurnAbsY = absY;
+        turnDividers.push({ marker, decoration });
+        if (turnDividers.length > MAX_TURN_DIVIDERS) {
+          const stale = turnDividers.shift();
+          stale?.decoration.dispose();
+          stale?.marker.dispose();
+        }
+      } catch {
+        // registerMarker / registerDecoration can throw if the terminal
+        // is mid-teardown; swallow so a bad frame can't break the data
+        // pipeline. The next chunk will get another chance.
+      }
+    };
+
     // Three rAFs settle React, flex layout, and font metrics before fit.
     let rafId = 0;
     const tickFit = () => {
@@ -139,7 +214,17 @@ export function RawTerminalView({ sessionId, isActive }: RawTerminalViewProps) {
             // the correct cols/rows. Sending a 1-col-off resize jolts the
             // Claude TUI into a fresh repaint.
             const dispose = api.pty.onData(sessionId, (data) => {
-              if (!disposed) term.write(data);
+              if (disposed) return;
+              term.write(data, () => {
+                // Phase 4b: check for a turn-prompt prefix AFTER xterm has
+                // parsed the chunk — the cursor is now on the row we want
+                // to anchor the divider to. We test the raw chunk (not the
+                // buffer) so claude's TUI redraws of OLD rows don't trigger
+                // false positives.
+                if (TURN_PROMPT_RE.test(data)) {
+                  tryRegisterTurnDivider();
+                }
+              });
             });
             void api.pty.resize(sessionId, term.cols + 1, term.rows);
             void api.pty.resize(sessionId, term.cols, term.rows);
@@ -169,6 +254,14 @@ export function RawTerminalView({ sessionId, isActive }: RawTerminalViewProps) {
       resizeDisposable.dispose();
       cleanup.dispose?.();
       observer.disconnect();
+      // Phase 4b: dispose decoration markers before tearing down xterm so
+      // we don't leak detached DOM nodes if Electron keeps the page alive
+      // (HMR remount).
+      for (const td of turnDividers) {
+        td.decoration.dispose();
+        td.marker.dispose();
+      }
+      turnDividers.length = 0;
       term.dispose();
       termRef.current = null;
       fitRef.current = null;

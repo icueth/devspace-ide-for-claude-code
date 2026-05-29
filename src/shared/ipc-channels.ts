@@ -66,6 +66,11 @@ export const IPC = {
   // change to useCliTabsStore.columns so the dual-tier reaper knows which
   // tabs the user is actually looking at vs. which are off-screen chips.
   PTY_SET_PINNED: 'pty:set-pinned',
+  // Phase 4a: main → renderer broadcast that the per-session
+  // ApprovalDetector matched a fresh tool-approval prompt in the PTY's
+  // stdout. Payload: { sessionId, request: ApprovalRequest }. Renderer
+  // surfaces a small Allow/Deny banner inside the terminal body.
+  PTY_TOOL_APPROVAL: 'pty:tool-approval',
 
   // tmux inspection + interaction (for native Claude CLI agent teams)
   TMUX_LIST_PANES: 'tmux:list-panes',

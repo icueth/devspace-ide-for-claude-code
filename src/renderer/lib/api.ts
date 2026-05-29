@@ -195,6 +195,19 @@ export interface DevspaceApi {
     // change to `columns` so the dual-tier reaper can distinguish visible
     // vs. background tabs.
     setPinned: (ids: string[]) => void;
+    // Phase 4a — subscribe to the per-session tool-approval prompt event
+    // emitted by main's ApprovalDetector. Returns an unsubscribe handle.
+    onToolApproval: (
+      sessionId: string,
+      cb: (payload: {
+        sessionId: string;
+        request: {
+          toolName: string | null;
+          raw: string;
+          matchedAt: number;
+        };
+      }) => void,
+    ) => () => void;
   };
   tmux: {
     listPanes: (sessionName?: string) => Promise<TmuxPane[]>;
@@ -740,6 +753,7 @@ function makeStubApi(): DevspaceApi {
       onExit: () => () => undefined,
       onAutoClosed: () => () => undefined,
       setPinned: () => undefined,
+      onToolApproval: () => () => undefined,
     },
     tmux: {
       listPanes: () => Promise.resolve([]),

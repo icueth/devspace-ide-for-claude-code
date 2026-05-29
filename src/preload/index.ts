@@ -143,6 +143,35 @@ const api = {
     setPinned: (ids: string[]) => {
       ipcRenderer.send(IPC.PTY_SET_PINNED, { ids });
     },
+    // Phase 4a: subscribe to the per-session tool-approval prompt event.
+    // Channel is namespaced by sessionId so we can fan out without the
+    // renderer having to filter. Returns an unsubscribe handle.
+    onToolApproval: (
+      sessionId: string,
+      cb: (payload: {
+        sessionId: string;
+        request: {
+          toolName: string | null;
+          raw: string;
+          matchedAt: number;
+        };
+      }) => void,
+    ) => {
+      const channel = `${IPC.PTY_TOOL_APPROVAL}:${sessionId}`;
+      const listener = (
+        _e: unknown,
+        ev: {
+          sessionId: string;
+          request: {
+            toolName: string | null;
+            raw: string;
+            matchedAt: number;
+          };
+        },
+      ) => cb(ev);
+      ipcRenderer.on(channel, listener);
+      return () => ipcRenderer.off(channel, listener);
+    },
   },
   tmux: {
     listPanes: (sessionName?: string) =>
