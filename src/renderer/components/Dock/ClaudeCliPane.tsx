@@ -73,12 +73,16 @@ export function ClaudeCliPane({
   );
   const [pid, setPid] = useState<number | null>(null);
   const [exitMsg, setExitMsg] = useState<string | null>(null);
-  // Per-tab toggle between the chat UI (default — parsed stream-json,
-  // auto-approves tools, prettier output) and the PTY-backed terminal
-  // (alternative — interactive tool approvals, raw output). Tab-local
-  // rather than persisted; users who want their old terminal default
-  // can flip per tab.
-  const [mode, setMode] = useState<CliPaneMode>('chat');
+  // Phase 5 (soft-deprecation): Terminal mode is now the default everywhere.
+  // The Chat mode UI (parsed stream-json) still exists for users who set
+  // `localStorage['devspace:enableChatMode'] = 'true'` — kept as an escape
+  // hatch while we validate the Terminal + Ruflo experience in real use.
+  // A future release will hard-delete ChatPanel and its support code once
+  // we're confident nothing relies on it.
+  const [mode, setMode] = useState<CliPaneMode>('terminal');
+  const chatModeEnabled =
+    typeof window !== 'undefined' &&
+    window.localStorage?.getItem('devspace:enableChatMode') === 'true';
 
   const gitSnapshot = useGitStore((s) => s.byProject[projectId]);
   const branch = gitSnapshot?.branch;
@@ -236,7 +240,7 @@ export function ClaudeCliPane({
           sessionId={sessionId}
           disabled={status !== 'running'}
         />
-        <ModeToggle mode={mode} onChange={setMode} />
+        {chatModeEnabled && <ModeToggle mode={mode} onChange={setMode} />}
         <button
           type="button"
           onClick={() => setTabOverlay(projectId, tabId, !overlayOpen)}
