@@ -90,6 +90,11 @@ import type {
   MemPalaceUninstallInput,
 } from '@shared/mempalace';
 import type {
+  RufloInitProgressEvent,
+  RufloInitResult,
+  RufloProjectStatus,
+} from '@shared/ruflo';
+import type {
   SetupClaudeRunResult,
   SetupInstallResult,
   SetupProgressEvent,
@@ -581,6 +586,14 @@ export interface DevspaceApi {
     ) => Promise<{ text: string; bytes: number; status: BackgroundRunStatus }>;
     kill: (runId: string) => Promise<boolean>;
   };
+  // Per-project Ruflo init. Phase 0 (global install) is exposed via
+  // `setup.*`; this namespace covers per-project status + one-click
+  // `npx ruflo@latest init`.
+  ruflo: {
+    getProjectStatus: (projectPath: string) => Promise<RufloProjectStatus>;
+    initProject: (projectPath: string) => Promise<RufloInitResult>;
+    onInitProgress: (cb: (ev: RufloInitProgressEvent) => void) => () => void;
+  };
   forge: {
     listDrafts: (projectPath: string) => Promise<ForgeDraft[]>;
     getDraft: (draftId: string) => Promise<ForgeDraft | null>;
@@ -970,6 +983,18 @@ function makeStubApi(): DevspaceApi {
       list: () => Promise.resolve([]),
       readLog: () => Promise.resolve({ text: '', bytes: 0, status: 'pending' }),
       kill: () => Promise.resolve(false),
+    },
+    ruflo: {
+      getProjectStatus: async () => ({
+        projectPath: '',
+        initialized: false,
+      }),
+      initProject: async () => ({
+        ok: false,
+        status: { projectPath: '', initialized: false },
+        error: 'no-bridge',
+      }),
+      onInitProgress: () => () => undefined,
     },
     forge: {
       listDrafts: () => Promise.resolve([]),

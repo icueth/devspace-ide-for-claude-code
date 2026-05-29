@@ -616,6 +616,28 @@ const api = {
       ipcRenderer.invoke(IPC.BG_CLAUDE_READ_LOG, runId, offset ?? 0),
     kill: (runId: string) => ipcRenderer.invoke(IPC.BG_CLAUDE_KILL, runId),
   },
+  ruflo: {
+    getProjectStatus: (projectPath: string) =>
+      ipcRenderer.invoke(
+        IPC.RUFLO_PROJECT_STATUS,
+        projectPath,
+      ) as Promise<import('@shared/ruflo').RufloProjectStatus>,
+    initProject: (projectPath: string) =>
+      ipcRenderer.invoke(
+        IPC.RUFLO_PROJECT_INIT,
+        projectPath,
+      ) as Promise<import('@shared/ruflo').RufloInitResult>,
+    onInitProgress: (
+      cb: (ev: import('@shared/ruflo').RufloInitProgressEvent) => void,
+    ) => {
+      const listener = (
+        _e: unknown,
+        ev: import('@shared/ruflo').RufloInitProgressEvent,
+      ) => cb(ev);
+      ipcRenderer.on(IPC.RUFLO_PROJECT_INIT_PROGRESS, listener);
+      return () => ipcRenderer.off(IPC.RUFLO_PROJECT_INIT_PROGRESS, listener);
+    },
+  },
   forge: {
     listDrafts: (projectPath: string) =>
       ipcRenderer.invoke(IPC.FORGE_LIST_DRAFTS, projectPath),

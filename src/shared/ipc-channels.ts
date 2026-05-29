@@ -316,6 +316,13 @@ export const IPC = {
   BG_CLAUDE_LIST: 'bg-claude:list',
   BG_CLAUDE_READ_LOG: 'bg-claude:read-log',
   BG_CLAUDE_KILL: 'bg-claude:kill',
+
+  // Ruflo per-project init (Settings → Setup tab). Phase 0 (global install)
+  // rides on SETUP_* — these channels cover per-project detection of
+  // `.claude-flow/` and one-click `npx ruflo@latest init`.
+  RUFLO_PROJECT_STATUS: 'ruflo:project-status',
+  RUFLO_PROJECT_INIT: 'ruflo:project-init',
+  RUFLO_PROJECT_INIT_PROGRESS: 'ruflo:project-init-progress',
 } as const;
 
 export type IpcChannel = (typeof IPC)[keyof typeof IPC];

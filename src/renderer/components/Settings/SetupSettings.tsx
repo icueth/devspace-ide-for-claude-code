@@ -14,6 +14,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { ClaudeSetupPane } from '@renderer/components/Settings/ClaudeSetupPane';
+import { RufloProjectCard } from '@renderer/components/Settings/RufloProjectCard';
 import { api } from '@renderer/lib/api';
 import { cn } from '@renderer/lib/utils';
 import type {
@@ -158,6 +159,8 @@ export function SetupSettings() {
             onError={(msg) => setError(msg)}
           />
         )}
+
+        <RufloProjectCard />
 
         <ChecklistCard
           status={status}
