@@ -14,7 +14,6 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { ClaudeSetupPane } from '@renderer/components/Settings/ClaudeSetupPane';
-import { RufloProjectCard } from '@renderer/components/Settings/RufloProjectCard';
 import { api } from '@renderer/lib/api';
 import { cn } from '@renderer/lib/utils';
 import type {
@@ -160,7 +159,7 @@ export function SetupSettings() {
           />
         )}
 
-        <RufloProjectCard />
+        <RufloTabLink />
 
         <ChecklistCard
           status={status}
@@ -813,4 +812,37 @@ function TipsCard() {
 
 function tilde(p: string): string {
   return p.replace(/^\/Users\/[^/]+/, '~');
+}
+
+/**
+ * Compact banner that punts per-project Ruflo management into the dedicated
+ * Ruflo tab. Replaces the embedded <RufloProjectCard /> that used to live
+ * here — the Ruflo tab is a better home now that we also manage plugins +
+ * marketplace registration alongside the per-project init.
+ */
+function RufloTabLink() {
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        window.dispatchEvent(
+          new CustomEvent('devspace:switch-settings-tab', {
+            detail: { tab: 'ruflo' },
+          }),
+        );
+      }}
+      className="flex w-full items-center justify-between rounded-[10px] border border-border bg-surface-2/40 px-3 py-2.5 text-left text-[11.5px] text-text-secondary transition hover:border-border-hi hover:bg-surface-3 hover:text-text"
+    >
+      <span className="flex items-center gap-2">
+        <span className="font-medium text-text">Ruflo</span>
+        <span className="text-text-muted">
+          Manage plugins, marketplace, and per-project init.
+        </span>
+      </span>
+      <span className="inline-flex items-center gap-1 text-accent">
+        Open Ruflo tab
+        <ExternalLink size={10} />
+      </span>
+    </button>
+  );
 }

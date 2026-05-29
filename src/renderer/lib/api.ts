@@ -90,8 +90,11 @@ import type {
   MemPalaceUninstallInput,
 } from '@shared/mempalace';
 import type {
+  RufloActionResult,
   RufloInitProgressEvent,
   RufloInitResult,
+  RufloMarketplaceStatus,
+  RufloPlugin,
   RufloProjectStatus,
 } from '@shared/ruflo';
 import type {
@@ -593,6 +596,16 @@ export interface DevspaceApi {
     getProjectStatus: (projectPath: string) => Promise<RufloProjectStatus>;
     initProject: (projectPath: string) => Promise<RufloInitResult>;
     onInitProgress: (cb: (ev: RufloInitProgressEvent) => void) => () => void;
+    // Phase 2: plugin management (Settings → Ruflo tab). Wraps `claude
+    // plugin {list,install,uninstall,enable,disable,marketplace}`.
+    plugins: {
+      list: () => Promise<RufloPlugin[]>;
+      install: (name: string) => Promise<RufloActionResult>;
+      uninstall: (id: string) => Promise<RufloActionResult>;
+      toggle: (id: string, enable: boolean) => Promise<RufloActionResult>;
+      marketplaceStatus: () => Promise<RufloMarketplaceStatus>;
+      marketplaceAdd: () => Promise<RufloActionResult>;
+    };
   };
   forge: {
     listDrafts: (projectPath: string) => Promise<ForgeDraft[]>;
@@ -995,6 +1008,17 @@ function makeStubApi(): DevspaceApi {
         error: 'no-bridge',
       }),
       onInitProgress: () => () => undefined,
+      plugins: {
+        list: () => Promise.resolve([]),
+        install: () => Promise.resolve({ ok: false, error: 'no-bridge' }),
+        uninstall: () => Promise.resolve({ ok: false, error: 'no-bridge' }),
+        toggle: () => Promise.resolve({ ok: false, error: 'no-bridge' }),
+        // Fail open in the stub: matches the main-process fallback so the
+        // UI doesn't surface a fake "Add marketplace" button before the
+        // preload bridge wires up.
+        marketplaceStatus: () => Promise.resolve({ added: true }),
+        marketplaceAdd: () => Promise.resolve({ ok: false, error: 'no-bridge' }),
+      },
     },
     forge: {
       listDrafts: () => Promise.resolve([]),

@@ -33,6 +33,7 @@ import {
   Server,
   Settings as SettingsIcon,
   Users,
+  Waves,
   Wrench,
 } from 'lucide-react';
 import { createContext, useContext, useEffect, useRef, useState } from 'react';
@@ -43,6 +44,7 @@ import { AgentsSettings } from '@renderer/components/Settings/AgentsSettings';
 import { LlmSettings } from '@renderer/components/Settings/LlmSettings';
 import { McpSettings } from '@renderer/components/Settings/McpSettings';
 import { MemPalaceSettings } from '@renderer/components/Settings/MemPalaceSettings';
+import { RufloSettings } from '@renderer/components/Settings/RufloSettings';
 import { SetupSettings } from '@renderer/components/Settings/SetupSettings';
 import { SkillsSettings } from '@renderer/components/Settings/SkillsSettings';
 import { TeamsSettings } from '@renderer/components/Settings/TeamsSettings';
@@ -61,6 +63,7 @@ type Tab =
   | 'llm'
   | 'agents'
   | 'mcp'
+  | 'ruflo'
   | 'memory'
   | 'skills'
   | 'teams';
@@ -180,6 +183,11 @@ export function SettingsPage({ onClose, initialTab = 'account' }: SettingsPagePr
             <McpSettings />
           </RouteErrorBoundary>
         </TabContainer>
+        <TabContainer active={tab === 'ruflo'}>
+          <RouteErrorBoundary label="Settings · ruflo">
+            <RufloSettings />
+          </RouteErrorBoundary>
+        </TabContainer>
         <TabContainer active={tab === 'memory'}>
           <RouteErrorBoundary label="Settings · memory">
             <MemPalaceSettings />
@@ -250,6 +258,7 @@ function TabSwitch({ tab, onChange }: { tab: Tab; onChange: (t: Tab) => void }) 
     { id: 'teams', label: 'Teams', icon: <Users size={11} /> },
     { id: 'skills', label: 'Skills', icon: <Lightbulb size={11} /> },
     { id: 'mcp', label: 'MCP', icon: <Plug size={11} /> },
+    { id: 'ruflo', label: 'Ruflo', icon: <Waves size={11} /> },
     { id: 'memory', label: 'Memory', icon: <Brain size={11} /> },
     { id: 'files', label: 'Files', icon: <FileText size={11} /> },
     { id: 'tmux', label: 'tmux', icon: <Server size={11} /> },

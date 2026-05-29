@@ -323,6 +323,17 @@ export const IPC = {
   RUFLO_PROJECT_STATUS: 'ruflo:project-status',
   RUFLO_PROJECT_INIT: 'ruflo:project-init',
   RUFLO_PROJECT_INIT_PROGRESS: 'ruflo:project-init-progress',
+
+  // Phase 2: Ruflo plugin management (Settings → Ruflo tab). Wraps
+  // `claude plugin list|install|uninstall|enable|disable` and marketplace
+  // registration so users can manage the ruflo plugin ecosystem from a
+  // dedicated tab without dropping to a shell.
+  RUFLO_PLUGINS_LIST: 'ruflo:plugins-list',
+  RUFLO_PLUGINS_INSTALL: 'ruflo:plugins-install',
+  RUFLO_PLUGINS_UNINSTALL: 'ruflo:plugins-uninstall',
+  RUFLO_PLUGINS_TOGGLE: 'ruflo:plugins-toggle',
+  RUFLO_MARKETPLACE_ADD: 'ruflo:marketplace-add',
+  RUFLO_MARKETPLACE_STATUS: 'ruflo:marketplace-status',
 } as const;
 
 export type IpcChannel = (typeof IPC)[keyof typeof IPC];

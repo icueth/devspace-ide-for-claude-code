@@ -637,6 +637,36 @@ const api = {
       ipcRenderer.on(IPC.RUFLO_PROJECT_INIT_PROGRESS, listener);
       return () => ipcRenderer.off(IPC.RUFLO_PROJECT_INIT_PROGRESS, listener);
     },
+    // Phase 2 — plugin management (Settings → Ruflo tab).
+    plugins: {
+      list: () =>
+        ipcRenderer.invoke(IPC.RUFLO_PLUGINS_LIST) as Promise<
+          import('@shared/ruflo').RufloPlugin[]
+        >,
+      install: (name: string) =>
+        ipcRenderer.invoke(
+          IPC.RUFLO_PLUGINS_INSTALL,
+          name,
+        ) as Promise<import('@shared/ruflo').RufloActionResult>,
+      uninstall: (id: string) =>
+        ipcRenderer.invoke(
+          IPC.RUFLO_PLUGINS_UNINSTALL,
+          id,
+        ) as Promise<import('@shared/ruflo').RufloActionResult>,
+      toggle: (id: string, enable: boolean) =>
+        ipcRenderer.invoke(IPC.RUFLO_PLUGINS_TOGGLE, {
+          id,
+          enable,
+        }) as Promise<import('@shared/ruflo').RufloActionResult>,
+      marketplaceStatus: () =>
+        ipcRenderer.invoke(IPC.RUFLO_MARKETPLACE_STATUS) as Promise<
+          import('@shared/ruflo').RufloMarketplaceStatus
+        >,
+      marketplaceAdd: () =>
+        ipcRenderer.invoke(IPC.RUFLO_MARKETPLACE_ADD) as Promise<
+          import('@shared/ruflo').RufloActionResult
+        >,
+    },
   },
   forge: {
     listDrafts: (projectPath: string) =>
