@@ -1,7 +1,9 @@
 import {
+  AlertTriangle,
   CheckCircle2,
   Folder,
   Loader2,
+  Puzzle,
   Sparkles,
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -32,6 +34,10 @@ export function RufloProjectCard() {
   const [busy, setBusy] = useState(false);
   const [log, setLog] = useState<RufloInitProgressEvent[]>([]);
   const [error, setError] = useState<string | null>(null);
+  // null = still checking. The overlay resolves `ruflo` the same way
+  // (whichRuflo on PATH), so this is the source of truth for "init now will
+  // actually be usable from the Terminal overlay".
+  const [binaryInstalled, setBinaryInstalled] = useState<boolean | null>(null);
   const logRef = useRef<HTMLDivElement | null>(null);
 
   const projectPath = activeProject?.path ?? null;
@@ -57,6 +63,24 @@ export function RufloProjectCard() {
     if (!projectPath) return;
     void refreshStatus(projectPath);
   }, [projectPath, refreshStatus]);
+
+  // Is the `ruflo` binary on PATH? Re-checked per project switch (the main
+  // side caches the PATH walk for 30s, so this is cheap). Drives the
+  // "install Ruflo first" guard below.
+  useEffect(() => {
+    let cancelled = false;
+    void api.ruflo.dashboard
+      .isInstalled()
+      .then((v) => {
+        if (!cancelled) setBinaryInstalled(v);
+      })
+      .catch(() => {
+        if (!cancelled) setBinaryInstalled(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [projectPath]);
 
   // Subscribe once. We filter events to the active project so a background
   // init for another window/project doesn't pollute this card's log.
@@ -87,6 +111,18 @@ export function RufloProjectCard() {
     setError(null);
     setLog([]);
     try {
+      // Guard: `npx ruflo init` succeeds even with no global install, but the
+      // Terminal overlay resolves `ruflo` on PATH — so initializing without
+      // the binary leaves a half-working project. Re-check at click time so a
+      // fresh install since mount is picked up.
+      const installed = await api.ruflo.dashboard.isInstalled();
+      setBinaryInstalled(installed);
+      if (!installed) {
+        setError(
+          'Ruflo isn’t installed yet. Install it from the Setup checklist below first — otherwise the Terminal overlay won’t find the `ruflo` binary.',
+        );
+        return;
+      }
       const result = await api.ruflo.initProject(projectPath);
       setStatus(result.status);
       if (!result.ok && result.error) setError(result.error);
@@ -118,10 +154,13 @@ export function RufloProjectCard() {
       <div className="flex flex-col gap-3 px-3 py-3">
         <ProjectHeader name={activeProject.name} projectPath={projectPath} />
 
+        {binaryInstalled === false && <NotInstalledNotice />}
+
         <div className="flex items-center gap-2">
           <InitButton
             status={status}
             busy={busy}
+            binaryInstalled={binaryInstalled}
             onClick={() => void handleInit()}
           />
           {status?.hasClaudeMd && (
@@ -131,6 +170,8 @@ export function RufloProjectCard() {
             <span className="text-[10.5px] text-text-muted">.claude/ present</span>
           )}
         </div>
+
+        {status?.initialized && <PluginsHint />}
 
         {(log.length > 0 || error) && (
           <LogBox logRef={logRef} log={log} error={error} />
@@ -193,19 +234,24 @@ function ProjectHeader({
 function InitButton({
   status,
   busy,
+  binaryInstalled,
   onClick,
 }: {
   status: RufloProjectStatus | null;
   busy: boolean;
+  binaryInstalled: boolean | null;
   onClick: () => void;
 }) {
   const initialized = status?.initialized ?? false;
-  const disabled = busy || initialized;
+  const missingBinary = binaryInstalled === false;
+  const disabled = busy || initialized || missingBinary;
   const label = busy
     ? 'Initializing…'
     : initialized
       ? 'Already initialized'
-      : 'Init';
+      : missingBinary
+        ? 'Install Ruflo first'
+        : 'Init';
 
   return (
     <button
@@ -215,7 +261,9 @@ function InitButton({
       title={
         initialized
           ? '.claude-flow/ already exists — re-running ruflo init is not needed.'
-          : 'Run `npx ruflo@latest init` inside the active project.'
+          : missingBinary
+            ? 'Install the Ruflo binary from the Setup checklist below before initializing.'
+            : 'Run `npx ruflo@latest init` inside the active project.'
       }
       className={cn(
         'inline-flex items-center gap-1.5 rounded-[6px] px-2.5 py-1 text-[10.5px] font-medium transition',
@@ -232,6 +280,39 @@ function InitButton({
         <Sparkles size={10} />
       )}
       {label}
+    </button>
+  );
+}
+
+function NotInstalledNotice() {
+  return (
+    <div className="flex items-start gap-2 rounded-[7px] border border-semantic-warning/40 bg-semantic-warning/10 px-2.5 py-2 text-[10.5px] text-semantic-warning">
+      <AlertTriangle size={12} className="mt-[1px] shrink-0" />
+      <span>
+        Ruflo isn’t installed yet. Install it from the checklist below first —
+        running init without it leaves the Terminal overlay unable to find the{' '}
+        <code className="rounded bg-surface-3 px-1">ruflo</code> binary.
+      </span>
+    </div>
+  );
+}
+
+function PluginsHint() {
+  return (
+    <button
+      type="button"
+      onClick={() =>
+        window.dispatchEvent(
+          new CustomEvent('devspace:open-settings', {
+            detail: { tab: 'ruflo' },
+          }),
+        )
+      }
+      title="Open the Ruflo tab to install the recommended plugins"
+      className="inline-flex items-center gap-1.5 self-start rounded-[6px] border border-border-subtle bg-surface-3 px-2.5 py-1 text-[10.5px] text-text-secondary transition hover:border-border-hi hover:bg-surface-4 hover:text-text"
+    >
+      <Puzzle size={11} />
+      Next: install plugins in the Ruflo tab →
     </button>
   );
 }
