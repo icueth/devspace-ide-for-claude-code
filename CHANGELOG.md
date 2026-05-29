@@ -5,6 +5,30 @@ All notable changes to DevSpace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.38.0-beta.1] — 2026-05-29 (prod branch, local beta — not on GH)
+
+Beta build of the **`prod` branch** ruflo roadmap (phases 0–5 soft).
+**Not a public release** — local-only dmg for icueit's testing.
+
+### Highlights vs. 0.37.1
+- Setup tab gains a Ruflo install row.
+- Per-project Ruflo init card with streaming log.
+- New Settings → Ruflo tab: 15-entry plugin catalog, install /
+  enable / disable / uninstall, marketplace registration.
+- Visual overlay drawer on claude-cli tabs (PanelRight icon) — Agents
+  tab + Memory tab + install/init gates.
+- Tool-approval banner in Terminal mode: Allow / Always / Deny /
+  Dismiss → writes `y\r` / `a\r` / `n\r` to the PTY.
+- Per-turn visual dividers in xterm scrollback (detects `❯` prompts).
+- **Terminal mode is now the default**; Chat mode is hidden behind
+  `localStorage['devspace:enableChatMode'] = 'true'` as an escape
+  hatch. ChatPanel code + dependencies untouched — full removal
+  deferred until real-use confirms nothing essential lives there.
+
+### Verification
+- 1117 tests pass, typecheck clean (only pre-existing TS5101).
+- Boots cleanly, dual-tier reaper from 0.36.1 still healthy.
+
 ## [0.37.1] — 2026-05-29
 
 Effort lives in the header now — visible in both Chat and Terminal mode,
