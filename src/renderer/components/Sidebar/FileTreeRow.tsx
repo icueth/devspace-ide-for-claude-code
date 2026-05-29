@@ -30,7 +30,6 @@ export interface FileTreeRowCallbacks {
   onActivate: (entry: DirEntry) => void;
   onDragStart: (entry: DirEntry, e: React.DragEvent) => void;
   // Context menu actions.
-  onAddToChat: (path: string) => void;
   onAddToClaudeCli: (path: string) => void;
   onNewFile: (parentDir: string) => void;
   onNewFolder: (parentDir: string) => void;
@@ -250,9 +249,6 @@ function FileTreeRowImpl({
             className="z-50 min-w-[200px] rounded-md border border-border-emphasis bg-surface-raised p-1 text-xs shadow-lg animate-in fade-in-0 zoom-in-95"
             style={{ backgroundColor: 'var(--color-surface-raised)' }}
           >
-            <MenuItem onSelect={() => callbacks.onAddToChat(entry.path)}>
-              Add to Chat
-            </MenuItem>
             <MenuItem onSelect={() => callbacks.onAddToClaudeCli(entry.path)}>
               Add to Claude CLI
             </MenuItem>

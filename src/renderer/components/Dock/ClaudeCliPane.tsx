@@ -1,10 +1,4 @@
-import {
-  MessageSquare,
-  PanelRight,
-  RefreshCw,
-  Target,
-  Terminal as TerminalIcon,
-} from 'lucide-react';
+import { PanelRight, RefreshCw, Target } from 'lucide-react';
 import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 
 import { useClaudeVersion } from '@renderer/hooks/useClaudeVersion';
@@ -24,14 +18,6 @@ const RawTerminalView = lazy(() =>
     default: m.RawTerminalView,
   })),
 );
-// New beta chat surface — parsed claude --print stream-json instead of
-// PTY passthrough. Loaded on demand so users who never flip to chat
-// mode don't pay its bundle cost.
-const ChatPanel = lazy(() =>
-  import('@renderer/components/Dock/ChatPanel').then((m) => ({
-    default: m.ChatPanel,
-  })),
-);
 // Phase 3: Ruflo side-drawer overlay. Lazy so tabs that never open it pay
 // nothing for the bundle.
 const RufloOverlay = lazy(() =>
@@ -39,16 +25,13 @@ const RufloOverlay = lazy(() =>
     default: m.RufloOverlay,
   })),
 );
-// Phase 4a: tool-approval banner. Lives in Terminal mode only — Chat mode
-// already auto-approves through stream-json events. Lazy so chat-only
-// users never pay its bundle cost.
+// Phase 4a: tool-approval banner. Lazy so a tab pays its bundle cost only
+// once the PTY surfaces a tool-approval prompt.
 const ToolApprovalBanner = lazy(() =>
   import('@renderer/components/Dock/ToolApprovalBanner').then((m) => ({
     default: m.ToolApprovalBanner,
   })),
 );
-
-type CliPaneMode = 'terminal' | 'chat';
 
 interface ClaudeCliPaneProps {
   projectId: string;
@@ -73,17 +56,6 @@ export function ClaudeCliPane({
   );
   const [pid, setPid] = useState<number | null>(null);
   const [exitMsg, setExitMsg] = useState<string | null>(null);
-  // Phase 5 (soft-deprecation): Terminal mode is now the default everywhere.
-  // The Chat mode UI (parsed stream-json) still exists for users who set
-  // `localStorage['devspace:enableChatMode'] = 'true'` — kept as an escape
-  // hatch while we validate the Terminal + Ruflo experience in real use.
-  // A future release will hard-delete ChatPanel and its support code once
-  // we're confident nothing relies on it.
-  const [mode, setMode] = useState<CliPaneMode>('terminal');
-  const chatModeEnabled =
-    typeof window !== 'undefined' &&
-    window.localStorage?.getItem('devspace:enableChatMode') === 'true';
-
   const gitSnapshot = useGitStore((s) => s.byProject[projectId]);
   const branch = gitSnapshot?.branch;
   const ahead = gitSnapshot?.ahead ?? 0;
@@ -240,7 +212,6 @@ export function ClaudeCliPane({
           sessionId={sessionId}
           disabled={status !== 'running'}
         />
-        {chatModeEnabled && <ModeToggle mode={mode} onChange={setMode} />}
         <button
           type="button"
           onClick={() => setTabOverlay(projectId, tabId, !overlayOpen)}
@@ -259,27 +230,21 @@ export function ClaudeCliPane({
       </div>
       <ContextChips shortCwd={shortCwd} branch={branch} ahead={ahead} dirty={dirty} />
       <div className="relative min-h-0 flex-1 overflow-hidden bg-surface">
-        {mode === 'chat' ? (
-          <Suspense fallback={null}>
-            <ChatPanel projectPath={projectPath} />
-          </Suspense>
-        ) : (
-          status !== 'starting' && (
-            <>
-              <Suspense fallback={null}>
-                <RawTerminalView sessionId={sessionId} isActive={isActive ?? false} />
-              </Suspense>
-              {/* Phase 4a: bottom-anchored approval banner. Subscribes when
-                  the PTY is actually running so we don't fire listeners
-                  against a session that's still being spawned. */}
-              <Suspense fallback={null}>
-                <ToolApprovalBanner
-                  sessionId={sessionId}
-                  enabled={status === 'running'}
-                />
-              </Suspense>
-            </>
-          )
+        {status !== 'starting' && (
+          <>
+            <Suspense fallback={null}>
+              <RawTerminalView sessionId={sessionId} isActive={isActive ?? false} />
+            </Suspense>
+            {/* Phase 4a: bottom-anchored approval banner. Subscribes when
+                the PTY is actually running so we don't fire listeners
+                against a session that's still being spawned. */}
+            <Suspense fallback={null}>
+              <ToolApprovalBanner
+                sessionId={sessionId}
+                enabled={status === 'running'}
+              />
+            </Suspense>
+          </>
         )}
         {/* Drawer overlays the body — absolute positioning anchored to this
             relative container. Fully unmounted when closed so the lazy
@@ -294,68 +259,8 @@ export function ClaudeCliPane({
           </Suspense>
         )}
       </div>
-      {/* Slash actions only make sense in TTY mode — chat surface sends
-          messages as natural language and processes one turn at a time. */}
-      {mode === 'terminal' && (
-        <QuickActions onSend={sendSlash} disabled={status !== 'running'} />
-      )}
+      <QuickActions onSend={sendSlash} disabled={status !== 'running'} />
     </div>
-  );
-}
-
-function ModeToggle({
-  mode,
-  onChange,
-}: {
-  mode: CliPaneMode;
-  onChange: (m: CliPaneMode) => void;
-}) {
-  return (
-    <div className="inline-flex h-[22px] items-stretch rounded-[6px] border border-border-subtle bg-surface-3 text-[10.5px]">
-      <ToggleBtn
-        active={mode === 'chat'}
-        onClick={() => onChange('chat')}
-        title="Chat UI — parsed events, auto-approves tools (default)"
-      >
-        <MessageSquare size={10} />
-        <span>Chat</span>
-      </ToggleBtn>
-      <ToggleBtn
-        active={mode === 'terminal'}
-        onClick={() => onChange('terminal')}
-        title="Interactive TTY — per-tool approval, raw output"
-      >
-        <TerminalIcon size={10} />
-        <span>Terminal</span>
-      </ToggleBtn>
-    </div>
-  );
-}
-
-function ToggleBtn({
-  active,
-  onClick,
-  title,
-  children,
-}: {
-  active: boolean;
-  onClick: () => void;
-  title: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      onClick={onClick}
-      title={title}
-      className={cn(
-        'inline-flex items-center gap-1 px-2 transition first:rounded-l-[6px] last:rounded-r-[6px]',
-        active
-          ? 'bg-surface-4 text-text'
-          : 'text-text-secondary hover:bg-surface-4 hover:text-text',
-      )}
-    >
-      {children}
-    </button>
   );
 }
 
@@ -455,8 +360,8 @@ const EFFORT_DROPDOWN: Array<{ value: ClaudeEffort; label: string }> = [
 
 const VERSION_GATE_TOOLTIP = 'Requires claude CLI 2.1.154 or newer';
 
-// v0.37.1: header chip — visible in BOTH chat and terminal mode. Replaces
-// the v0.37.0 dropdown that lived only in QuickActions (TTY-only).
+// v0.37.1: header chip in the pane title bar. Replaces the v0.37.0 dropdown
+// that lived only in QuickActions.
 function EffortHeaderChip({
   projectId,
   tabId,

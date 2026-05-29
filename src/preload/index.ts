@@ -210,82 +210,10 @@ const api = {
     test: (cfg: unknown) => ipcRenderer.invoke(IPC.LLM_TEST, cfg),
     complete: (req: unknown) => ipcRenderer.invoke(IPC.LLM_COMPLETE, req),
     edit: (req: unknown) => ipcRenderer.invoke(IPC.LLM_EDIT, req),
-    // v0.29 — chat profiles (separate store from autocomplete config).
-    listChatProfiles: () => ipcRenderer.invoke(IPC.LLM_CHAT_PROFILES_LIST),
-    upsertChatProfile: (profile: unknown) =>
-      ipcRenderer.invoke(IPC.LLM_CHAT_PROFILES_UPSERT, profile),
-    deleteChatProfile: (id: string) =>
-      ipcRenderer.invoke(IPC.LLM_CHAT_PROFILES_DELETE, id),
   },
-  // v0.30 — multi-CLI runtime profiles (OpenCode now; Codex/Gemini later).
+  // CLI runtime detection (claude version gate).
   cli: {
-    listProfiles: () => ipcRenderer.invoke(IPC.CLI_PROFILES_LIST),
-    upsertProfile: (profile: unknown) =>
-      ipcRenderer.invoke(IPC.CLI_PROFILES_UPSERT, profile),
-    deleteProfile: (id: string) =>
-      ipcRenderer.invoke(IPC.CLI_PROFILES_DELETE, id),
     detect: () => ipcRenderer.invoke(IPC.CLI_DETECT),
-  },
-  chat: {
-    listThreads: (projectPath: string) =>
-      ipcRenderer.invoke(IPC.CHAT_LIST_THREADS, projectPath),
-    getThread: (projectPath: string, threadId: string) =>
-      ipcRenderer.invoke(IPC.CHAT_GET_THREAD, projectPath, threadId),
-    // SEC-MED-1: forward the 4th `cliProfileId` arg too so renderer
-    // callers can actually create OpenCode-bound threads. Without this,
-    // the v0.30 feature is unreachable from the typed preload API.
-    createThread: (
-      projectPath: string,
-      title?: string,
-      llmProfileId?: string,
-      cliProfileId?: string,
-    ) =>
-      ipcRenderer.invoke(
-        IPC.CHAT_CREATE_THREAD,
-        projectPath,
-        title,
-        llmProfileId,
-        cliProfileId,
-      ),
-    deleteThread: (projectPath: string, threadId: string) =>
-      ipcRenderer.invoke(IPC.CHAT_DELETE_THREAD, projectPath, threadId),
-    send: (req: unknown) => ipcRenderer.invoke(IPC.CHAT_SEND, req),
-    cancel: (projectPath: string, threadId?: string) =>
-      ipcRenderer.invoke(IPC.CHAT_CANCEL, projectPath, threadId),
-    subscribe: (projectPath: string) =>
-      ipcRenderer.invoke(IPC.CHAT_SUBSCRIBE, projectPath),
-    getConfig: (projectPath: string) =>
-      ipcRenderer.invoke(IPC.CHAT_GET_CONFIG, projectPath),
-    setConfig: (projectPath: string, cfg: unknown) =>
-      ipcRenderer.invoke(IPC.CHAT_SET_CONFIG, projectPath, cfg),
-    updateThreadConfig: (
-      projectPath: string,
-      threadId: string,
-      cfg: unknown,
-    ) =>
-      ipcRenderer.invoke(
-        IPC.CHAT_UPDATE_THREAD_CONFIG,
-        projectPath,
-        threadId,
-        cfg,
-      ),
-    onEvent: (
-      projectPath: string,
-      cb: (threadId: string, event: import('@shared/types').ChatEvent) => void,
-    ) => {
-      const listener = (
-        _e: unknown,
-        ev: {
-          projectPath: string;
-          threadId: string;
-          event: import('@shared/types').ChatEvent;
-        },
-      ) => {
-        if (ev.projectPath === projectPath) cb(ev.threadId, ev.event);
-      };
-      ipcRenderer.on(IPC.CHAT_EVENT, listener);
-      return () => ipcRenderer.off(IPC.CHAT_EVENT, listener);
-    },
   },
   agents: {
     list: (projectPath: string | null) =>

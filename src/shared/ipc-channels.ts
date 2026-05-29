@@ -102,36 +102,9 @@ export const IPC = {
   LLM_COMPLETE: 'llm:complete',
   LLM_EDIT: 'llm:edit',
 
-  // v0.29: per-profile chat profiles — separate file/store from the
-  // single autocomplete config. The chat panel's provider dropdown reads
-  // these. `LLM_TEST` is reused for both surfaces (it just takes a
-  // config object regardless of source).
-  LLM_CHAT_PROFILES_LIST: 'llm:chat-profiles:list',
-  LLM_CHAT_PROFILES_UPSERT: 'llm:chat-profiles:upsert',
-  LLM_CHAT_PROFILES_DELETE: 'llm:chat-profiles:delete',
-
-  // v0.30: multi-CLI runtime support. Profiles point a non-Claude CLI
-  // (currently 'opencode') at a provider config (OpenAI-compatible base
-  // URL + key + model). Each profile gets an isolated config dir under
-  // ~/.devspace/cli-profiles/<id>/ injected via env at spawn time. Detect
-  // probes binaries on PATH so the UI can gate creation on installed.
-  CLI_PROFILES_LIST: 'cli:profiles:list',
-  CLI_PROFILES_UPSERT: 'cli:profiles:upsert',
-  CLI_PROFILES_DELETE: 'cli:profiles:delete',
+  // CLI runtime detection. Probes binaries on PATH (currently just
+  // `claude`) so the UI can version-gate features on the detected CLI.
   CLI_DETECT: 'cli:detect',
-
-  // Chat (CLI-agent rendered as conversation, alternative to PTY dock)
-  CHAT_LIST_THREADS: 'chat:list-threads',
-  CHAT_GET_THREAD: 'chat:get-thread',
-  CHAT_CREATE_THREAD: 'chat:create-thread',
-  CHAT_DELETE_THREAD: 'chat:delete-thread',
-  CHAT_SEND: 'chat:send',
-  CHAT_CANCEL: 'chat:cancel',
-  CHAT_SUBSCRIBE: 'chat:subscribe',
-  CHAT_EVENT: 'chat:event',
-  CHAT_GET_CONFIG: 'chat:get-config',
-  CHAT_SET_CONFIG: 'chat:set-config',
-  CHAT_UPDATE_THREAD_CONFIG: 'chat:update-thread-config',
 
   // Agents (~/.claude/agents/*.md and <project>/.claude/agents/*.md)
   AGENTS_LIST: 'agents:list',

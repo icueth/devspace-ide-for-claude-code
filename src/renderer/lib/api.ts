@@ -3,15 +3,9 @@ import type {
   AgentScope,
   BackgroundRunMeta,
   BackgroundRunStatus,
-  ChatConfig,
-  ChatEvent,
-  ChatSendRequest,
-  ChatThread,
-  ChatThreadMeta,
   CliCapabilities,
   CliDetectionResult,
   CliId,
-  CliProfile,
   CodeflowDoc,
   CodeflowFunctionEdge,
   CodeflowFunctionGraph,
@@ -20,7 +14,6 @@ import type {
   CodeflowGraphUpdate,
   CodeflowStatus,
   DirEntry,
-  LlmChatProfile,
   LlmCompleteRequest,
   LlmCompleteResponse,
   LlmConfig,
@@ -237,50 +230,14 @@ export interface DevspaceApi {
   llm: {
     getConfig: () => Promise<LlmConfig>;
     setConfig: (cfg: LlmConfig) => Promise<LlmConfig>;
-    test: (cfg: LlmConfig | LlmChatProfile) => Promise<LlmTestResult>;
+    test: (cfg: LlmConfig) => Promise<LlmTestResult>;
     complete: (req: LlmCompleteRequest) => Promise<LlmCompleteResponse>;
     edit: (req: LlmEditRequest) => Promise<LlmEditResponse>;
-    listChatProfiles: () => Promise<LlmChatProfile[]>;
-    upsertChatProfile: (profile: LlmChatProfile) => Promise<LlmChatProfile>;
-    deleteChatProfile: (id: string) => Promise<void>;
   };
-  // v0.30 — multi-CLI runtime profiles. Distinct from `llm` (HTTP API
-  // bindings) — this is about spawning alternative CLI binaries (OpenCode
-  // now; Codex/Gemini later) with isolated config dirs so the user's own
-  // ~/.config/<cli>/ is never mutated.
+  // CLI runtime detection — probes installed CLIs (currently just `claude`)
+  // so the renderer can version-gate features on the detected CLI version.
   cli: {
-    listProfiles: () => Promise<CliProfile[]>;
-    upsertProfile: (profile: Partial<CliProfile>) => Promise<CliProfile>;
-    deleteProfile: (id: string) => Promise<void>;
     detect: () => Promise<CliDetectionResult[]>;
-  };
-  chat: {
-    listThreads: (projectPath: string) => Promise<ChatThreadMeta[]>;
-    getThread: (
-      projectPath: string,
-      threadId: string,
-    ) => Promise<ChatThread | null>;
-    createThread: (
-      projectPath: string,
-      title?: string,
-      llmProfileId?: string,
-      cliProfileId?: string,
-    ) => Promise<ChatThread>;
-    deleteThread: (projectPath: string, threadId: string) => Promise<void>;
-    send: (req: ChatSendRequest) => Promise<{ messageId: string }>;
-    cancel: (projectPath: string, threadId?: string) => Promise<void>;
-    subscribe: (projectPath: string) => Promise<void>;
-    getConfig: (projectPath: string) => Promise<ChatConfig>;
-    setConfig: (projectPath: string, cfg: ChatConfig) => Promise<ChatConfig>;
-    updateThreadConfig: (
-      projectPath: string,
-      threadId: string,
-      cfg: ChatConfig | null,
-    ) => Promise<ChatThread>;
-    onEvent: (
-      projectPath: string,
-      cb: (threadId: string, event: ChatEvent) => void,
-    ) => () => void;
   };
   agents: {
     list: (projectPath: string | null) => Promise<AgentDef[]>;
@@ -783,28 +740,9 @@ function makeStubApi(): DevspaceApi {
       test: notWired('llm.test'),
       complete: () => Promise.resolve({ text: '', latencyMs: 0 }),
       edit: () => Promise.resolve({ text: '', latencyMs: 0 }),
-      listChatProfiles: () => Promise.resolve([]),
-      upsertChatProfile: notWired('llm.upsertChatProfile'),
-      deleteChatProfile: notWired('llm.deleteChatProfile'),
     },
     cli: {
-      listProfiles: () => Promise.resolve([]),
-      upsertProfile: notWired('cli.upsertProfile'),
-      deleteProfile: notWired('cli.deleteProfile'),
       detect: () => Promise.resolve([]),
-    },
-    chat: {
-      listThreads: () => Promise.resolve([]),
-      getThread: () => Promise.resolve(null),
-      createThread: notWired('chat.createThread'),
-      deleteThread: notWired('chat.deleteThread'),
-      send: notWired('chat.send'),
-      cancel: notWired('chat.cancel'),
-      subscribe: notWired('chat.subscribe'),
-      getConfig: () => Promise.resolve({}),
-      setConfig: notWired('chat.setConfig'),
-      updateThreadConfig: notWired('chat.updateThreadConfig'),
-      onEvent: () => () => undefined,
     },
     agents: {
       list: () => Promise.resolve([]),

@@ -27,7 +27,6 @@ app.commandLine.appendSwitch(
 import { registerAgentsIpc } from '@main/ipc/agents';
 import { registerAppIpc } from '@main/ipc/app';
 import { registerBgClaudeIpc } from '@main/ipc/bgClaude';
-import { registerChatIpc } from '@main/ipc/chat';
 import { registerCliIpc } from '@main/ipc/cli';
 import { registerCodeflowIpc } from '@main/ipc/codeflow';
 import { registerDevServerIpc } from '@main/ipc/devserver';
@@ -53,13 +52,10 @@ import {
   resolveTmuxBinary,
   tmuxSocketArgs,
 } from '@main/services/ClaudeCliLauncher';
-import { shutdownAllOpenCode } from '@main/services/OpenCodeRunner';
 import { shutdownAll as shutdownDevServers } from '@main/services/DevServerService';
 import { shutdownWatchers } from '@main/services/FileWatcherService';
 import { shutdownPreviewWatchers } from '@main/services/PreviewService';
 import { preloadLlmConfig } from '@main/services/LlmConfigService';
-import { preloadProfiles } from '@main/services/LlmChatProfilesService';
-import { preloadProfiles as preloadCliProfiles } from '@main/services/CliProfilesService';
 import { init as initMemory } from '@main/services/MemoryService';
 import {
   configureIdleReaper,
@@ -282,7 +278,6 @@ app.whenReady().then(async () => {
   registerTmuxIpc();
   registerCodeflowIpc();
   registerLlmIpc();
-  registerChatIpc();
   registerCliIpc();
   registerAgentsIpc();
   registerMcpIpc();
@@ -352,12 +347,9 @@ app.whenReady().then(async () => {
       console.error('[main] seeding-pref read failed:', (err as Error).message);
     });
 
-  // Pre-warm LLM config + chat profile caches so the first autocomplete
-  // tick / chat-panel mount doesn't pay the I/O cost. Both are
-  // best-effort and never throw.
+  // Pre-warm the LLM config cache so the first autocomplete tick doesn't
+  // pay the I/O cost. Best-effort and never throws.
   preloadLlmConfig();
-  preloadProfiles();
-  preloadCliProfiles();
 
   // v0.36.0: start the idle-CLI-tab reaper. Killing the PTY is process-
   // group-kill — claude + every MCP server child die together — so each
@@ -443,10 +435,6 @@ app.on('before-quit', (event) => {
       await Promise.all([
         shutdownDevServers(),
         shutdownPtyPool(),
-        // SEC-HIGH-5: reap any in-flight opencode children so they don't
-        // become orphan PID-1 processes still talking to the user's LLM
-        // endpoint with apiKey-bearing headers after the app exits.
-        shutdownAllOpenCode(),
       ]);
     } catch {
       /* best-effort during shutdown */

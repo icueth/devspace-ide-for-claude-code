@@ -4,7 +4,6 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { api } from '@renderer/lib/api';
 import { useRenderTrace } from '@renderer/lib/renderTrace';
-import { addFileToChat } from '@renderer/lib/chatAttach';
 import { addFileToClaudeCli } from '@renderer/lib/claudeCli';
 import { useEditorStore } from '@renderer/state/editor';
 import {
@@ -459,7 +458,6 @@ export const FileTree = memo(function FileTree({ rootPath, onOpenFile }: FileTre
         );
         e.dataTransfer.effectAllowed = 'copy';
       },
-      onAddToChat: (path) => addFileToChat(path),
       onAddToClaudeCli: (path) => addFileToClaudeCli(path),
       onNewFile: (parentDir) => handleNewFile(parentDir),
       onNewFolder: (parentDir) => handleNewFolder(parentDir),

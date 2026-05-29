@@ -3,7 +3,6 @@ import { dialog, ipcMain } from 'electron';
 import { closeWatchersForRoot } from '@main/services/FileWatcherService';
 import { shutdownProject as shutdownDevServerProject } from '@main/services/DevServerService';
 import { killProjectSessions } from '@main/services/PtyPool';
-import { disposeProject as disposeChatProject } from '@main/services/ChatTranscript';
 import { disposeProject as disposeCodeflowProject } from '@main/services/CodeflowService';
 import { disposeProject as disposeCodeflowGraphProject } from '@main/services/CodeflowGraphLive';
 import {
@@ -77,15 +76,10 @@ export function registerWorkspaceIpc(): void {
       } catch (err) {
         logger.warn(`closeWatchersForRoot failed: ${(err as Error).message}`);
       }
-      // Evict per-project in-memory service state (kills active chat/design
-      // runs + codeflow child, drops loaded threads/screens). Without this the
-      // state Maps grow unbounded across a session and runs keep streaming
-      // into a closed project. Re-opening re-hydrates from disk.
-      try {
-        await disposeChatProject(projectPath);
-      } catch (err) {
-        logger.warn(`disposeChatProject failed: ${(err as Error).message}`);
-      }
+      // Evict per-project in-memory service state (codeflow child + live
+      // graph). Without this the state Maps grow unbounded across a session
+      // and runs keep streaming into a closed project. Re-opening re-hydrates
+      // from disk.
       try {
         disposeCodeflowProject(projectPath);
       } catch (err) {
