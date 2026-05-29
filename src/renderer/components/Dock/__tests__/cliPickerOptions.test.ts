@@ -44,14 +44,19 @@ describe('buildCliPickerOptions', () => {
     expect(opts[0]?.reason).toMatch(/claude/i);
   });
 
-  it('orders groups: claude → cli → llm', () => {
+  it('orders groups: claude → cli → llm → action', () => {
     const opts = buildCliPickerOptions(
       true,
       [opencodeProfile],
       [llmProfile],
       new Set(['claude', 'opencode']),
     );
-    expect(opts.map((o) => o.group)).toEqual(['claude', 'cli', 'llm']);
+    expect(opts.map((o) => o.group)).toEqual([
+      'claude',
+      'cli',
+      'llm',
+      'action',
+    ]);
   });
 
   it('emits CLI options with the cli:<id> key prefix', () => {
@@ -93,10 +98,27 @@ describe('buildCliPickerOptions', () => {
     expect(llm?.capabilityChip).toBe('Plain text'); // HTTP chat = no tools
   });
 
-  it('handles empty profile lists (just Claude)', () => {
+  it('handles empty profile lists (Claude + background-run action)', () => {
     const opts = buildCliPickerOptions(true, [], []);
-    expect(opts).toHaveLength(1);
+    expect(opts).toHaveLength(2);
     expect(opts[0]?.id).toBe('claude');
+    expect(opts[1]?.id).toBe('action:bg-claude');
+  });
+
+  // v0.37: background-run action row
+  it('emits the action:bg-claude entry enabled when claude is installed', () => {
+    const opts = buildCliPickerOptions(true, [], []);
+    const action = opts.find((o) => o.id === 'action:bg-claude');
+    expect(action).toBeDefined();
+    expect(action?.group).toBe('action');
+    expect(action?.disabled).toBeFalsy();
+  });
+
+  it('disables the background-run action when claude binary is missing', () => {
+    const opts = buildCliPickerOptions(false, [], []);
+    const action = opts.find((o) => o.id === 'action:bg-claude');
+    expect(action?.disabled).toBe(true);
+    expect(action?.reason).toMatch(/claude/i);
   });
 });
 

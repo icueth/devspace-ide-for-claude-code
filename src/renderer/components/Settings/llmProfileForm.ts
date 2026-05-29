@@ -1,4 +1,18 @@
-import type { LlmChatProfile } from '@shared/types';
+import type { ClaudeEffort, LlmChatProfile } from '@shared/types';
+
+// v0.37: empty string in the draft means "no effort" (undefined on save).
+// The dropdown renders that as "Default (no thinking)".
+export type EffortDraft = '' | ClaudeEffort;
+
+const VALID_EFFORTS: ReadonlySet<string> = new Set<EffortDraft>([
+  '',
+  'minimal',
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+  'ultracode',
+]);
 
 // Editor draft shape — same as LlmChatProfile but with the optional
 // numeric knobs typed as user-facing strings (the inputs render strings
@@ -12,6 +26,8 @@ export interface LlmChatProfileDraft {
   model: string;
   temperature: string;
   maxTokens: string;
+  // v0.37: Anthropic extended-thinking budget tier. '' = unset (default).
+  effort: EffortDraft;
   systemPrompt: string;
   createdAt: number;
 }
@@ -23,6 +39,7 @@ export interface ProfileFormErrors {
   apiKey?: string;
   temperature?: string;
   maxTokens?: string;
+  effort?: string;
 }
 
 // Default values for a fresh profile draft. Mirrors the runner defaults
@@ -37,6 +54,7 @@ export function newProfileDraft(): LlmChatProfileDraft {
     model: 'gpt-4o-mini',
     temperature: '0.7',
     maxTokens: '1024',
+    effort: '',
     systemPrompt: '',
     createdAt: Date.now(),
   };
@@ -54,6 +72,7 @@ export function draftFromProfile(profile: LlmChatProfile): LlmChatProfileDraft {
     model: profile.model,
     temperature: profile.temperature !== undefined ? String(profile.temperature) : '0.7',
     maxTokens: profile.maxTokens !== undefined ? String(profile.maxTokens) : '1024',
+    effort: profile.effort ?? '',
     systemPrompt: profile.systemPrompt ?? '',
     createdAt: profile.createdAt,
   };
@@ -111,6 +130,13 @@ export function validateProfileForm(draft: LlmChatProfileDraft): ProfileFormErro
     }
   }
 
+  // v0.37: reject any value not in the union. The UI dropdown only emits
+  // valid values, but a draft restored from corrupt persistence could
+  // carry garbage.
+  if (!VALID_EFFORTS.has(draft.effort)) {
+    errors.effort = 'Invalid effort tier';
+  }
+
   return errors;
 }
 
@@ -139,5 +165,8 @@ export function profileFromDraft(draft: LlmChatProfileDraft): LlmChatProfile {
   }
   const sp = draft.systemPrompt.trim();
   if (sp) profile.systemPrompt = sp;
+  // v0.37: persist effort only when explicitly set (empty string drops to
+  // undefined → "default / no thinking" on the wire).
+  if (draft.effort) profile.effort = draft.effort;
   return profile;
 }

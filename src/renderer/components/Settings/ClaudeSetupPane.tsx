@@ -5,6 +5,7 @@ import { Loader2, Sparkles, XCircle } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import '@xterm/xterm/css/xterm.css';
 
+import { useClaudeVersion } from '@renderer/hooks/useClaudeVersion';
 import { api } from '@renderer/lib/api';
 import { cn } from '@renderer/lib/utils';
 
@@ -156,6 +157,11 @@ export function ClaudeSetupPane({
     };
   }, [runKey, onExit, onError]);
 
+  // v0.37: surface the detected claude CLI version so the user can verify
+  // they're on >= 2.1.154 (the build that ships /effort, /goal, /reload-
+  // skills, /code-review ultra, --bg --exec). Stub returns null when
+  // claude isn't installed — chip simply hides.
+  const { raw: claudeVersion } = useClaudeVersion();
   return (
     <div className="overflow-hidden rounded-[10px] border border-border bg-surface-2/60">
       <div className="flex items-center justify-between border-b border-border-subtle px-3 py-1.5">
@@ -163,6 +169,14 @@ export function ClaudeSetupPane({
           <Sparkles size={11} className="text-accent" />
           Claude-assisted install
           <StatusPill state={state} />
+          {claudeVersion && (
+            <span
+              className="ml-1 rounded-full bg-surface-3 px-1.5 py-[1px] text-[9px] normal-case text-text-secondary"
+              title={`claude --version: ${claudeVersion}`}
+            >
+              v{claudeVersion.replace(/^v/, '').split(/\s+/)[0]}
+            </span>
+          )}
         </div>
         {errorMsg && (
           <span className="flex items-center gap-1 text-[10.5px] text-semantic-error">

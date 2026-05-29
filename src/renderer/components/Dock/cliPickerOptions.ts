@@ -14,7 +14,12 @@ import type { CliProfile, LlmChatProfile } from '@shared/types';
 // IMPORTANT: this helper is PURE — no React, no IPC. Test-driven so the
 // chat panel's render can stay dumb.
 
-export type PickerOptionGroup = 'claude' | 'cli' | 'llm';
+// v0.37: `action` is a non-runtime row — clicking opens a modal / dispatches
+// custom behavior rather than binding the thread to a profile. Today the
+// sole action is 'bg-claude' ("Run claude in background"). Renderer code
+// matches on the id prefix to decide whether to mutate thread state or
+// trigger an action.
+export type PickerOptionGroup = 'claude' | 'cli' | 'llm' | 'action';
 
 export type CapabilityChip = 'Full' | '~90% tools' | 'Bash only' | 'Plain text';
 
@@ -114,6 +119,21 @@ export function buildCliPickerOptions(
       capabilityChip: 'Plain text',
     });
   }
+
+  // 4. v0.37 action row — opens the background-run modal. Only emitted when
+  // the claude binary is detected (we'd be spawning it). Disabled with a
+  // reason chip when claude is missing so the user sees why it's greyed.
+  options.push({
+    id: 'action:bg-claude',
+    label: 'Run claude in background',
+    sublabel: 'spawn claude --bg --exec …',
+    group: 'action',
+    capabilityChip: 'Full',
+    disabled: !claudeInstalled,
+    reason: claudeInstalled
+      ? undefined
+      : 'claude binary not detected on PATH — install Claude Code CLI',
+  });
 
   return options;
 }

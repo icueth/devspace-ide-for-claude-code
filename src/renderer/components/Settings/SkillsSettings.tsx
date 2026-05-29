@@ -711,6 +711,17 @@ function SkillRow({
             {stats.uses}
           </span>
         )}
+        {skill.effort && (
+          /* v0.37: surfaced from the skill's `effort:` frontmatter — read-only
+             badge so the user can see at a glance which skills bump the
+             thinking budget. Editor doesn't expose it yet (TODO v0.37.1). */
+          <span
+            className="shrink-0 rounded-full bg-accent/15 px-1.5 text-[9px] uppercase text-accent"
+            title={`Skill effort: ${skill.effort}`}
+          >
+            {skill.effort}
+          </span>
+        )}
       </button>
       {isReadOnly && (
         <select

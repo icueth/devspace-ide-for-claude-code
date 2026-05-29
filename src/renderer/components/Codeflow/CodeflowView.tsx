@@ -9,14 +9,20 @@ import {
   Network,
   RefreshCw,
   Sparkles,
+  Zap,
 } from 'lucide-react';
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 
 import type { CodeflowGraphStats } from '@renderer/components/Codeflow/CodeflowGraph';
 import { CodeflowGraphView } from '@renderer/components/Codeflow/CodeflowGraph';
+import { useClaudeVersion } from '@renderer/hooks/useClaudeVersion';
 import { api } from '@renderer/lib/api';
 import { cn } from '@renderer/lib/utils';
+import { claudeCliSessionId, useCliTabsStore } from '@renderer/state/cliTabs';
 import type { CodeflowDoc, CodeflowStage, CodeflowStatus } from '@shared/types';
+
+// v0.37: claude-code 2.1.154 introduced `/code-review ultra` (cloud deep review).
+const MIN_CLAUDE_FOR_ULTRA_REVIEW = { major: 2, minor: 1, patch: 154 };
 
 const MarkdownPreview = lazy(() =>
   import('@renderer/components/Editor/MarkdownPreview').then((m) => ({
@@ -131,6 +137,35 @@ export function CodeflowView({ projectPath }: CodeflowViewProps) {
     void api.codeflow.openDir(projectPath);
   }, [projectPath]);
 
+  // v0.37: Ultra-Review — find the active claude-cli tab for the project
+  // this Codeflow view is bound to, then write `/code-review ultra\r` into
+  // its PTY. Confirms first because the command is billed (deep cloud
+  // review). When no claude tab is open we surface an inline hint instead
+  // of silently no-op'ing.
+  const [ultraHint, setUltraHint] = useState<string | null>(null);
+  const onUltraReview = useCallback(() => {
+    const ok = window.confirm(
+      '/code-review ultra runs a deep cloud review. This is billed. Continue?',
+    );
+    if (!ok) return;
+    const store = useCliTabsStore.getState();
+    const activeDockedProjectId = store.activeDockedProjectId;
+    // Prefer the active docked project's active tab. Fall back to any
+    // project whose path matches — useful when the user pinned a chat
+    // for the same project under a different workspace.
+    const tab =
+      activeDockedProjectId && store.getActiveTab(activeDockedProjectId);
+    const projectId = activeDockedProjectId;
+    if (!tab || !projectId) {
+      setUltraHint('Open a Claude tab first');
+      window.setTimeout(() => setUltraHint(null), 3000);
+      return;
+    }
+    void api.pty
+      .write(claudeCliSessionId(projectId, tab.id), '/code-review ultra\r')
+      .catch(() => undefined);
+  }, []);
+
   const stage: CodeflowStage = status?.stage ?? 'idle';
   const running = isRunning(stage);
   const hasResult = (status?.docs.length ?? 0) > 0;
@@ -146,6 +181,8 @@ export function CodeflowView({ projectPath }: CodeflowViewProps) {
         onAnalyze={onAnalyze}
         onCancel={onCancel}
         onOpenDir={onOpenDir}
+        onUltraReview={onUltraReview}
+        ultraHint={ultraHint}
       />
       <ProgressBar status={status} />
       <ActivityLine status={status} running={running} />
@@ -210,6 +247,9 @@ interface ToolbarProps {
   onAnalyze: (force: boolean) => void;
   onCancel: () => void;
   onOpenDir: () => void;
+  // v0.37
+  onUltraReview: () => void;
+  ultraHint: string | null;
 }
 
 function Toolbar({
@@ -220,10 +260,14 @@ function Toolbar({
   onAnalyze,
   onCancel,
   onOpenDir,
+  onUltraReview,
+  ultraHint,
 }: ToolbarProps) {
   const stage: CodeflowStage = status?.stage ?? 'idle';
   const lastAnalyzed = status?.cache?.lastAnalyzedAt;
   const lastLabel = useMemo(() => formatRelative(lastAnalyzed), [lastAnalyzed]);
+  const { meets } = useClaudeVersion();
+  const ultraSupported = meets(MIN_CLAUDE_FOR_ULTRA_REVIEW);
 
   return (
     <div
@@ -261,6 +305,27 @@ function Toolbar({
           <Sparkles size={11.5} strokeWidth={2.2} />
           <span>{hasResult ? 'Re-analyze' : 'Generate codeflow'}</span>
         </button>
+      )}
+      {!running && (
+        <button
+          onClick={onUltraReview}
+          disabled={!ultraSupported}
+          className={cn(
+            'inline-flex h-[26px] items-center gap-1.5 rounded-[7px] border border-border-subtle bg-surface-3 px-2.5 text-[11px] text-text-secondary transition hover:border-border-hi hover:bg-surface-4 hover:text-text',
+            !ultraSupported && 'pointer-events-none opacity-40',
+          )}
+          title={
+            ultraSupported
+              ? 'Run /code-review ultra in the active Claude tab — billed cloud deep review'
+              : 'Requires claude CLI 2.1.154 or newer'
+          }
+        >
+          <Zap size={11} className="text-accent" />
+          <span>Ultra Review</span>
+        </button>
+      )}
+      {ultraHint && (
+        <span className="text-[10.5px] text-semantic-warning">{ultraHint}</span>
       )}
       {!running && hasResult && (
         <button

@@ -26,7 +26,20 @@ import * as path from 'node:path';
 import { atomicWriteAsync } from '@main/utils/atomicWrite';
 import { assertSafeBaseUrl, isSafeBaseUrl } from '@main/utils/urlSafety';
 import { createLogger } from '@shared/logger';
-import type { LlmChatProfile, LlmProvider } from '@shared/types';
+import type { ClaudeEffort, LlmChatProfile, LlmProvider } from '@shared/types';
+
+// v0.37: match every effort tier in the shared ClaudeEffort union. Kept
+// here so the persistence layer can sanity-check round-tripped values
+// from a hand-edited JSON file without importing a constant array from
+// shared/ — avoiding any cross-module enum coupling.
+const VALID_EFFORTS: ReadonlySet<string> = new Set([
+  'minimal',
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+  'ultracode',
+]);
 
 const logger = createLogger('LlmChatProfiles');
 
@@ -162,6 +175,9 @@ function sanitizeProfile(raw: unknown): LlmChatProfile | null {
   }
   if (typeof o.systemPrompt === 'string' && o.systemPrompt.trim()) {
     profile.systemPrompt = o.systemPrompt.slice(0, SYSTEM_PROMPT_CAP);
+  }
+  if (typeof o.effort === 'string' && VALID_EFFORTS.has(o.effort)) {
+    profile.effort = o.effort as ClaudeEffort;
   }
   return profile;
 }
@@ -314,6 +330,17 @@ export async function upsertProfile(
     next.systemPrompt = existing.systemPrompt;
   }
   // explicit '' / whitespace clears the prompt
+
+  // v0.37: extended-thinking budget tier. Same precedence as other
+  // optional knobs: explicit input wins, undefined preserves existing,
+  // invalid string is dropped (no error).
+  if (typeof input.effort === 'string') {
+    if (VALID_EFFORTS.has(input.effort)) {
+      next.effort = input.effort as ClaudeEffort;
+    }
+  } else if (input.effort === undefined && existing?.effort !== undefined) {
+    next.effort = existing.effort;
+  }
 
   let updatedList: LlmChatProfile[];
   if (existing) {

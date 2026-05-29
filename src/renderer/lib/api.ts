@@ -1,6 +1,8 @@
 import type {
   AgentDef,
   AgentScope,
+  BackgroundRunMeta,
+  BackgroundRunStatus,
   ChatConfig,
   ChatEvent,
   ChatSendRequest,
@@ -569,6 +571,16 @@ export interface DevspaceApi {
     openDir: (projectPath: string) => Promise<void>;
     onEvent: (cb: (event: DevlogEvent) => void) => () => void;
   };
+  // v0.37: background `claude --bg --exec` runs.
+  bgClaude: {
+    start: (command: string) => Promise<BackgroundRunMeta>;
+    list: () => Promise<BackgroundRunMeta[]>;
+    readLog: (
+      runId: string,
+      offset?: number,
+    ) => Promise<{ text: string; bytes: number; status: BackgroundRunStatus }>;
+    kill: (runId: string) => Promise<boolean>;
+  };
   forge: {
     listDrafts: (projectPath: string) => Promise<ForgeDraft[]>;
     getDraft: (draftId: string) => Promise<ForgeDraft | null>;
@@ -952,6 +964,12 @@ function makeStubApi(): DevspaceApi {
       setSettings: notWired('devlog.setSettings') as () => Promise<DevlogSettings>,
       openDir: notWired('devlog.openDir') as () => Promise<void>,
       onEvent: () => () => undefined,
+    },
+    bgClaude: {
+      start: notWired('bgClaude.start'),
+      list: () => Promise.resolve([]),
+      readLog: () => Promise.resolve({ text: '', bytes: 0, status: 'pending' }),
+      kill: () => Promise.resolve(false),
     },
     forge: {
       listDrafts: () => Promise.resolve([]),

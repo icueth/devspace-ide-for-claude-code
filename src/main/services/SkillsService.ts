@@ -12,7 +12,18 @@ import {
   getBuiltinDesignPacksDir,
 } from '@main/utils/designResourcePaths';
 import { getSeedingEnabled } from '@main/services/SkillSeedingService';
-import type { SkillDef, SkillScope } from '@shared/types';
+import type { ClaudeEffort, SkillDef, SkillScope } from '@shared/types';
+
+// v0.37: accept any of the 6 effort tiers in skill frontmatter. Unknown
+// values are dropped so a typo doesn't surface as a misleading badge.
+const VALID_EFFORTS: ReadonlySet<string> = new Set([
+  'minimal',
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+  'ultracode',
+]);
 
 const logger = createLogger('Skills');
 
@@ -643,6 +654,7 @@ function parseSkill(
     description?: string;
     model?: string;
     allowedTools?: string[];
+    effort?: ClaudeEffort;
   } = {};
   const extra: Record<string, unknown> = {};
   const lines = m[1]!.split(/\r?\n/);
@@ -688,6 +700,7 @@ function parseSkill(
     description: known.description ?? '',
     model: known.model,
     allowedTools: known.allowedTools,
+    effort: known.effort,
     extra,
     body: m[2] ?? '',
   };
@@ -701,6 +714,7 @@ function assign(
     description?: string;
     model?: string;
     allowedTools?: string[];
+    effort?: ClaudeEffort;
   },
   extra: Record<string, unknown>,
 ): void {
@@ -715,6 +729,12 @@ function assign(
     else if (typeof value === 'string' && value !== '') {
       known.allowedTools = value.split(/[,\s]+/).filter(Boolean);
     }
+  } else if (key === 'effort' && typeof value === 'string') {
+    // v0.37: tolerate any case ("High", "ultraCode", …) so hand-authored
+    // skill frontmatter doesn't have to match our exact lowercase tier.
+    const v = value.trim().toLowerCase();
+    if (VALID_EFFORTS.has(v)) known.effort = v as ClaudeEffort;
+    else extra[key] = value;
   } else extra[key] = value;
 }
 
@@ -743,6 +763,7 @@ function serializeSkill(skill: SkillDef): string {
     out.push(`allowed-tools: ${skill.allowedTools.join(', ')}`);
   }
   if (skill.model) out.push(`model: ${skill.model}`);
+  if (skill.effort) out.push(`effort: ${skill.effort}`);
   for (const [k, v] of Object.entries(skill.extra)) {
     if (k.startsWith('__line_')) {
       out.push(String(v));

@@ -5,6 +5,94 @@ All notable changes to DevSpace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.37.0] — 2026-05-29
+
+Adopt Claude Code CLI 2.1.154 — Opus 4.8, `/effort`, ultracode, `/goal`,
+`/reload-skills`, `ultrareview`, and background runs.
+
+### Added — Effort everywhere
+Claude Code 2.1.154 ships **Opus 4.8** with a six-tier effort dial:
+`minimal` → `low` → `medium` → `high` → `xhigh` → **`ultracode`**. DevSpace
+now exposes this across both chat surfaces:
+
+- **claude-cli tabs (QuickActions)** — a compact Effort `<select>` to the
+  left of the existing buttons. Picking a tier sends `/effort <tier>` to
+  the active tab and persists the choice per tab.
+- **LLM Chat Profile (Settings → LLM Chat Profile)** — an Effort field
+  appears between Model and Temperature when the provider is Anthropic
+  and the model accepts thinking (`claude-opus-4-8`, `claude-opus-4-7`,
+  `claude-sonnet-4-6`). Choosing a tier maps to the Messages API
+  `thinking: { type: 'enabled', budget_tokens }`:
+  - minimal 1024 / low 4096 / medium 8192 / high 16384 / xhigh 32768 /
+    **ultracode 64000**
+  - `max_tokens` is auto-floored to `budget_tokens + 1024` so the API
+    doesn't reject the request.
+  - Haiku 4.5 and OpenAI profiles silently ignore the field (no error).
+
+The model picker datalist gains `claude-opus-4-8` (default Opus tier),
+`claude-sonnet-4-6`, and `claude-haiku-4-5`.
+
+### Added — Goal mode (`/goal`)
+A 🎯 Goal button opens a modal; submitting sends `/goal <text>` to the
+active tab. Claude keeps working until the goal condition is satisfied.
+
+### Added — Reload skills (`/reload-skills`)
+A small refresh button sends `/reload-skills` to the active claude-cli
+tab and shows an inline "✓" — pick up newly seeded/edited skills without
+restarting the session.
+
+### Added — Ultra Review button (Codeflow toolbar)
+A new "Ultra Review" button between "Re-analyze" and "Force". Clicking
+opens a confirm dialog ("`/code-review ultra` runs a deep cloud review.
+This is billed."). On confirm it writes `/code-review ultra` to the
+active claude-cli tab; if no Claude tab is open, an inline hint is
+shown instead.
+
+### Added — Skill `effort:` frontmatter badge
+The Settings → Skills sidebar surfaces an `effort:` badge per skill (read-
+only). Skill authors can declare a recommended effort tier in their
+frontmatter; DevSpace parses and renders it. Useful for spotting which
+skills assume `ultracode` before clicking in.
+
+### Added — Background claude runs (backend only — UI in v0.37.1)
+`claude --bg --exec '<cmd>'` ships as a `BackgroundClaudeRunner` service
+with full IPC (`bg-claude:start/list/read-log/kill`), per-run log files
+at `~/.devspace/bg-runs/<runId>.log` (32 MB cap), in-memory state map.
+The UI rail (live tail + per-row kill) is **TODO(v0.37.1)** — the action
+is registered as a non-rendered picker option for now.
+
+### Added — Version gate
+DevSpace now parses `claude --version` and exposes a `meetsClaudeVersion`
+predicate. All new slash-driven UI (effort, goal, reload-skills, ultra
+review) is **gated to claude CLI ≥ 2.1.154** with a tooltip
+"Requires claude CLI 2.1.154 or newer" when the user is on an older
+binary. The LLM Chat Profile Effort field is NOT gated (it's API-side
+and works regardless of local CLI version). The Claude Setup pane gains
+a small version chip in the header.
+
+### Internal
+- `src/shared/types.ts` — `ClaudeEffort` union, `EFFORT_BUDGET_TOKENS`
+  map, `modelSupportsThinking()` predicate, `BackgroundRunStatus`,
+  `BackgroundRunMeta`, `LlmChatProfile.effort`, `CliTab.effort`,
+  `SkillDef.effort`.
+- `LlmClient.chatCompleteStreaming` accepts an `effort` option and
+  injects the `thinking` body field for whitelisted Anthropic models;
+  silently no-ops elsewhere.
+- `LlmChatProfilesService` round-trips the new `effort` field through
+  sanitize/upsert.
+- `SkillsService` parses + serializes `effort:` frontmatter.
+- New `useClaudeVersion` hook (module-level cache so multiple call
+  sites share one `cli:detect` round-trip).
+- New `BackgroundClaudeRunner` service + `bgClaude:*` IPC.
+- **+33 tests**: 14 for `EFFORT_BUDGET_TOKENS` / `modelSupportsThinking`
+  / thinking body assembly, 14 for `parseClaudeVersion` + semver
+  compare, +2 for effort form round-trip, +3 for picker action row.
+  Full suite: **1053 tests pass** (1020 → 1053).
+
+### Known TODOs deferred to v0.37.1
+- Background runs UI rail (live tail, per-row kill, status badges).
+- Skill `effort:` frontmatter **editor** (read-only badge today).
+
 ## [0.36.1] — 2026-05-28
 
 Background CLI tabs now close 12× faster than visible ones.

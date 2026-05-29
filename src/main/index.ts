@@ -26,6 +26,7 @@ app.commandLine.appendSwitch(
 
 import { registerAgentsIpc } from '@main/ipc/agents';
 import { registerAppIpc } from '@main/ipc/app';
+import { registerBgClaudeIpc } from '@main/ipc/bgClaude';
 import { registerChatIpc } from '@main/ipc/chat';
 import { registerCliIpc } from '@main/ipc/cli';
 import { registerCodeflowIpc } from '@main/ipc/codeflow';
@@ -293,6 +294,7 @@ app.whenReady().then(async () => {
   registerForgeIpc();
   registerMempalaceIpc();
   registerSetupIpc();
+  registerBgClaudeIpc();
 
   // Warm the memory index in the background so the dashboard doesn't
   // pay the walk cost on first open. ensureInit() is idempotent — every

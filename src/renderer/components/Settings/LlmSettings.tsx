@@ -23,7 +23,28 @@ import {
 import { api } from '@renderer/lib/api';
 import { cn } from '@renderer/lib/utils';
 import { useTabActive } from '@renderer/components/Settings/SettingsPage';
-import type { LlmChatProfile, LlmConfig, LlmTestResult } from '@shared/types';
+import { modelSupportsThinking } from '@shared/types';
+import type { ClaudeEffort, LlmChatProfile, LlmConfig, LlmTestResult } from '@shared/types';
+
+// v0.37: curated Anthropic model registry. Used as a datalist so the
+// existing free-text input still accepts third-party proxy ids and
+// upcoming model names without a code change.
+const ANTHROPIC_MODELS: Array<{ id: string; label: string }> = [
+  { id: 'claude-opus-4-8', label: 'Opus 4.8 (Smartest, supports effort)' },
+  { id: 'claude-opus-4-7', label: 'Opus 4.7 (supports effort)' },
+  { id: 'claude-sonnet-4-6', label: 'Sonnet 4.6 (supports effort)' },
+  { id: 'claude-haiku-4-5', label: 'Haiku 4.5' },
+];
+
+const EFFORT_OPTIONS: Array<{ value: ClaudeEffort | ''; label: string }> = [
+  { value: '', label: 'Default (no thinking)' },
+  { value: 'minimal', label: 'Minimal' },
+  { value: 'low', label: 'Low' },
+  { value: 'medium', label: 'Medium' },
+  { value: 'high', label: 'High' },
+  { value: 'xhigh', label: 'X-High' },
+  { value: 'ultracode', label: 'Ultracode' },
+];
 
 /**
  * Settings tab for the generic non-Claude LLM connection. First consumer
@@ -711,13 +732,62 @@ function ProfileEditor({
         </ProfileField>
 
         <ProfileField label="Model" error={errors.model}>
-          <ProfileInput
-            value={draft.model}
-            onChange={(v) => update('model', v)}
-            placeholder={
-              draft.provider === 'openai' ? 'gpt-4o-mini' : 'claude-haiku-4-5'
+          {draft.provider === 'anthropic' ? (
+            <>
+              <ProfileInput
+                value={draft.model}
+                onChange={(v) => update('model', v)}
+                placeholder="claude-opus-4-8"
+                list="anthropic-model-suggestions"
+              />
+              {/* Datalist keeps the input free-form for proxy ids / future models
+                  while surfacing curated Anthropic IDs as suggestions. */}
+              <datalist id="anthropic-model-suggestions">
+                {ANTHROPIC_MODELS.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.label}
+                  </option>
+                ))}
+              </datalist>
+            </>
+          ) : (
+            <ProfileInput
+              value={draft.model}
+              onChange={(v) => update('model', v)}
+              placeholder="gpt-4o-mini"
+            />
+          )}
+        </ProfileField>
+
+        {/* v0.37: extended-thinking budget tier. Anthropic + whitelisted models
+            only — OpenAI silently disables the control. The control stays
+            mounted even for OpenAI so the user sees why it's greyed out. */}
+        <ProfileField
+          label="Effort (extended thinking)"
+          hint={
+            draft.provider !== 'anthropic'
+              ? 'Anthropic-only — switch provider to enable.'
+              : modelSupportsThinking(draft.model.trim())
+                ? 'Maps to Anthropic thinking.budget_tokens. Higher = deeper reasoning, more tokens spent.'
+                : 'This model does not support extended thinking (Haiku / pre-4.6 Sonnet / pre-4.7 Opus).'
+          }
+          error={errors.effort}
+        >
+          <select
+            value={draft.effort}
+            disabled={
+              draft.provider !== 'anthropic' ||
+              !modelSupportsThinking(draft.model.trim())
             }
-          />
+            onChange={(e) => update('effort', e.target.value as typeof draft.effort)}
+            className="w-full rounded-[7px] border border-border-subtle bg-surface-3 px-3 py-1.5 font-mono text-[12px] text-text focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            {EFFORT_OPTIONS.map((o) => (
+              <option key={o.value || 'default'} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </select>
         </ProfileField>
 
         <div className="grid grid-cols-2 gap-3">
@@ -874,11 +944,13 @@ function ProfileInput({
   onChange,
   placeholder,
   type = 'text',
+  list,
 }: {
   value: string;
   onChange: (v: string) => void;
   placeholder?: string;
   type?: 'text' | 'password' | 'number';
+  list?: string;
 }) {
   return (
     <input
@@ -886,6 +958,7 @@ function ProfileInput({
       value={value}
       onChange={(e) => onChange(e.target.value)}
       placeholder={placeholder}
+      list={list}
       className="w-full rounded-[7px] border border-border-subtle bg-surface-3 px-3 py-1.5 font-mono text-[12px] text-text placeholder:text-text-dim focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/40"
     />
   );

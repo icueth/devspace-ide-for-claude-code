@@ -608,6 +608,14 @@ const api = {
       return () => ipcRenderer.off(IPC.DEVLOG_EVENTS, listener);
     },
   },
+  bgClaude: {
+    start: (command: string) =>
+      ipcRenderer.invoke(IPC.BG_CLAUDE_START, command),
+    list: () => ipcRenderer.invoke(IPC.BG_CLAUDE_LIST),
+    readLog: (runId: string, offset?: number) =>
+      ipcRenderer.invoke(IPC.BG_CLAUDE_READ_LOG, runId, offset ?? 0),
+    kill: (runId: string) => ipcRenderer.invoke(IPC.BG_CLAUDE_KILL, runId),
+  },
   forge: {
     listDrafts: (projectPath: string) =>
       ipcRenderer.invoke(IPC.FORGE_LIST_DRAFTS, projectPath),

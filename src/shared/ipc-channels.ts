@@ -308,6 +308,14 @@ export const IPC = {
   FORGE_GET_SETTINGS: 'forge:get-settings',
   FORGE_SET_SETTINGS: 'forge:set-settings',
   FORGE_EVENTS: 'forge:events',
+
+  // v0.37: background claude runs. Spawn `claude --bg --exec "<text>"`
+  // outside any PTY tab, capture logs to ~/.devspace/bg-runs/<runId>.log,
+  // and let the renderer query/poll/kill via these IPCs.
+  BG_CLAUDE_START: 'bg-claude:start',
+  BG_CLAUDE_LIST: 'bg-claude:list',
+  BG_CLAUDE_READ_LOG: 'bg-claude:read-log',
+  BG_CLAUDE_KILL: 'bg-claude:kill',
 } as const;
 
 export type IpcChannel = (typeof IPC)[keyof typeof IPC];

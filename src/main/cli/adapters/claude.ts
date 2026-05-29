@@ -22,6 +22,53 @@ import type { CliDetectionResult, CliProfile } from '@shared/types';
 
 import type { BuildSpawnArgsInput, CliAdapter, CliSpawnArgs } from '@main/cli/types';
 
+// v0.37: parsed semver tuple for the installed claude binary. Used by
+// the renderer's version-gate to disable UI for new commands (Effort,
+// Goal, Reload-skills, Ultra-Review, Background-run) when the user's
+// claude is older than 2.1.154. Defaults to "unknown" = fail-open.
+export interface ClaudeSemver {
+  major: number;
+  minor: number;
+  patch: number;
+}
+
+/**
+ * Extract a {major, minor, patch} triple from `claude --version` output.
+ * Accepts the common forms emitted across versions:
+ *   "2.1.154 (Claude Code)"
+ *   "claude 2.1.154"
+ *   "v2.1.154"
+ *   "2.1"               → patch = 0
+ *   "2"                 → minor = patch = 0
+ * Returns null when no numeric leading triple is present.
+ */
+export function parseClaudeVersion(raw: string): ClaudeSemver | null {
+  if (!raw) return null;
+  // Match the FIRST `<digits>.<digits>(.<digits>)?` token, allowing an
+  // optional leading `v` and any preceding non-digit text ("claude ", …).
+  const m = /(\d+)(?:\.(\d+))?(?:\.(\d+))?/.exec(raw);
+  if (!m) return null;
+  return {
+    major: Number(m[1]),
+    minor: Number(m[2] ?? '0'),
+    patch: Number(m[3] ?? '0'),
+  };
+}
+
+/**
+ * Compare-aware semver predicate. Returns true when `actual` >= `min`.
+ * Major beats minor beats patch; pure numeric, ignores prerelease tags.
+ */
+export function meetsClaudeVersion(
+  actual: ClaudeSemver | null,
+  min: ClaudeSemver,
+): boolean {
+  if (!actual) return false;
+  if (actual.major !== min.major) return actual.major > min.major;
+  if (actual.minor !== min.minor) return actual.minor > min.minor;
+  return actual.patch >= min.patch;
+}
+
 const execFileP = promisify(execFile);
 const logger = createLogger('claude-adapter');
 

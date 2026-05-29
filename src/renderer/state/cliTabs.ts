@@ -1,7 +1,12 @@
 import { create } from 'zustand';
 
 import { api } from '@renderer/lib/api';
-import type { CliTab, DockColumn, DockedProjectMeta } from '@shared/types';
+import type {
+  ClaudeEffort,
+  CliTab,
+  DockColumn,
+  DockedProjectMeta,
+} from '@shared/types';
 
 const LS_KEY = 'devspace:cliTabs:v1';
 
@@ -87,6 +92,14 @@ interface CliTabsState extends PersistedShape {
   removeTab: (projectId: string, tabId: string) => void;
   setActiveTab: (projectId: string, tabId: string) => void;
   renameTab: (projectId: string, tabId: string, label: string) => void;
+  // v0.37: persist the effort tier the user last picked from the
+  // ClaudeCliPane QuickActions dropdown. Pure UI continuity — does not
+  // re-send the slash command on store hydration.
+  setTabEffort: (
+    projectId: string,
+    tabId: string,
+    effort: ClaudeEffort | undefined,
+  ) => void;
   reloadTab: (projectId: string, tabId: string) => Promise<void>;
   // Multi-column dock layout. addColumn duplicates the active column's pin
   // so the new slot starts populated; the user can then click another chip
@@ -352,6 +365,20 @@ export const useCliTabsStore = create<CliTabsState>((set, get) => {
       set((prev) => {
         const tabs = (prev.tabsByProject[projectId] ?? []).map((t) =>
           t.id === tabId ? { ...t, label } : t,
+        );
+        const next: PersistedShape = {
+          ...prev,
+          tabsByProject: { ...prev.tabsByProject, [projectId]: tabs },
+        };
+        persist(next);
+        return next;
+      });
+    },
+
+    setTabEffort(projectId, tabId, effort) {
+      set((prev) => {
+        const tabs = (prev.tabsByProject[projectId] ?? []).map((t) =>
+          t.id === tabId ? { ...t, effort } : t,
         );
         const next: PersistedShape = {
           ...prev,

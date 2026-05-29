@@ -47,6 +47,64 @@ export interface LlmTestResult {
   error?: string;
 }
 
+// v0.37: claude-code 2.1.154 ships a `/effort` slash command + an Anthropic
+// extended-thinking `budget_tokens` knob. Six tiers map to the same budgets
+// claude uses internally so behavior is consistent between the CLI tab
+// (sends `/effort <level>`) and the in-app LLM chat profile (sets
+// `thinking.budget_tokens` on the Messages API call). `ultracode` is the
+// new top tier introduced with Opus 4.8.
+export type ClaudeEffort =
+  | 'minimal'
+  | 'low'
+  | 'medium'
+  | 'high'
+  | 'xhigh'
+  | 'ultracode';
+
+// v0.37: background-claude run metadata. See BackgroundClaudeRunner.
+export type BackgroundRunStatus = 'pending' | 'running' | 'done' | 'failed';
+
+export interface BackgroundRunMeta {
+  runId: string;
+  command: string;
+  status: BackgroundRunStatus;
+  startedAt: number;
+  endedAt?: number;
+  exitCode: number | null;
+  logPath: string;
+  pid?: number;
+  logBytes: number;
+}
+
+// Anthropic API requires budget_tokens >= 1024 and max_tokens > budget_tokens.
+// Values mirror the public guidance for the new effort tiers.
+export const EFFORT_BUDGET_TOKENS: Record<ClaudeEffort, number> = {
+  minimal: 1024,
+  low: 4096,
+  medium: 8192,
+  high: 16384,
+  xhigh: 32768,
+  ultracode: 64000,
+};
+
+// v0.37: extended-thinking model whitelist. Opus 4.7+ and Sonnet 4.6+ support
+// the `thinking` parameter; Haiku does not (no chain-of-thought support).
+// Pre-4.5 Opus/Sonnet (4-0 through 4-5) are excluded. We match the model id
+// against `claude-opus-4-<n>` / `claude-sonnet-4-<n>` with n >= 6 (sonnet) or
+// n >= 7 (opus). Anything else (gpt-*, haiku, third-party proxy ids) returns
+// false and effort is silently dropped from the request body.
+export function modelSupportsThinking(model: string): boolean {
+  if (!model) return false;
+  const m = model.trim().toLowerCase();
+  // Explicit Haiku exclusion — Haiku 4.5+ does not support extended thinking.
+  if (/^claude-haiku-/.test(m)) return false;
+  const opus = /^claude-opus-4-(\d+)/.exec(m);
+  if (opus) return Number(opus[1]) >= 7;
+  const sonnet = /^claude-sonnet-4-(\d+)/.exec(m);
+  if (sonnet) return Number(sonnet[1]) >= 6;
+  return false;
+}
+
 // v0.29: per-profile chat-only LLM connection. Lives ALONGSIDE LlmConfig
 // (which stays single-config for inline autocomplete). Stored as
 // `~/.devspace/llm-chat-profiles.json` → `{ profiles: LlmChatProfile[] }`.
@@ -69,6 +127,10 @@ export interface LlmChatProfile {
   // the autocomplete tunings by accident.
   temperature?: number;
   maxTokens?: number;
+  // v0.37: Anthropic-only extended-thinking budget. Maps to the Messages API
+  // `thinking: { type: 'enabled', budget_tokens }` field. Silently dropped
+  // for OpenAI providers or non-thinking models (see modelSupportsThinking).
+  effort?: ClaudeEffort;
   // Optional per-profile system prompt prepended to every turn on this
   // profile's threads. Concatenated AFTER the project memory + devlog
   // preambles so it can refer to project context.
@@ -725,6 +787,12 @@ export interface SkillDef {
   description: string;
   model?: string;
   allowedTools?: string[];
+  // v0.37: optional `effort:` frontmatter tag (claude 2.1.154+). When set,
+  // claude scales its extended-thinking budget for turns where this skill
+  // is loaded. DevSpace surfaces it as a read-only badge in the Skills
+  // settings list — we don't pass it through anywhere else; the active
+  // claude binary reads the frontmatter on its own.
+  effort?: ClaudeEffort;
   extra: Record<string, unknown>;
   body: string;
   // For plugin-scoped skills, which marketplace/plugin owns this skill.
@@ -879,6 +947,11 @@ export interface CliTab {
   // remounts and re-spawns its PTY (the previous PTY is killed by the
   // store action before the bump).
   reloadGen?: number;
+  // v0.37: last effort tier the user picked from the QuickActions dropdown
+  // for this tab. Persists across sessions so the dropdown re-mounts pre-
+  // selected. The actual `/effort <level>` slash command is sent into the
+  // PTY when the user picks — this field is for UI continuity only.
+  effort?: ClaudeEffort;
 }
 
 // Per-project shell terminal tab. The bottom-panel terminal supports many

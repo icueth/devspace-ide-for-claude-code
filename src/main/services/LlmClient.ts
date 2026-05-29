@@ -1,6 +1,11 @@
 import { assertSafeBaseUrl } from '@main/utils/urlSafety';
 import { createLogger } from '@shared/logger';
+import {
+  EFFORT_BUDGET_TOKENS,
+  modelSupportsThinking,
+} from '@shared/types';
 import type {
+  ClaudeEffort,
   LlmChatProfile,
   LlmCompleteRequest,
   LlmCompleteResponse,
@@ -484,6 +489,12 @@ export interface StreamingChatOpts {
   signal?: AbortSignal;
   maxTokens?: number;
   temperature?: number;
+  // v0.37: when set AND provider is anthropic AND the model is whitelisted
+  // (modelSupportsThinking), the request body includes
+  // `thinking: { type: 'enabled', budget_tokens: EFFORT_BUDGET_TOKENS[effort] }`
+  // and max_tokens is auto-floored to budget_tokens + 1024. Silently ignored
+  // for OpenAI / non-thinking models — no error.
+  effort?: ClaudeEffort;
   onDelta: (text: string) => void;
   onUsage?: (u: { input: number; output: number }) => void;
 }
@@ -519,7 +530,7 @@ export async function chatCompleteStreaming(
   opts: StreamingChatOpts,
 ): Promise<StreamingChatResult> {
   const t0 = Date.now();
-  const maxTokens = opts.maxTokens ?? config.maxTokens ?? 1024;
+  let maxTokens = opts.maxTokens ?? config.maxTokens ?? 1024;
   const temperature = opts.temperature ?? config.temperature ?? 0.7;
 
   if (!config.apiKey) {
@@ -533,11 +544,25 @@ export async function chatCompleteStreaming(
     return { text: '', latencyMs: Date.now() - t0, error: (err as Error).message };
   }
 
+  // v0.37: extended-thinking budget — anthropic-only, whitelist-gated.
+  // budget_tokens must be < max_tokens per Anthropic's API contract, so
+  // bump max_tokens up if the configured cap is too low.
+  let thinkingBudget: number | undefined;
+  if (
+    opts.effort &&
+    config.provider === 'anthropic' &&
+    modelSupportsThinking(config.model)
+  ) {
+    thinkingBudget = EFFORT_BUDGET_TOKENS[opts.effort];
+    maxTokens = Math.max(maxTokens, thinkingBudget + 1024);
+  }
+
   if (config.provider === 'anthropic') {
     return anthropicStream(config, messages, {
       signal: opts.signal,
       maxTokens,
       temperature,
+      thinkingBudget,
       onDelta: opts.onDelta,
       onUsage: opts.onUsage,
     }).then((r) => ({ ...r, latencyMs: Date.now() - t0 }));
@@ -721,6 +746,9 @@ async function anthropicStream(
     signal?: AbortSignal;
     maxTokens: number;
     temperature: number;
+    // v0.37: extended-thinking budget_tokens. Caller already gated on
+    // provider + model whitelist + max_tokens > budget_tokens.
+    thinkingBudget?: number;
     onDelta: (text: string) => void;
     onUsage?: (u: { input: number; output: number }) => void;
   },
@@ -746,6 +774,14 @@ async function anthropicStream(
         temperature: opts.temperature,
         stream: true,
         ...(system ? { system } : {}),
+        ...(opts.thinkingBudget
+          ? {
+              thinking: {
+                type: 'enabled',
+                budget_tokens: opts.thinkingBudget,
+              },
+            }
+          : {}),
         messages: conversation.map((m) => ({
           role: m.role,
           content: m.content,

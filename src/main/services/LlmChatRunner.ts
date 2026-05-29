@@ -101,6 +101,9 @@ export function startLlmChatRun(opts: StartLlmChatRunOptions): LlmRunHandle {
           signal: controller.signal,
           maxTokens: opts.profile.maxTokens,
           temperature: opts.profile.temperature,
+          // v0.37: forward Anthropic extended-thinking budget. chatComplete-
+          // Streaming silently drops it for OpenAI / non-thinking models.
+          effort: opts.profile.effort,
           onDelta: (text) => {
             try {
               opts.onDelta(text);

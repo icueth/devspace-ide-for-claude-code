@@ -162,4 +162,23 @@ describe('profileFromDraft', () => {
     expect(p.id).toBe('fixed-id');
     expect(p.createdAt).toBe(12345);
   });
+
+  // v0.37: effort field round-trip
+  it('persists every effort tier and drops empty effort to undefined', () => {
+    const tiers = ['minimal', 'low', 'medium', 'high', 'xhigh', 'ultracode'] as const;
+    for (const t of tiers) {
+      expect(profileFromDraft(makeDraft({ effort: t })).effort).toBe(t);
+    }
+    expect(profileFromDraft(makeDraft({ effort: '' })).effort).toBeUndefined();
+  });
+
+  it('validateProfileForm flags garbage effort values', () => {
+    // Garbage shouldn't normally reach the validator (dropdown emits union
+    // values only), but a draft restored from corrupt persistence could.
+    const errors = validateProfileForm(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      makeDraft({ effort: 'turbo' as any }),
+    );
+    expect(errors.effort).toBeDefined();
+  });
 });
