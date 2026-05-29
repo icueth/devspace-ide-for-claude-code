@@ -15,6 +15,10 @@ release
 /.claude-flow/
 /.mcp.json
 /CLAUDE.md
+# Ruflo swarm/memory runtime state, written to the project root on first
+# `ruflo swarm`/`agent`/`memory`/`session` use.
+/.swarm/
+/ruvector.db
 
 # Local tooling — mempalace mining, scratch mockups
 mempalace.yaml
