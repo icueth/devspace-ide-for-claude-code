@@ -5,6 +5,51 @@ All notable changes to DevSpace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.37.1] — 2026-05-29
+
+Effort lives in the header now — visible in both Chat and Terminal mode,
+and auto-re-applied across app restarts.
+
+### Fixed — Effort UI was hidden in Chat mode
+v0.37.0 put the Effort dropdown inside the bottom QuickActions strip,
+which only renders when the user has flipped the tab to Terminal mode.
+Most users live in Chat mode → the control was effectively invisible. To
+make it worse, claude's `/effort` is session-scoped ("this session only"),
+so after restarting DevSpace the persisted chip said one thing while
+claude itself was at the default — a silent disagreement.
+
+### Added — Effort chip in the tab header (both modes)
+A compact effort chip now sits between the running-status badge and the
+Chat/Terminal toggle, visible regardless of mode. Picking a tier:
+- Persists per-tab in the `cliTabs` store (existing v0.37.0 behavior).
+- Writes `/effort <tier>` to the same PTY both modes share.
+- Lights the chip in accent purple so the current tier is obvious at a
+  glance ("Effort: Ultracode").
+
+When no tier is set, the chip is muted and reads "Effort". When the
+local claude is older than 2.1.154 it's disabled with a "Requires claude
+CLI 2.1.154 or newer" tooltip.
+
+### Added — Auto re-apply effort on fresh claude boot
+On a fresh claude spawn, we watch the PTY data stream for known boot
+markers ("Welcome to Claude Code", "Opus 4.x is here", "/help for help")
+and re-send the persisted `/effort <tier>` 250 ms after the banner
+appears. If no banner is seen within 4 s of `running` → assume a tmux
+reattach (claude is mid-conversation) and skip — no spam mid-chat.
+
+### Internal
+- `src/renderer/components/Dock/ClaudeCliPane.tsx`:
+  - New `EffortHeaderChip` component (header surface).
+  - Effort `<select>` removed from `QuickActions`; props slim to
+    `{ onSend, disabled }` since projectId/tabId are no longer needed
+    there.
+  - New boot-banner watcher effect — uses `api.pty.onData` with a 512-byte
+    rolling buffer, marker regex, and 4 s timeout. Single-shot per
+    spawn (re-runs only on PTY restart).
+- No new tests — the change is structural and the existing `cliTabs`
+  effort store + LlmClient effort tests cover the data paths. Full
+  suite: 1053 tests pass.
+
 ## [0.37.0] — 2026-05-29
 
 Adopt Claude Code CLI 2.1.154 — Opus 4.8, `/effort`, ultracode, `/goal`,
