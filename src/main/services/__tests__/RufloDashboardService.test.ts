@@ -111,6 +111,35 @@ describe('RufloDashboardService.parseAgentList', () => {
     // `{ ok: true, agents: [] }`.
     expect(() => parseAgentList('!!! ??? !!!')).not.toThrow();
   });
+
+  it('parses the v3.10.5 ASCII pipe-table (real `ruflo agent list`)', async () => {
+    const { parseAgentList } = await import(
+      '@main/services/RufloDashboardService'
+    );
+    // Real v3.10.5 output — the ID column comes back blank (too narrow), so
+    // the display name falls back to Type and the role to Status.
+    const out = parseAgentList(
+      '\nActive Agents\n\n' +
+        '+----+-------+--------+------------+--------------+\n' +
+        '| ID | Type  | Status | Created    | Last Acti... |\n' +
+        '+----+-------+--------+------------+--------------+\n' +
+        '|    | coder | idle   | 4:44:42 PM | N/A          |\n' +
+        '+----+-------+--------+------------+--------------+\n\n' +
+        '[INFO] Total: 1 agents\n',
+    );
+    expect(out).toEqual([{ name: 'coder', role: 'idle' }]);
+  });
+
+  it('returns [] for the v3.10.5 empty agent list (no garbage from banners)', async () => {
+    const { parseAgentList } = await import(
+      '@main/services/RufloDashboardService'
+    );
+    expect(
+      parseAgentList(
+        '\nActive Agents\n\n[INFO] No agents found matching criteria\n',
+      ),
+    ).toEqual([]);
+  });
 });
 
 describe('RufloDashboardService.parseSwarmSessions', () => {
@@ -142,6 +171,38 @@ describe('RufloDashboardService.parseSwarmSessions', () => {
       '@main/services/RufloDashboardService'
     );
     expect(parseSwarmSessions('')).toEqual([]);
+  });
+
+  it('parses the v3.10.5 `session list` pipe-table', async () => {
+    const { parseSwarmSessions } = await import(
+      '@main/services/RufloDashboardService'
+    );
+    // Real v3.10.5 output (ruflo truncates long cells with a trailing "...").
+    const out = parseSwarmSessions(
+      '\nSessions\n\n' +
+        '+----------------------+----------------------+--------+--------+-------+--------------+\n' +
+        '| ID                   | Name                 | Status | Agents | Tasks | Last Updated |\n' +
+        '+----------------------+----------------------+--------+--------+-------+--------------+\n' +
+        '| session-178004784... | devspace-overlay-... | saved  |      0 |     0 | 0m ago       |\n' +
+        '+----------------------+----------------------+--------+--------+-------+--------------+\n\n' +
+        '[INFO] Showing 1 of 1 sessions\n',
+    );
+    expect(out).toEqual([
+      {
+        id: 'session-178004784...',
+        objective: 'devspace-overlay-...',
+        status: 'saved',
+      },
+    ]);
+  });
+
+  it('returns [] for the v3.10.5 empty session list', async () => {
+    const { parseSwarmSessions } = await import(
+      '@main/services/RufloDashboardService'
+    );
+    expect(
+      parseSwarmSessions('\nSessions\n\n[INFO] No sessions found\n'),
+    ).toEqual([]);
   });
 });
 
@@ -190,6 +251,22 @@ describe('RufloDashboardService.parseMemoryResults', () => {
       '@main/services/RufloDashboardService'
     );
     expect(parseMemoryResults('')).toEqual([]);
+  });
+
+  it('skips v3.10.5 search chatter — a no-hit search yields [] (not garbage)', async () => {
+    const { parseMemoryResults } = await import(
+      '@main/services/RufloDashboardService'
+    );
+    // Real v3.10.5 `memory search` output when nothing matches. The
+    // [INFO]/✅/Search-time/[WARN]/Try: lines must NOT become results.
+    const out = parseMemoryResults(
+      '[INFO] Searching: "auth jwt" (semantic)\n\n' +
+        '✅ Using sql.js (WASM SQLite, no build tools required)\n' +
+        '  Search time: 3ms\n\n' +
+        '[WARN] No results found\n' +
+        'Try: claude-flow memory store -k "key" --value "data"\n',
+    );
+    expect(out).toEqual([]);
   });
 });
 
