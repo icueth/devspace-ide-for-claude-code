@@ -5,6 +5,40 @@ All notable changes to DevSpace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.38.0-beta.7] — 2026-06-02 (prod branch, local beta — not on GH)
+
+**UI cleanup + dead-code sweep.** Removes two non-working controls from the
+Claude pane and finishes clearing the dead types/wiring left behind by the
+Chat/Teams/opencode removals. Type-check is green again. Not a public release —
+local arm64 dmg for icueit's testing.
+
+### Removed
+- **Effort dropdown** in the Claude pane header (`EffortHeaderChip`) and its
+  store plumbing (`setTabEffort`, `CliTab.effort`, the boot-time `/effort`
+  re-apply). The skill-frontmatter `effort:` feature (`ClaudeEffort`,
+  `EFFORT_BUDGET_TOKENS`, `SkillDef.effort`) is untouched.
+- **"Reload skills"** button (bottom-right of QuickActions) + its handler.
+- Dead types from the Chat/Teams removal: `LlmChatProfile`, the Chat-stream
+  union (`ChatEvent`, `ChatEventKind`, `ToolDiffPreview`/`ToolDiffHunk`/
+  `ToolDiffLine`/`ToolDiffLineKind`) and the adapter's unused `parseStreamLine`.
+- Dead `proposeFromChat`/`addSuggestion` IPC wiring in `forge.ts` (the
+  `ForgeService` functions stay, still tested).
+
+### Fixed
+- Two pre-existing type errors that were keeping `pnpm typecheck` red:
+  `BackgroundClaudeRunner` missing `logBytes`, and `ResourceToast` using the
+  removed global `JSX` namespace (now `ReactElement`). Type-check: 0 errors.
+
+### Changed
+- Default CLI tab labels now read **"Claude N"** instead of "Chat N".
+- Deduped `getClaudeDir`/`getClaudeSettingsFile` — `setupPaths.ts` re-exports
+  the single copy in `mempalacePaths.ts`.
+- Refreshed stale comments referencing the deleted ChatService / opencode /
+  LlmChatProfilesService.
+
+### Chore
+- gitignore agentdb runtime state (`agentdb.rvf`, `agentdb.rvf.lock`).
+
 ## [0.38.0-beta.6] — 2026-05-29 (prod branch, local beta — not on GH)
 
 **Ruflo onboarding guard.** The Setup-tab Ruflo card now makes the fresh-user

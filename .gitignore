@@ -19,6 +19,8 @@ release
 # `ruflo swarm`/`agent`/`memory`/`session` use.
 /.swarm/
 /ruvector.db
+/agentdb.rvf
+/agentdb.rvf.lock
 
 # Local tooling — mempalace mining, scratch mockups
 mempalace.yaml
