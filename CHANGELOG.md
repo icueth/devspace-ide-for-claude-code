@@ -5,6 +5,27 @@ All notable changes to DevSpace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.38.0-beta.8] — 2026-06-02 (prod branch, local beta — not on GH)
+
+**Post-review polish.** An independent multi-agent review of beta.7 caught
+comment-drift + two orphaned dead exports the mechanical checks (typecheck/
+tests/build) couldn't see. This finishes the sweep cleanly.
+
+### Removed
+- Orphaned dead exports `EFFORT_BUDGET_TOKENS` and `modelSupportsThinking` from
+  `shared/types.ts` — 0 consumers after the Chat / LLM-chat-profile removal
+  (verified by grep + a clean typecheck).
+
+### Changed
+- Refreshed stale comments left by the beta.7 removals: the `ClaudeEffort` doc
+  now says it's retained only for Skill frontmatter (`SkillDef.effort`);
+  `ClaudeCliPane` no longer references the removed `/effort` + `/reload-skills`
+  controls; the `CliId` comment drops its dangling `ChatThread` reference.
+
+### Verified
+- typecheck 0 errors · 766/766 tests · electron-vite build clean · dead-symbol
+  sweep clean (every removed symbol confirmed at 0 refs; live features intact).
+
 ## [0.38.0-beta.7] — 2026-06-02 (prod branch, local beta — not on GH)
 
 **UI cleanup + dead-code sweep.** Removes two non-working controls from the
