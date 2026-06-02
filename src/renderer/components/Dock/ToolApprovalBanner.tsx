@@ -8,7 +8,7 @@ import { cn } from '@renderer/lib/utils';
  * Phase 4a — bottom-anchored banner that surfaces Claude's tool-approval
  * prompts inside Terminal mode. Without this the user has to click into the
  * xterm canvas and physically type `y` for every Bash / Edit / Write call,
- * which was the main reason Chat mode (auto-approve) still felt necessary.
+ * which is tedious and error-prone.
  *
  * Wiring:
  *   - Main's ApprovalDetector fires PTY_TOOL_APPROVAL when claude prints a

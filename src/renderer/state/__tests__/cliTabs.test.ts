@@ -109,7 +109,7 @@ describe('cliTabs.setTabOverlay', () => {
             {
               id: 'tab-x',
               projectId: 'proj-3',
-              label: 'Chat 1',
+              label: 'Claude 1',
               createdAt: 0,
               overlayOpen: true,
             },

@@ -1,4 +1,4 @@
-import { PanelRight, RefreshCw, Target } from 'lucide-react';
+import { PanelRight, Target } from 'lucide-react';
 import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 
 import { useClaudeVersion } from '@renderer/hooks/useClaudeVersion';
@@ -6,7 +6,6 @@ import { api } from '@renderer/lib/api';
 import { cn } from '@renderer/lib/utils';
 import { claudeCliSessionId, useCliTabsStore } from '@renderer/state/cliTabs';
 import { useGitStore } from '@renderer/state/git';
-import type { ClaudeEffort } from '@shared/types';
 
 // v0.37: claude-code 2.1.154 introduced /effort, /goal, /reload-skills.
 // We gate the matching QuickActions controls on this version.
@@ -113,15 +112,6 @@ export function ClaudeCliPane({
     void api.pty.write(sessionId, `${cmd}\r`);
   };
 
-  // v0.37.1: on a fresh claude boot, re-apply the persisted effort so the
-  // chip stays truthful across app restarts (claude's /effort is session-
-  // scoped). We watch the data stream for the boot banner so we DON'T
-  // re-send on a tmux reattach (where claude is already mid-conversation).
-  // If no banner appears within 4s of `running`, assume reattach and bail.
-  const persistedEffort = useCliTabsStore(
-    (s) => s.tabsByProject[projectId]?.find((t) => t.id === tabId)?.effort,
-  );
-
   // Phase 3: Ruflo overlay open state — persisted per tab via cliTabs.
   // Default false on tabs that never had the field set.
   const overlayOpen = useCliTabsStore(
@@ -130,34 +120,6 @@ export function ClaudeCliPane({
       false,
   );
   const setTabOverlay = useCliTabsStore((s) => s.setTabOverlay);
-  const { meets } = useClaudeVersion();
-  const effortSupported = meets(MIN_CLAUDE_FOR_NEW_SLASH);
-  useEffect(() => {
-    if (status !== 'running' || !persistedEffort || !effortSupported) return;
-    let synced = false;
-    let buffer = '';
-    const bootMarkers = /Welcome to Claude Code|Opus 4\.\d is here|\/help for help/;
-    const timer = window.setTimeout(() => {
-      unsub?.();
-    }, 4000);
-    const unsub = api.pty.onData(sessionId, (chunk) => {
-      if (synced) return;
-      buffer = (buffer + chunk).slice(-512);
-      if (bootMarkers.test(buffer)) {
-        synced = true;
-        window.clearTimeout(timer);
-        unsub?.();
-        // Small delay so the REPL's input handler is attached before we type.
-        window.setTimeout(() => {
-          void api.pty.write(sessionId, `/effort ${persistedEffort}\r`);
-        }, 250);
-      }
-    });
-    return () => {
-      window.clearTimeout(timer);
-      unsub?.();
-    };
-  }, [status, sessionId, persistedEffort, effortSupported]);
 
   return (
     <div className="flex h-full flex-col">
@@ -206,12 +168,6 @@ export function ClaudeCliPane({
           )}
         </div>
         <div className="flex-1" />
-        <EffortHeaderChip
-          projectId={projectId}
-          tabId={tabId}
-          sessionId={sessionId}
-          disabled={status !== 'running'}
-        />
         <button
           type="button"
           onClick={() => setTabOverlay(projectId, tabId, !overlayOpen)}
@@ -346,102 +302,13 @@ const SLASH_ACTIONS: Array<{ label: string; cmd: string; primary?: boolean }> = 
   { label: 'help', cmd: '/help' },
 ];
 
-// v0.37: trimmed labels for the compact dropdown — "Faster" is friendlier
-// than "low" for an end-user term. The map sits next to the dropdown so a
-// future rename doesn't drift between the option list and the persisted
-// store value (which uses the canonical ClaudeEffort tier strings).
-const EFFORT_DROPDOWN: Array<{ value: ClaudeEffort; label: string }> = [
-  { value: 'low', label: 'Faster' },
-  { value: 'medium', label: 'Balanced' },
-  { value: 'high', label: 'Smarter' },
-  { value: 'xhigh', label: 'X-High' },
-  { value: 'ultracode', label: 'Ultracode' },
-];
-
 const VERSION_GATE_TOOLTIP = 'Requires claude CLI 2.1.154 or newer';
-
-// v0.37.1: header chip in the pane title bar. Replaces the v0.37.0 dropdown
-// that lived only in QuickActions.
-function EffortHeaderChip({
-  projectId,
-  tabId,
-  sessionId,
-  disabled,
-}: {
-  projectId: string;
-  tabId: string;
-  sessionId: string;
-  disabled: boolean;
-}) {
-  const { meets } = useClaudeVersion();
-  const supported = meets(MIN_CLAUDE_FOR_NEW_SLASH);
-  const effort = useCliTabsStore(
-    (s) => s.tabsByProject[projectId]?.find((t) => t.id === tabId)?.effort,
-  );
-  const setTabEffort = useCliTabsStore((s) => s.setTabEffort);
-
-  const onChange = (v: string): void => {
-    if (!v) return;
-    const tier = v as ClaudeEffort;
-    setTabEffort(projectId, tabId, tier);
-    void api.pty.write(sessionId, `/effort ${tier}\r`);
-  };
-
-  const label = effort
-    ? EFFORT_DROPDOWN.find((o) => o.value === effort)?.label ?? effort
-    : 'Effort';
-  const isDisabled = disabled || !supported;
-
-  return (
-    <select
-      value={effort ?? ''}
-      disabled={isDisabled}
-      onChange={(e) => onChange(e.target.value)}
-      title={
-        !supported
-          ? VERSION_GATE_TOOLTIP
-          : effort
-            ? `Current effort: ${label} — picking another tier sends /effort to this tab`
-            : 'Pick an effort tier (sends /effort to this tab)'
-      }
-      aria-label={effort ? `Effort: ${label}` : 'Set effort'}
-      className={cn(
-        'h-[22px] shrink-0 rounded-full border px-2.5 text-[10px] font-medium transition focus:outline-none',
-        effort
-          ? 'border-[rgba(168,85,247,0.4)] bg-[rgba(168,85,247,0.14)] text-[#d8b4fe] hover:bg-[rgba(168,85,247,0.2)]'
-          : 'border-border-subtle bg-surface-3 text-text-secondary hover:border-border-hi hover:text-text',
-        isDisabled && 'pointer-events-none opacity-50',
-      )}
-    >
-      <option value="" disabled>
-        {label}
-      </option>
-      {EFFORT_DROPDOWN.map((o) => (
-        <option key={o.value} value={o.value}>
-          {o.label}
-        </option>
-      ))}
-    </select>
-  );
-}
 
 function QuickActions({ onSend, disabled }: QuickActionsProps) {
   const { meets } = useClaudeVersion();
   const newSlashSupported = meets(MIN_CLAUDE_FOR_NEW_SLASH);
 
   const [goalOpen, setGoalOpen] = useState(false);
-  // v0.37: ephemeral "Skills reloaded" inline label. Self-clears after 1.5s.
-  // Cheaper than wiring through the global ResourceToastHost for a single
-  // surface and keeps the toast scoped to the action button.
-  const [reloadedAt, setReloadedAt] = useState<number | null>(null);
-
-  const onReloadSkills = (): void => {
-    onSend('/reload-skills');
-    setReloadedAt(Date.now());
-    window.setTimeout(() => {
-      setReloadedAt((curr) => (curr && Date.now() - curr >= 1400 ? null : curr));
-    }, 1500);
-  };
 
   const newSlashDisabled = disabled || !newSlashSupported;
 
@@ -501,34 +368,6 @@ function QuickActions({ onSend, disabled }: QuickActionsProps) {
             {a.label}
           </button>
         ))}
-
-        <div className="flex-1" />
-
-        {/* Reload-skills lives on the far right because it's a maintenance
-            action — not part of the everyday flow. The inline "✓ reloaded"
-            label uses the same transient-toast pattern as v0.36.0's
-            resource banner without pulling in the global host for one chip. */}
-        <button
-          onClick={onReloadSkills}
-          disabled={newSlashDisabled}
-          title={
-            newSlashSupported
-              ? 'Send /reload-skills'
-              : VERSION_GATE_TOOLTIP
-          }
-          className={cn(
-            'inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-[7px] border border-border bg-surface-3 px-2 py-1 text-[11px] text-text-secondary transition hover:border-border-hi hover:bg-surface-4 hover:text-text',
-            newSlashDisabled && 'pointer-events-none opacity-40',
-          )}
-        >
-          <RefreshCw size={11} />
-          Reload skills
-          {reloadedAt && (
-            <span className="ml-1 text-[10px] text-semantic-success">
-              ✓
-            </span>
-          )}
-        </button>
       </div>
       {goalOpen && (
         <GoalDialog

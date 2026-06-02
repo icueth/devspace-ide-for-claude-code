@@ -2,7 +2,6 @@ import { create } from 'zustand';
 
 import { api } from '@renderer/lib/api';
 import type {
-  ClaudeEffort,
   CliTab,
   DockColumn,
   DockedProjectMeta,
@@ -92,16 +91,8 @@ interface CliTabsState extends PersistedShape {
   removeTab: (projectId: string, tabId: string) => void;
   setActiveTab: (projectId: string, tabId: string) => void;
   renameTab: (projectId: string, tabId: string, label: string) => void;
-  // v0.37: persist the effort tier the user last picked from the
-  // ClaudeCliPane QuickActions dropdown. Pure UI continuity — does not
-  // re-send the slash command on store hydration.
-  setTabEffort: (
-    projectId: string,
-    tabId: string,
-    effort: ClaudeEffort | undefined,
-  ) => void;
-  // Phase 3 (Ruflo overlay): persist the drawer-open state per tab. We use
-  // the same shallow-merge-into-tabs pattern as setTabEffort.
+  // Phase 3 (Ruflo overlay): persist the drawer-open state per tab using a
+  // shallow-merge-into-tabs pattern.
   setTabOverlay: (projectId: string, tabId: string, open: boolean) => void;
   reloadTab: (projectId: string, tabId: string) => Promise<void>;
   // Multi-column dock layout. addColumn duplicates the active column's pin
@@ -186,7 +177,7 @@ export const useCliTabsStore = create<CliTabsState>((set, get) => {
       }
 
       const seedTab =
-        existing && existing.length > 0 ? existing[0]! : makeTab(project.id, 'Chat 1');
+        existing && existing.length > 0 ? existing[0]! : makeTab(project.id, 'Claude 1');
       const tabs = existing && existing.length > 0 ? existing : [seedTab];
 
       set((prev) => {
@@ -294,7 +285,7 @@ export const useCliTabsStore = create<CliTabsState>((set, get) => {
         return null;
       }
       const existing = s.tabsByProject[projectId] ?? [];
-      const tab = makeTab(projectId, `Chat ${existing.length + 1}`);
+      const tab = makeTab(projectId, `Claude ${existing.length + 1}`);
       set((prev) => {
         const next: PersistedShape = {
           ...prev,
@@ -320,7 +311,7 @@ export const useCliTabsStore = create<CliTabsState>((set, get) => {
       const tabs = (s.tabsByProject[projectId] ?? []).filter((t) => t.id !== tabId);
       // Closing the last tab undocks the project entirely — matches the
       // user's mental model: "ปิดทิ้ง" should remove the chip, not respawn.
-      // Re-opening the project from the sidebar gives a fresh Chat 1.
+      // Re-opening the project from the sidebar gives a fresh Claude 1.
       if (tabs.length === 0) {
         void api.pty.kill(claudeCliSessionId(projectId, tabId)).catch(() => undefined);
         get().undockProject(projectId);
@@ -368,20 +359,6 @@ export const useCliTabsStore = create<CliTabsState>((set, get) => {
       set((prev) => {
         const tabs = (prev.tabsByProject[projectId] ?? []).map((t) =>
           t.id === tabId ? { ...t, label } : t,
-        );
-        const next: PersistedShape = {
-          ...prev,
-          tabsByProject: { ...prev.tabsByProject, [projectId]: tabs },
-        };
-        persist(next);
-        return next;
-      });
-    },
-
-    setTabEffort(projectId, tabId, effort) {
-      set((prev) => {
-        const tabs = (prev.tabsByProject[projectId] ?? []).map((t) =>
-          t.id === tabId ? { ...t, effort } : t,
         );
         const next: PersistedShape = {
           ...prev,

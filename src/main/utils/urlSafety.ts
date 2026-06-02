@@ -61,14 +61,11 @@ export interface AssertBaseUrlOpts {
    * Plain-HTTP policy. Three semantics:
    *
    *   • `true`  (default)  — accept `http://` URLs. Preserves the
-   *                          historical behavior every existing caller
-   *                          (LlmChatProfilesService, LlmClient) relies
-   *                          on. v0.30 OpenCode CLI profiles also pass
-   *                          this because user-hosted vLLM / TGI /
-   *                          openai-compatible inference servers are
-   *                          commonly reached over plain HTTP inside a
-   *                          private VPN where TLS is terminated at
-   *                          the edge.
+   *                          historical behavior callers rely on, because
+   *                          user-hosted vLLM / TGI / openai-compatible
+   *                          inference servers are commonly reached over
+   *                          plain HTTP inside a private VPN where TLS is
+   *                          terminated at the edge.
    *   • `false`            — reject `http://` URLs after the more
    *                          specific blocklist / loopback / private
    *                          checks have fired. Strict opt-in for new

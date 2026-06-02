@@ -112,6 +112,9 @@ export async function startBackgroundRun(
     startedAt,
     exitCode: null,
     logPath,
+    // Public-meta byte count; the live counter is `written` (publicMeta maps
+    // logBytes ← written). Seeded at 0 to satisfy the BackgroundRunMeta shape.
+    logBytes: 0,
     written: 0,
     capped: false,
   };

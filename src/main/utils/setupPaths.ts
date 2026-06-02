@@ -2,11 +2,17 @@ import { app } from 'electron';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
+import { getClaudeDir, getClaudeSettingsFile } from './mempalacePaths';
+
 /**
  * Common path helpers for the Setup wizard. Mirrors the structure of
  * mempalacePaths.ts so the renderer can render absolute paths the same way
  * (~/.claude/..., ~/Code/..., etc.).
  */
+
+// Single source of truth lives in mempalacePaths.ts — re-exported here so
+// existing setupPaths importers keep their import path.
+export { getClaudeDir, getClaudeSettingsFile };
 
 function resourcesRoot(): string {
   return app.isPackaged
@@ -20,14 +26,6 @@ export function getBundledSetupHooksDir(): string {
 
 export function getBundledRtkHookFile(): string {
   return path.join(getBundledSetupHooksDir(), 'rtk-rewrite.sh');
-}
-
-export function getClaudeDir(): string {
-  return path.join(os.homedir(), '.claude');
-}
-
-export function getClaudeSettingsFile(): string {
-  return path.join(getClaudeDir(), 'settings.json');
 }
 
 export function getClaudeHooksDir(): string {

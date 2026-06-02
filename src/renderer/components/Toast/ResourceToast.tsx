@@ -1,5 +1,5 @@
 import { Sparkles, X } from 'lucide-react';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { type ReactElement, useCallback, useEffect, useRef, useState } from 'react';
 
 import { api } from '@renderer/lib/api';
 
@@ -24,7 +24,7 @@ interface Toast {
 
 let nextId = 1;
 
-export function ResourceToastHost(): JSX.Element | null {
+export function ResourceToastHost(): ReactElement | null {
   const [toasts, setToasts] = useState<Toast[]>([]);
   // Track timers per-toast id so a click-to-dismiss tears the timer
   // down too (no late setState on an already-removed toast).

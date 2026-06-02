@@ -6,18 +6,17 @@
 // concrete spawn / config-write / stream-parse logic per CLI.
 //
 // One adapter per CLI runtime. The 'claude' adapter is a thin stub that
-// only implements detect() — Claude uses the TmuxChatRunner path which
-// is already wired through ChatService. ensureConfig / buildSpawnArgs
-// throw on 'claude' so accidental misuse fails loudly.
+// only implements detect() — Claude runs through the TmuxChatRunner path.
+// ensureConfig / buildSpawnArgs throw on 'claude' so accidental misuse
+// fails loudly.
 //
 // New CLIs (Codex, Gemini, …) plug in by:
 //   1. Adding their CliId literal to the union in @shared/types
 //   2. Creating a sibling file under src/main/cli/adapters/<name>.ts
 //   3. Registering in src/main/cli/registry.ts
-//   4. Adding any required spawn branch in ChatService.sendMessage
+//   4. Wiring the new runtime into the runner that consumes the adapter
 
 import type {
-  ChatEvent,
   CliCapabilities,
   CliDetectionResult,
   CliId,
@@ -68,8 +67,7 @@ export interface CliAdapter {
    * callers wire that into the spawn env (e.g. OPENCODE_CONFIG_DIR=<dir>).
    *
    * Implementations MUST write atomically (tmp + rename) with 0o600 mode
-   * on the credential-bearing file and 0o700 on the parent dir, matching
-   * the LlmChatProfilesService pattern.
+   * on the credential-bearing file and 0o700 on the parent dir.
    */
   ensureConfig(profile: CliProfile): Promise<{ configDir: string }>;
 
@@ -79,15 +77,4 @@ export interface CliAdapter {
    * fixtures. Throws on `claude`.
    */
   buildSpawnArgs(profile: CliProfile, opts: BuildSpawnArgsInput): CliSpawnArgs;
-
-  /**
-   * Optional per-line stdout parser. Wires the runtime's stream output
-   * (e.g. opencode `--format json` line-delimited JSON events) into the
-   * normalized ChatEvent stream the ChatService broadcaster expects.
-   *
-   * Returns null when the line carries no renderer-visible signal (e.g.
-   * a keepalive heartbeat). Throwing is caught + logged by OpenCodeRunner
-   * — a malformed line must never crash the spawn watcher.
-   */
-  parseStreamLine?(line: string): ChatEvent | null;
 }

@@ -105,40 +105,6 @@ export function modelSupportsThinking(model: string): boolean {
   return false;
 }
 
-// v0.29: per-profile chat-only LLM connection. Lives ALONGSIDE LlmConfig
-// (which stays single-config for inline autocomplete). Stored as
-// `~/.devspace/llm-chat-profiles.json` → `{ profiles: LlmChatProfile[] }`.
-// User can add 0..N profiles in Settings → LLM → Chat profiles, then pick
-// one in the chat panel's provider dropdown. Selecting a profile creates
-// a new thread bound to that profileId (see ChatThread.llmProfileId).
-export interface LlmChatProfile {
-  // Stable id (UUID) generated on create — referenced by ChatThread.
-  id: string;
-  // Human-readable label shown in the dropdown and on the row card.
-  // Required, trimmed, capped at 64 chars by the service layer.
-  name: string;
-  provider: LlmProvider;
-  baseUrl: string;
-  apiKey: string;
-  model: string;
-  // Optional knobs — undefined = use sane runner defaults (1024 / 0.7).
-  // Note: chat tends to want HIGHER temperature than autocomplete (which
-  // defaults to 0.2). Different fields from LlmConfig so we don't reuse
-  // the autocomplete tunings by accident.
-  temperature?: number;
-  maxTokens?: number;
-  // v0.37: Anthropic-only extended-thinking budget. Maps to the Messages API
-  // `thinking: { type: 'enabled', budget_tokens }` field. Silently dropped
-  // for OpenAI providers or non-thinking models (see modelSupportsThinking).
-  effort?: ClaudeEffort;
-  // Optional per-profile system prompt prepended to every turn on this
-  // profile's threads. Concatenated AFTER the project memory + devlog
-  // preambles so it can refer to project context.
-  systemPrompt?: string;
-  // ms-epoch — used for stable sort order in the dropdown.
-  createdAt: number;
-}
-
 export interface LlmCompleteRequest {
   // Code before the cursor (truncated to last ~N chars on the renderer).
   prefix: string;
@@ -174,129 +140,6 @@ export interface LlmEditResponse {
   text: string;
   latencyMs: number;
   error?: string;
-}
-
-// ─── Chat (CLI agents rendered as conversation, not terminal) ───────────────
-//
-// Spawns `claude --print --output-format stream-json --verbose` per turn,
-// parses the JSONL event stream, and emits a normalized event union the
-// renderer turns into chat bubbles + tool-use pills. Same infrastructure as
-// CodeflowService's runClaude, surfaced through a different IPC channel
-// targeted at long-lived per-project chat threads instead of one-shot doc
-// generation.
-//
-// This is a TEST surface in 0.3.32-beta.x — coexists with the existing
-// PTY-backed Claude CLI dock so users can pick per-tab: TTY (interactive,
-// per-tool approval) or chat (bypass-permissions Yolo, prettier output).
-
-// Line-by-line unified diff preview for a file-mutating tool call. Built
-// in main/utils/diffPreview.ts at tool_use time so the renderer can show
-// an inline red/green/context diff inside the ToolCard. Kept as a plain
-// data shape (not a class) so it round-trips through IPC and JSON
-// persistence cleanly. See diffPreview.ts for safety caps.
-export type ToolDiffLineKind = 'add' | 'del' | 'ctx';
-
-export interface ToolDiffLine {
-  kind: ToolDiffLineKind;
-  text: string;
-  // 1-based line numbers — `add` rows carry newLine only, `del` rows
-  // carry oldLine only, `ctx` rows carry both.
-  oldLine?: number;
-  newLine?: number;
-}
-
-export interface ToolDiffHunk {
-  oldStart: number;
-  oldLen: number;
-  newStart: number;
-  newLen: number;
-  lines: ToolDiffLine[];
-  // Optional caption (e.g. "Edit 2 of 3" for MultiEdit, "cell <id>" for
-  // NotebookEdit). Omitted for single-hunk diffs.
-  label?: string;
-}
-
-export interface ToolDiffPreview {
-  path: string;
-  hunks: ToolDiffHunk[];
-  // True when input lines were clipped at MAX_LINES_PER_SIDE or hunks
-  // were clipped at MAX_HUNKS. Renderer shows a "Diff truncated" hint.
-  truncated: boolean;
-}
-
-// Lifecycle of a single backend → renderer event during a chat turn.
-export type ChatEventKind =
-  | 'text_delta'      // streaming assistant text
-  | 'thinking_delta'  // claude with thinking enabled (rendered collapsed)
-  | 'tool_use'        // start of a tool call
-  | 'tool_result'     // matching result by toolUseId
-  | 'status'          // 'system:init', 'queued', 'running', etc.
-  | 'error'           // upstream error or non-zero exit
-  | 'usage'           // final usage payload
-  | 'done'            // terminal event closing the stream
-  // Team-mode lifecycle. Sequential pipelines emit step_start / step_end
-  // around each agent's spawn; text_delta and tool_use events between
-  // them carry a `stepIndex` so the renderer can route them into the
-  // right step block. Orchestrator mode doesn't emit team_step_* — its
-  // sub-agent dispatches show up as ordinary tool_use(name="Task") that
-  // the renderer renders inline.
-  | 'team_step_start'
-  | 'team_step_end'
-  // Emitted once when claude calls AskUserQuestion. The runtime can't
-  // programmatically answer it in --print mode so we early-finalize the
-  // turn — the renderer renders the question card and shows "Waiting
-  // for your answer" instead of "Working…".
-  | 'awaiting_user_answer'
-  // v0.24: implicit Forge rating signal observed in the user turn that
-  // FOLLOWS an assistant message. Carries `forgeSignal` + the previous
-  // assistant message id so the consumer (ChatService) can look up
-  // which skills/agents were loaded for that turn.
-  | 'forge_signal';
-
-export interface ChatEvent {
-  kind: ChatEventKind;
-  // text_delta / thinking_delta carry incremental text
-  text?: string;
-  // tool_use
-  toolName?: string;
-  toolUseId?: string;
-  toolInput?: Record<string, unknown>;
-  // tool_use — Cursor-style diff stats for file-mutating tools, computed
-  // backend-side so the chip appears live during streaming (not only after
-  // a thread reload). Absent for tools that don't touch files.
-  diffStats?: {
-    additions: number;
-    deletions: number;
-    path: string;
-  };
-  // tool_use — line-by-line unified diff for the same tools. Rendered as
-  // an inline expandable diff inside the ToolCard. Same caps + path as
-  // diffStats. Absent for non-mutating tools and for inputs that exceed
-  // the safety caps in main/utils/diffPreview.ts.
-  diffPreview?: ToolDiffPreview;
-  // tool_result
-  toolResult?: string;
-  toolIsError?: boolean;
-  // status / error
-  message?: string;
-  // usage
-  inputTokens?: number;
-  outputTokens?: number;
-  // Team mode — index into ChatMessage.teamRun.steps the event targets.
-  // When undefined, the event targets the message as a whole (normal /
-  // orchestrator modes).
-  stepIndex?: number;
-  // For team_step_start: which agent slug the step is dispatching to.
-  stepAgent?: string;
-  // v0.24: forge_signal — the implicit signal kind observed in the
-  // following user message (thanks / correction / abandoned).
-  forgeSignal?: 'thanks' | 'correction' | 'abandoned';
-  // v0.24: forge_signal — id of the prior assistant message the signal
-  // refers to. The consumer looks up its `loadedSkillKeys` to fan the
-  // signal out to every loaded skill/agent.
-  prevAssistantId?: string;
-  // Wall-clock ms at which the event was observed in the main process.
-  ts: number;
 }
 
 // v0.30: multi-CLI support. Each CLI runtime is identified by a stable id;
@@ -608,11 +451,6 @@ export interface CliTab {
   // remounts and re-spawns its PTY (the previous PTY is killed by the
   // store action before the bump).
   reloadGen?: number;
-  // v0.37: last effort tier the user picked from the QuickActions dropdown
-  // for this tab. Persists across sessions so the dropdown re-mounts pre-
-  // selected. The actual `/effort <level>` slash command is sent into the
-  // PTY when the user picks — this field is for UI continuity only.
-  effort?: ClaudeEffort;
   // Phase 3 (Ruflo overlay): whether the Ruflo side drawer is open on this
   // tab. Persisted per-tab so the user's drawer choice survives reloads.
   // Default false — drawer is fully unmounted when closed (zero render

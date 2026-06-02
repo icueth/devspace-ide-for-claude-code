@@ -14,7 +14,6 @@
 import { ipcMain, type IpcMainInvokeEvent, type WebContents } from 'electron';
 
 import {
-  addSuggestion,
   cancelDraft,
   createDraft,
   deleteDraft,
@@ -30,7 +29,6 @@ import {
   listStats,
   listSuggestions,
   listUses,
-  proposeFromChat,
   recordSignal,
   recordUse,
   saveDraft,
@@ -313,10 +311,7 @@ export function registerForgeIpc(): void {
     },
   );
 
-  // Internal — not part of the renderer surface, but kept here so
-  // ChatService can call ForgeService.addSuggestion / proposeFromChat
-  // without importing the service directly through IPC.
-  void addSuggestion;
-  void proposeFromChat;
+  // getDraft is exported by ForgeService but not yet wired to an IPC
+  // handler here; reference it so the import isn't flagged unused.
   void getDraft;
 }
