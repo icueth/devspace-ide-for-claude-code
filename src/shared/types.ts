@@ -47,12 +47,10 @@ export interface LlmTestResult {
   error?: string;
 }
 
-// v0.37: claude-code 2.1.154 ships a `/effort` slash command + an Anthropic
-// extended-thinking `budget_tokens` knob. Six tiers map to the same budgets
-// claude uses internally so behavior is consistent between the CLI tab
-// (sends `/effort <level>`) and the in-app LLM chat profile (sets
-// `thinking.budget_tokens` on the Messages API call). `ultracode` is the
-// new top tier introduced with Opus 4.8.
+// Effort tiers (claude-code 2.1.154+). Retained for the Skill frontmatter
+// `effort:` tag — see SkillDef.effort, parsed by SkillsService and shown as a
+// read-only badge; the claude binary reads the frontmatter itself. `ultracode`
+// is the top tier introduced with Opus 4.8.
 export type ClaudeEffort =
   | 'minimal'
   | 'low'
@@ -74,35 +72,6 @@ export interface BackgroundRunMeta {
   logPath: string;
   pid?: number;
   logBytes: number;
-}
-
-// Anthropic API requires budget_tokens >= 1024 and max_tokens > budget_tokens.
-// Values mirror the public guidance for the new effort tiers.
-export const EFFORT_BUDGET_TOKENS: Record<ClaudeEffort, number> = {
-  minimal: 1024,
-  low: 4096,
-  medium: 8192,
-  high: 16384,
-  xhigh: 32768,
-  ultracode: 64000,
-};
-
-// v0.37: extended-thinking model whitelist. Opus 4.7+ and Sonnet 4.6+ support
-// the `thinking` parameter; Haiku does not (no chain-of-thought support).
-// Pre-4.5 Opus/Sonnet (4-0 through 4-5) are excluded. We match the model id
-// against `claude-opus-4-<n>` / `claude-sonnet-4-<n>` with n >= 6 (sonnet) or
-// n >= 7 (opus). Anything else (gpt-*, haiku, third-party proxy ids) returns
-// false and effort is silently dropped from the request body.
-export function modelSupportsThinking(model: string): boolean {
-  if (!model) return false;
-  const m = model.trim().toLowerCase();
-  // Explicit Haiku exclusion — Haiku 4.5+ does not support extended thinking.
-  if (/^claude-haiku-/.test(m)) return false;
-  const opus = /^claude-opus-4-(\d+)/.exec(m);
-  if (opus) return Number(opus[1]) >= 7;
-  const sonnet = /^claude-sonnet-4-(\d+)/.exec(m);
-  if (sonnet) return Number(sonnet[1]) >= 6;
-  return false;
 }
 
 export interface LlmCompleteRequest {
@@ -146,8 +115,8 @@ export interface LlmEditResponse {
 // 'claude' is the default and is built-in (no profile needed, uses tmux-
 // backed runner). Other CLIs (currently only 'opencode') require a
 // CliProfile that points at their provider config (OpenAI-compatible
-// endpoint + key + model). ChatThread.cliId locks a thread to one runtime
-// for transcript consistency — switching CLI = new thread, never mutates.
+// endpoint + key + model). A runtime is locked per session for transcript
+// consistency — switching CLI starts a new session, never mutates.
 export type CliId = 'claude' | 'opencode';
 
 // Capability flags published by each adapter. Renderer reads these to

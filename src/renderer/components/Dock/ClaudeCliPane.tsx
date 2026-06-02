@@ -7,8 +7,7 @@ import { cn } from '@renderer/lib/utils';
 import { claudeCliSessionId, useCliTabsStore } from '@renderer/state/cliTabs';
 import { useGitStore } from '@renderer/state/git';
 
-// v0.37: claude-code 2.1.154 introduced /effort, /goal, /reload-skills.
-// We gate the matching QuickActions controls on this version.
+// /goal needs claude-code 2.1.154+. We gate the Goal QuickAction on this.
 const MIN_CLAUDE_FOR_NEW_SLASH = { major: 2, minor: 1, patch: 154 };
 
 // xterm bundle (200KB+) only loads when the first pane mounts.
@@ -319,7 +318,7 @@ function QuickActions({ onSend, disabled }: QuickActionsProps) {
         style={{ background: 'var(--color-surface-2)' }}
       >
         {/* Goal modal trigger — opens an inline dialog that posts
-            /goal <text>. Same version-gate as /effort. */}
+            /goal <text>. Version-gated on MIN_CLAUDE_FOR_NEW_SLASH. */}
         <button
           onClick={() => setGoalOpen(true)}
           disabled={newSlashDisabled}
