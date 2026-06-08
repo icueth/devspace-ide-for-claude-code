@@ -24,7 +24,7 @@
  *   node scripts/freeze-graphify.mjs --force    # rebuild even if present
  */
 import { existsSync } from 'node:fs';
-import { mkdir, rm, readdir, rename } from 'node:fs/promises';
+import { mkdir, rename, rm } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import { tmpdir, arch as osArch, platform as osPlatform } from 'node:os';
 import { join, dirname } from 'node:path';
@@ -33,6 +33,11 @@ import { fileURLToPath } from 'node:url';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, '..');
 const OUT_DIR = join(ROOT, 'resources', 'graphify');
+// PyInstaller --onedir dist output lands here — INSIDE the repo, so it shares a
+// filesystem with OUT_DIR and the final move can be a same-device rename (which
+// preserves the onedir's symlinks + exec bits byte-for-byte). The venv + build
+// scratch stay in os.tmpdir(). Removed after each freeze; git-ignored.
+const DIST_ROOT = join(ROOT, '.graphify-build');
 const ENTRY = join(__dirname, 'graphify', 'entry.py');
 const GEN_IMPORTS = join(__dirname, 'graphify', 'gen_grammar_imports.py');
 
@@ -85,6 +90,7 @@ async function main() {
   const work = join(tmpdir(), `devspace-graphify-${key}-freeze`);
   const venvPy = join(work, 'venv', IS_WIN ? 'Scripts' : 'bin', IS_WIN ? 'python.exe' : 'python');
   await rm(work, { recursive: true, force: true });
+  await rm(DIST_ROOT, { recursive: true, force: true });
   await mkdir(work, { recursive: true });
 
   process.stdout.write(`→ ${key}: uv venv (Python ${GRAPHIFY_PYTHON}) + graphifyy[mcp]==${GRAPHIFY_VERSION}\n`);
@@ -99,7 +105,7 @@ async function main() {
 
   const piArgs = [
     '-m', 'PyInstaller', '--noconfirm', '--onedir', '--name', 'graphify',
-    '--distpath', join(work, 'dist'),
+    '--distpath', DIST_ROOT,
     '--workpath', join(work, 'build'),
     '--specpath', work,
     '--collect-binaries', 'tree_sitter',
@@ -111,17 +117,18 @@ async function main() {
   process.stdout.write(`→ ${key}: running PyInstaller\n`);
   await run(venvPy, piArgs);
 
-  // PyInstaller --onedir emits <dist>/graphify/{graphify[.exe], _internal/}.
-  // Move that tree into resources/graphify/<key>/ so the resolver finds
-  // <key>/graphify[.exe] directly (mirrors mempalace-uv/<key>/uv).
+  // PyInstaller --onedir emits <DIST_ROOT>/graphify/{graphify[.exe], _internal/}.
+  // Move that whole tree into resources/graphify/<key>/ with a SAME-DEVICE
+  // rename so the onedir's symlinks (e.g. macOS _internal/Python) + exec bits
+  // survive intact. fs.cp mangled that symlink; a cross-device rename throws
+  // EXDEV on Windows CI (temp C: vs repo D:). Building into DIST_ROOT inside the
+  // repo guarantees src + dest share a filesystem on every platform.
+  await mkdir(OUT_DIR, { recursive: true });
   await rm(finalDir, { recursive: true, force: true });
-  await mkdir(finalDir, { recursive: true });
-  const built = join(work, 'dist', 'graphify');
-  for (const entry of await readdir(built)) {
-    await rename(join(built, entry), join(finalDir, entry));
-  }
+  await rename(join(DIST_ROOT, 'graphify'), finalDir);
 
   await rm(work, { recursive: true, force: true });
+  await rm(DIST_ROOT, { recursive: true, force: true });
   process.stdout.write(`  ✓ ${join(finalDir, exeName)}\n`);
 }
 

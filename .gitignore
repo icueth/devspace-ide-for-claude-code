@@ -33,3 +33,5 @@ resources/mempalace-uv/*/uv.exe
 
 # graphify frozen binary tree — built per-OS by scripts/freeze-graphify.mjs (CI), not committed
 resources/graphify/
+# transient PyInstaller dist output (same-device build dir; removed after freeze)
+.graphify-build/
