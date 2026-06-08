@@ -6,13 +6,11 @@ import type {
   CliCapabilities,
   CliDetectionResult,
   CliId,
-  CodeflowDoc,
   CodeflowFunctionEdge,
   CodeflowFunctionGraph,
   CodeflowGraph,
   CodeflowGraphEdge,
   CodeflowGraphUpdate,
-  CodeflowStatus,
   DirEntry,
   LlmCompleteRequest,
   LlmCompleteResponse,
@@ -363,12 +361,6 @@ export interface DevspaceApi {
     ) => () => void;
   };
   codeflow: {
-    getStatus: (projectPath: string) => Promise<CodeflowStatus>;
-    analyze: (projectPath: string, opts?: { force?: boolean }) => Promise<void>;
-    cancel: (projectPath: string) => Promise<void>;
-    readDoc: (absPath: string) => Promise<string>;
-    listDocs: (projectPath: string) => Promise<CodeflowDoc[]>;
-    openDir: (projectPath: string) => Promise<void>;
     buildGraph: (projectPath: string) => Promise<CodeflowGraph>;
     buildFunctionGraph: (projectPath: string) => Promise<CodeflowFunctionGraph>;
     // Queryable graph (graphify): one-shot query/path/explain → plain text.
@@ -398,8 +390,7 @@ export interface DevspaceApi {
     ) => Promise<{ softEdges: CodeflowFunctionEdge[]; savedAt: number } | null>;
     onAugmentProgress: (projectPath: string, cb: (msg: string) => void) => () => void;
     onAugmentFunctionsProgress: (projectPath: string, cb: (msg: string) => void) => () => void;
-    onProgress: (projectPath: string, cb: (status: CodeflowStatus) => void) => () => void;
-    // v0.33 live graph sync.
+    // Live graph sync.
     subscribeGraph: (projectPath: string) => Promise<CodeflowGraph>;
     unsubscribeGraph: (projectPath: string) => Promise<void>;
     onGraphUpdated: (
@@ -801,13 +792,8 @@ function makeStubApi(): DevspaceApi {
       onChanged: () => () => undefined,
     },
     codeflow: {
-      getStatus: notWired('codeflow.getStatus'),
-      analyze: notWired('codeflow.analyze'),
-      cancel: notWired('codeflow.cancel'),
-      readDoc: notWired('codeflow.readDoc'),
-      listDocs: () => Promise.resolve([]),
-      openDir: notWired('codeflow.openDir'),
       buildGraph: notWired('codeflow.buildGraph'),
+      query: notWired('codeflow.query'),
       buildFunctionGraph: notWired('codeflow.buildFunctionGraph'),
       augmentGraph: notWired('codeflow.augmentGraph'),
       augmentCancel: notWired('codeflow.augmentCancel'),

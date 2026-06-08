@@ -170,13 +170,7 @@ export const IPC = {
   PREVIEW_SUBSCRIBE: 'preview:subscribe',
   PREVIEW_CHANGED: 'preview:changed',
 
-  // Codeflow — codebase visualization + Claude-generated architecture docs
-  CODEFLOW_GET_STATUS: 'codeflow:get-status',
-  CODEFLOW_ANALYZE: 'codeflow:analyze',
-  CODEFLOW_CANCEL: 'codeflow:cancel',
-  CODEFLOW_READ_DOC: 'codeflow:read-doc',
-  CODEFLOW_LIST_DOCS: 'codeflow:list-docs',
-  CODEFLOW_OPEN_DIR: 'codeflow:open-dir',
+  // Codeflow — graphify-backed code graph + queryable graph + augment overlay
   CODEFLOW_BUILD_GRAPH: 'codeflow:build-graph',
   CODEFLOW_BUILD_FUNCTION_GRAPH: 'codeflow:build-function-graph',
   CODEFLOW_AUGMENT_GRAPH: 'codeflow:augment-graph',
@@ -188,8 +182,7 @@ export const IPC = {
   CODEFLOW_AUGMENT_FUNCTIONS_CANCEL: 'codeflow:augment-functions-cancel',
   CODEFLOW_AUGMENT_FUNCTIONS_LOAD: 'codeflow:augment-functions-load',
   CODEFLOW_AUGMENT_FUNCTIONS_PROGRESS: 'codeflow:augment-functions-progress',
-  CODEFLOW_PROGRESS: 'codeflow:progress',
-  // v0.33 live graph sync: subscribe returns the current graph + starts
+  // Live graph sync: subscribe returns the current graph + starts
   // pushing CODEFLOW_GRAPH_UPDATED on every debounced filesystem change.
   CODEFLOW_GRAPH_SUBSCRIBE: 'codeflow:graph-subscribe',
   CODEFLOW_GRAPH_UNSUBSCRIBE: 'codeflow:graph-unsubscribe',

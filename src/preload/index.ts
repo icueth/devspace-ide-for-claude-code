@@ -346,18 +346,6 @@ const api = {
     },
   },
   codeflow: {
-    getStatus: (projectPath: string) =>
-      ipcRenderer.invoke(IPC.CODEFLOW_GET_STATUS, projectPath),
-    analyze: (projectPath: string, opts?: { force?: boolean }) =>
-      ipcRenderer.invoke(IPC.CODEFLOW_ANALYZE, projectPath, opts),
-    cancel: (projectPath: string) =>
-      ipcRenderer.invoke(IPC.CODEFLOW_CANCEL, projectPath),
-    readDoc: (absPath: string) =>
-      ipcRenderer.invoke(IPC.CODEFLOW_READ_DOC, absPath),
-    listDocs: (projectPath: string) =>
-      ipcRenderer.invoke(IPC.CODEFLOW_LIST_DOCS, projectPath),
-    openDir: (projectPath: string) =>
-      ipcRenderer.invoke(IPC.CODEFLOW_OPEN_DIR, projectPath),
     buildGraph: (projectPath: string) =>
       ipcRenderer.invoke(IPC.CODEFLOW_BUILD_GRAPH, projectPath),
     buildFunctionGraph: (projectPath: string) =>
@@ -398,20 +386,7 @@ const api = {
       ipcRenderer.on(IPC.CODEFLOW_AUGMENT_PROGRESS, listener);
       return () => ipcRenderer.off(IPC.CODEFLOW_AUGMENT_PROGRESS, listener);
     },
-    onProgress: (
-      projectPath: string,
-      cb: (status: import('@shared/types').CodeflowStatus) => void,
-    ) => {
-      const listener = (
-        _e: unknown,
-        ev: { projectPath: string; status: import('@shared/types').CodeflowStatus },
-      ) => {
-        if (ev.projectPath === projectPath) cb(ev.status);
-      };
-      ipcRenderer.on(IPC.CODEFLOW_PROGRESS, listener);
-      return () => ipcRenderer.off(IPC.CODEFLOW_PROGRESS, listener);
-    },
-    // v0.33 live graph sync.
+    // Live graph sync.
     subscribeGraph: (projectPath: string) =>
       ipcRenderer.invoke(IPC.CODEFLOW_GRAPH_SUBSCRIBE, projectPath),
     unsubscribeGraph: (projectPath: string) =>

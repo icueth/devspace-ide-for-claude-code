@@ -3,7 +3,7 @@ import { dialog, ipcMain } from 'electron';
 import { closeWatchersForRoot } from '@main/services/FileWatcherService';
 import { shutdownProject as shutdownDevServerProject } from '@main/services/DevServerService';
 import { killProjectSessions } from '@main/services/PtyPool';
-import { disposeProject as disposeCodeflowProject } from '@main/services/CodeflowService';
+import { disposeProject as disposeGraphifyProject } from '@main/services/GraphifyDriver';
 import { disposeProject as disposeCodeflowGraphProject } from '@main/services/CodeflowGraphLive';
 import {
   addWorkspace,
@@ -76,14 +76,14 @@ export function registerWorkspaceIpc(): void {
       } catch (err) {
         logger.warn(`closeWatchersForRoot failed: ${(err as Error).message}`);
       }
-      // Evict per-project in-memory service state (codeflow child + live
+      // Evict per-project in-memory service state (graphify child + live
       // graph). Without this the state Maps grow unbounded across a session
       // and runs keep streaming into a closed project. Re-opening re-hydrates
       // from disk.
       try {
-        disposeCodeflowProject(projectPath);
+        disposeGraphifyProject(projectPath);
       } catch (err) {
-        logger.warn(`disposeCodeflowProject failed: ${(err as Error).message}`);
+        logger.warn(`disposeGraphifyProject failed: ${(err as Error).message}`);
       }
       try {
         disposeCodeflowGraphProject(projectPath);

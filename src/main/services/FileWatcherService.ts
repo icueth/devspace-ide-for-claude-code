@@ -2,7 +2,6 @@ import chokidar, { type FSWatcher } from 'chokidar';
 import type { WebContents } from 'electron';
 import * as path from 'node:path';
 
-import { markStale as markCodeflowStale } from '@main/services/CodeflowService';
 import { WATCH_IGNORED } from '@main/utils/watchIgnore';
 import { IPC } from '@shared/ipc-channels';
 import { createLogger } from '@shared/logger';
@@ -89,13 +88,6 @@ export function subscribeWatch(root: string, wc: WebContents): void {
         if (!wc2.isDestroyed()) {
           wc2.send(IPC.FS_WATCH_EVENT, { root: key, dirs });
         }
-      }
-      // Best-effort: tell codeflow that this project's analysis is now stale.
-      // Codeflow's per-project state ignores the call when no analysis exists.
-      try {
-        markCodeflowStale(key);
-      } catch {
-        /* never let an observer crash the watcher */
       }
       // Tell generic observers (e.g. FS_LIST_FILES walk cache) that this root
       // changed so they can drop any cached snapshot of it.

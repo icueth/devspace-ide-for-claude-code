@@ -619,63 +619,9 @@ export interface SearchOptions {
 
 // ─── Codeflow ───────────────────────────────────────────────────────────────
 //
-// Each project gets its own analysis stored under `.devspace/codeflow/`.
-// Cache survives across sessions; freshness is judged by per-file content
-// hashes so renames-without-edit and edits-then-revert don't trigger Claude.
-
-export type CodeflowStage =
-  | 'idle'         // No job running
-  | 'walking'      // Listing files + computing hashes
-  | 'overview'     // Claude generating codebase.md (architecture overview)
-  | 'flows'        // Claude generating per-feature flow-*.md docs
-  | 'done'
-  | 'cancelled'
-  | 'error';
-
-export interface CodeflowDoc {
-  // Filename inside .devspace/codeflow/, e.g. "codebase.md", "flow-auth.md".
-  name: string;
-  // Absolute path on disk so the renderer can pass it to api.fs.readFile.
-  path: string;
-  // Modified time (ms) — lets the renderer auto-refresh open docs.
-  mtime: number;
-  size: number;
-}
-
-export interface CodeflowCacheMeta {
-  // Project root that this cache belongs to. Stored so renderer can detect
-  // a stale tab pointing at the wrong project.
-  projectPath: string;
-  // When the analysis last completed (ms epoch).
-  lastAnalyzedAt: number;
-  // Total files scanned at last analysis.
-  fileCount: number;
-  // SHA-256 over all (relPath, contentHash) pairs sorted, used to short-
-  // circuit re-runs when nothing actually changed.
-  fingerprint: string;
-}
-
-export interface CodeflowStatus {
-  stage: CodeflowStage;
-  // 0..1 — best-effort, may stay at 0 during indeterminate stages.
-  progress: number;
-  // Free-form line shown under the progress bar.
-  message: string;
-  // Surfaced after stage === 'error' so the UI can show a retry hint.
-  error: string | null;
-  // Snapshot of cache metadata if the project has been analyzed before.
-  cache: CodeflowCacheMeta | null;
-  // True when FileWatcher has observed changes since the cache was written.
-  // The renderer shows a "Re-analyze" badge based on this.
-  stale: boolean;
-  docs: CodeflowDoc[];
-}
-
-export interface CodeflowAnalyzeOptions {
-  // When true, ignore cache and re-run every stage. Defaults to false; the
-  // service will short-circuit unchanged files even on a "fresh" run.
-  force?: boolean;
-}
+// graphify (bundled binary) builds the code graph; the legacy Claude static-doc
+// generator (codebase.md / flow-*.md) and its status/doc types were removed in
+// v0.38 — the queryable graph (query/path/explain) replaces narrative docs.
 
 // ─── Codeflow function-level graph ──────────────────────────────────────────
 //
