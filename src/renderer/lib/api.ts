@@ -371,6 +371,12 @@ export interface DevspaceApi {
     openDir: (projectPath: string) => Promise<void>;
     buildGraph: (projectPath: string) => Promise<CodeflowGraph>;
     buildFunctionGraph: (projectPath: string) => Promise<CodeflowFunctionGraph>;
+    // Queryable graph (graphify): one-shot query/path/explain → plain text.
+    query: (
+      projectPath: string,
+      mode: 'query' | 'path' | 'explain',
+      args: string[],
+    ) => Promise<string>;
     augmentGraph: (
       projectPath: string,
       graph: CodeflowGraph,

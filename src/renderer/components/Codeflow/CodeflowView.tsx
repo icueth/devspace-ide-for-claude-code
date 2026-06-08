@@ -8,6 +8,7 @@ import {
   Loader2,
   Network,
   RefreshCw,
+  Search,
   Sparkles,
   Zap,
 } from 'lucide-react';
@@ -15,6 +16,7 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react
 
 import type { CodeflowGraphStats } from '@renderer/components/Codeflow/CodeflowGraph';
 import { CodeflowGraphView } from '@renderer/components/Codeflow/CodeflowGraph';
+import { QueryPanel } from '@renderer/components/Codeflow/QueryPanel';
 import { useClaudeVersion } from '@renderer/hooks/useClaudeVersion';
 import { api } from '@renderer/lib/api';
 import { cn } from '@renderer/lib/utils';
@@ -51,6 +53,8 @@ function isRunning(stage: CodeflowStage): boolean {
 // Sentinel name for the visualization tab. Stored alongside doc filenames in
 // the same activeName state so the tabs strip can render uniformly.
 const VIZ_TAB = '__viz__';
+// Sentinel for the graphify query panel (queryable graph replacing static docs).
+const QUERY_TAB = '__query__';
 
 export function CodeflowView({ projectPath }: CodeflowViewProps) {
   const [status, setStatus] = useState<CodeflowStatus | null>(null);
@@ -84,7 +88,7 @@ export function CodeflowView({ projectPath }: CodeflowViewProps) {
   // (e.g. user wiped .claude/codeflow/), fall back to viz.
   useEffect(() => {
     if (!status) return;
-    if (activeName === VIZ_TAB) return;
+    if (activeName === VIZ_TAB || activeName === QUERY_TAB) return;
     if (activeName === null) return;
     if (!status.docs.some((d) => d.name === activeName)) {
       setActiveName(status.docs[0]?.name ?? VIZ_TAB);
@@ -224,7 +228,12 @@ export function CodeflowView({ projectPath }: CodeflowViewProps) {
             )}
           </div>
         )}
-        {!hasResult && activeName !== VIZ_TAB && (
+        {activeName === QUERY_TAB && (
+          <div className="absolute inset-0">
+            <QueryPanel projectPath={projectPath} />
+          </div>
+        )}
+        {!hasResult && activeName !== VIZ_TAB && activeName !== QUERY_TAB && (
           <div className="absolute inset-0">
             <EmptyState
               status={status}
@@ -496,6 +505,14 @@ function DocsTabs({ docs, activeName, onSelect }: DocsTabsProps) {
       >
         <Network size={11} className="shrink-0" />
         <span>Visualization</span>
+      </TabButton>
+      <TabButton
+        active={activeName === QUERY_TAB}
+        onClick={() => onSelect(QUERY_TAB)}
+        title="Query the graph (graphify)"
+      >
+        <Search size={11} className="shrink-0" />
+        <span>Query</span>
       </TabButton>
       {docs.map((doc) => {
         const active = doc.name === activeName;

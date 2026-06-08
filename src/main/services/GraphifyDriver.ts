@@ -116,6 +116,67 @@ export async function buildFunctionGraph(
   return graph;
 }
 
+export type GraphifyQueryMode = 'query' | 'path' | 'explain';
+
+const QUERY_TIMEOUT_MS = 60_000;
+
+/**
+ * Run a one-shot graphify query against the cached graph.json (built by the
+ * last buildFunctionGraph). Returns graphify's plain-text result. Modes:
+ *   query   <question>  — BFS/DFS scoped subgraph for a natural-language query
+ *   path    <A> <B>     — shortest path between two symbols
+ *   explain <X>         — a node plus its neighbours
+ * Offline + read-only; never rebuilds the graph.
+ */
+export async function query(
+  projectRoot: string,
+  mode: GraphifyQueryMode,
+  args: string[],
+): Promise<string> {
+  if (!bundledGraphifyExists()) {
+    throw new Error('graphify binary is not bundled for this platform');
+  }
+  const graphPath = graphPathFor(projectRoot);
+  if (!fs.existsSync(graphPath)) {
+    throw new Error('No graph yet — open the Codeflow graph first so graphify can build it.');
+  }
+  const cleaned = args.map((a) => a.trim()).filter(Boolean);
+  if (cleaned.length === 0) throw new Error('query is empty');
+  if (mode === 'path' && cleaned.length < 2) {
+    throw new Error('path needs two nodes (from and to)');
+  }
+
+  const bin = getBundledGraphifyBinary();
+  const cliArgs = [mode, ...cleaned, '--graph', graphPath];
+  return new Promise<string>((resolve, reject) => {
+    const child = spawn(bin, cliArgs, {
+      cwd: projectRoot,
+      env: { ...process.env, GRAPHIFY_QUERY_LOG_DISABLE: '1' },
+    });
+    let stdout = '';
+    let stderr = '';
+    child.stdout?.on('data', (d) => {
+      stdout += d.toString();
+    });
+    child.stderr?.on('data', (d) => {
+      stderr += d.toString();
+    });
+    const timer = setTimeout(() => {
+      child.kill('SIGTERM');
+      reject(new Error(`graphify ${mode} timed out`));
+    }, QUERY_TIMEOUT_MS);
+    child.on('error', (err) => {
+      clearTimeout(timer);
+      reject(err);
+    });
+    child.on('exit', (code) => {
+      clearTimeout(timer);
+      if (code === 0) resolve(stdout.trim() || '(no results)');
+      else reject(new Error(`graphify ${mode} exited ${code}: ${(stderr || stdout).slice(0, 400)}`));
+    });
+  });
+}
+
 /** Kill any in-flight graphify child for a project (workspace close). */
 export function disposeProject(projectRoot: string): void {
   const child = activeChildren.get(projectRoot);

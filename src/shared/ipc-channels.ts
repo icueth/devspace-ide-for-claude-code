@@ -194,6 +194,9 @@ export const IPC = {
   CODEFLOW_GRAPH_SUBSCRIBE: 'codeflow:graph-subscribe',
   CODEFLOW_GRAPH_UNSUBSCRIBE: 'codeflow:graph-unsubscribe',
   CODEFLOW_GRAPH_UPDATED: 'codeflow:graph-updated',
+  // Queryable graph (graphify): one-shot query/path/explain over the cached
+  // graph.json. Returns graphify's plain-text result.
+  CODEFLOW_QUERY: 'codeflow:query',
 
   // Memory system (v0.19)
   MEMORY_LIST_PROJECTS: 'memory:list-projects',

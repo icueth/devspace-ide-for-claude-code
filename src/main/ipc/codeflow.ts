@@ -5,7 +5,11 @@ import { assertInWorkspace } from '@main/utils/pathScope';
 // Functions view is now powered by the bundled graphify binary (graphify→
 // CodeflowFunctionGraph adapter) instead of the in-house TS extractor. Same
 // signature + return shape, so this handler and the renderer are unchanged.
-import { buildFunctionGraph } from '@main/services/GraphifyDriver';
+import {
+  buildFunctionGraph,
+  query as graphifyQuery,
+  type GraphifyQueryMode,
+} from '@main/services/GraphifyDriver';
 import { buildGraph } from '@main/services/CodeflowGraphAnalyzer';
 import {
   augmentFunctionGraph,
@@ -105,6 +109,21 @@ export function registerCodeflowIpc(): void {
     async (_event, projectPath: string) => {
       const safe = await assertInWorkspace(projectPath);
       return buildFunctionGraph(safe);
+    },
+  );
+
+  ipcMain.handle(
+    IPC.CODEFLOW_QUERY,
+    async (_event, projectPath: string, mode: string, args: unknown): Promise<string> => {
+      const safe = await assertInWorkspace(projectPath);
+      // Validate at the boundary: mode is a known verb, args is string[].
+      if (mode !== 'query' && mode !== 'path' && mode !== 'explain') {
+        throw new Error(`CODEFLOW_QUERY: invalid mode "${mode}"`);
+      }
+      if (!Array.isArray(args) || args.some((a) => typeof a !== 'string')) {
+        throw new Error('CODEFLOW_QUERY: args must be a string array');
+      }
+      return graphifyQuery(safe, mode as GraphifyQueryMode, args as string[]);
     },
   );
 
