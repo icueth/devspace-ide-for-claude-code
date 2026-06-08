@@ -2,7 +2,10 @@ import { ipcMain, shell } from 'electron';
 import * as path from 'node:path';
 
 import { assertInWorkspace } from '@main/utils/pathScope';
-import { buildFunctionGraph } from '@main/services/CodeflowFunctionAnalyzer';
+// Functions view is now powered by the bundled graphify binary (graphify→
+// CodeflowFunctionGraph adapter) instead of the in-house TS extractor. Same
+// signature + return shape, so this handler and the renderer are unchanged.
+import { buildFunctionGraph } from '@main/services/GraphifyDriver';
 import { buildGraph } from '@main/services/CodeflowGraphAnalyzer';
 import {
   augmentFunctionGraph,

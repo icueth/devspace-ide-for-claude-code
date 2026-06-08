@@ -1,0 +1,2830 @@
+{
+  "nodes": [
+    {
+      "id": "tests_diffpreview_test",
+      "label": "diffPreview.test.ts",
+      "file_type": "code",
+      "source_file": "__tests__/diffPreview.test.ts",
+      "source_location": "L1",
+      "_origin": "ast"
+    },
+    {
+      "id": "tests_diffstats_test",
+      "label": "diffStats.test.ts",
+      "file_type": "code",
+      "source_file": "__tests__/diffStats.test.ts",
+      "source_location": "L1",
+      "_origin": "ast"
+    },
+    {
+      "id": "tests_direntries_test",
+      "label": "dirEntries.test.ts",
+      "file_type": "code",
+      "source_file": "__tests__/dirEntries.test.ts",
+      "source_location": "L1",
+      "_origin": "ast"
+    },
+    {
+      "id": "tests_direntries_test_makeentries",
+      "label": "makeEntries()",
+      "file_type": "code",
+      "source_file": "__tests__/dirEntries.test.ts",
+      "source_location": "L7",
+      "_origin": "ast"
+    },
+    {
+      "id": "tests_graphifypaths_test",
+      "label": "graphifyPaths.test.ts",
+      "file_type": "code",
+      "source_file": "__tests__/graphifyPaths.test.ts",
+      "source_location": "L1",
+      "_origin": "ast"
+    },
+    {
+      "id": "tests_urlsafety_test",
+      "label": "urlSafety.test.ts",
+      "file_type": "code",
+      "source_file": "__tests__/urlSafety.test.ts",
+      "source_location": "L1",
+      "_origin": "ast"
+    },
+    {
+      "id": "tests_watchignore_test",
+      "label": "watchIgnore.test.ts",
+      "file_type": "code",
+      "source_file": "__tests__/watchIgnore.test.ts",
+      "source_location": "L1",
+      "_origin": "ast"
+    },
+    {
+      "id": "atomicwrite",
+      "label": "atomicWrite.ts",
+      "file_type": "code",
+      "source_file": "atomicWrite.ts",
+      "source_location": "L1",
+      "_origin": "ast"
+    },
+    {
+      "id": "atomicwrite_sleep",
+      "label": "sleep()",
+      "file_type": "code",
+      "source_file": "atomicWrite.ts",
+      "source_location": "L8",
+      "_origin": "ast"
+    },
+    {
+      "id": "atomicwrite_renamewithretry",
+      "label": "renameWithRetry()",
+      "file_type": "code",
+      "source_file": "atomicWrite.ts",
+      "source_location": "L12",
+      "_origin": "ast"
+    },
+    {
+      "id": "atomicwrite_atomicwriteopts",
+      "label": "AtomicWriteOpts",
+      "file_type": "code",
+      "source_file": "atomicWrite.ts",
+      "source_location": "L33",
+      "_origin": "ast"
+    },
+    {
+      "id": "atomicwrite_atomicwriteasync",
+      "label": "atomicWriteAsync()",
+      "file_type": "code",
+      "source_file": "atomicWrite.ts",
+      "source_location": "L54",
+      "_origin": "ast"
+    },
+    {
+      "id": "builtinpackpaths",
+      "label": "builtinPackPaths.ts",
+      "file_type": "code",
+      "source_file": "builtinPackPaths.ts",
+      "source_location": "L1",
+      "_origin": "ast"
+    },
+    {
+      "id": "builtinpackpaths_getbuiltinpacksdir",
+      "label": "getBuiltinPacksDir()",
+      "file_type": "code",
+      "source_file": "builtinPackPaths.ts",
+      "source_location": "L13",
+      "_origin": "ast"
+    },
+    {
+      "id": "builtinpackpaths_getbuiltinagentsdir",
+      "label": "getBuiltinAgentsDir()",
+      "file_type": "code",
+      "source_file": "builtinPackPaths.ts",
+      "source_location": "L23",
+      "_origin": "ast"
+    },
+    {
+      "id": "builtinpackpaths_getbuiltinskillsdir",
+      "label": "getBuiltinSkillsDir()",
+      "file_type": "code",
+      "source_file": "builtinPackPaths.ts",
+      "source_location": "L27",
+      "_origin": "ast"
+    },
+    {
+      "id": "builtinpackpaths_builtinpacksexist",
+      "label": "builtinPacksExist()",
+      "file_type": "code",
+      "source_file": "builtinPackPaths.ts",
+      "source_location": "L35",
+      "_origin": "ast"
+    },
+    {
+      "id": "designresourcepaths",
+      "label": "designResourcePaths.ts",
+      "file_type": "code",
+      "source_file": "designResourcePaths.ts",
+      "source_location": "L1",
+      "_origin": "ast"
+    },
+    {
+      "id": "designresourcepaths_getbuiltindesignpacksdir",
+      "label": "getBuiltinDesignPacksDir()",
+      "file_type": "code",
+      "source_file": "designResourcePaths.ts",
+      "source_location": "L18",
+      "_origin": "ast"
+    },
+    {
+      "id": "designresourcepaths_getbuiltindesignskillsdir",
+      "label": "getBuiltinDesignSkillsDir()",
+      "file_type": "code",
+      "source_file": "designResourcePaths.ts",
+      "source_location": "L31",
+      "_origin": "ast"
+    },
+    {
+      "id": "designresourcepaths_getbuiltindesignsystemsdir",
+      "label": "getBuiltinDesignSystemsDir()",
+      "file_type": "code",
+      "source_file": "designResourcePaths.ts",
+      "source_location": "L36",
+      "_origin": "ast"
+    },
+    {
+      "id": "designresourcepaths_designpacksexist",
+      "label": "designPacksExist()",
+      "file_type": "code",
+      "source_file": "designResourcePaths.ts",
+      "source_location": "L46",
+      "_origin": "ast"
+    },
+    {
+      "id": "diffpreview",
+      "label": "diffPreview.ts",
+      "file_type": "code",
+      "source_file": "diffPreview.ts",
+      "source_location": "L1",
+      "_origin": "ast"
+    },
+    {
+      "id": "diffpreview_difflinekind",
+      "label": "DiffLineKind",
+      "file_type": "code",
+      "source_file": "diffPreview.ts",
+      "source_location": "L21",
+      "_origin": "ast"
+    },
+    {
+      "id": "diffpreview_diffline",
+      "label": "DiffLine",
+      "file_type": "code",
+      "source_file": "diffPreview.ts",
+      "source_location": "L23",
+      "_origin": "ast"
+    },
+    {
+      "id": "diffpreview_diffhunk",
+      "label": "DiffHunk",
+      "file_type": "code",
+      "source_file": "diffPreview.ts",
+      "source_location": "L35",
+      "_origin": "ast"
+    },
+    {
+      "id": "diffpreview_diffpreview",
+      "label": "DiffPreview",
+      "file_type": "code",
+      "source_file": "diffPreview.ts",
+      "source_location": "L49",
+      "_origin": "ast"
+    },
+    {
+      "id": "diffpreview_file_mutating_tools",
+      "label": "FILE_MUTATING_TOOLS",
+      "file_type": "code",
+      "source_file": "diffPreview.ts",
+      "source_location": "L58",
+      "_origin": "ast"
+    },
+    {
+      "id": "diffpreview_splitlines",
+      "label": "splitLines()",
+      "file_type": "code",
+      "source_file": "diffPreview.ts",
+      "source_location": "L76",
+      "_origin": "ast"
+    },
+    {
+      "id": "diffpreview_truncateline",
+      "label": "truncateLine()",
+      "file_type": "code",
+      "source_file": "diffPreview.ts",
+      "source_location": "L90",
+      "_origin": "ast"
+    },
+    {
+      "id": "diffpreview_difflineslcs",
+      "label": "diffLinesLCS()",
+      "file_type": "code",
+      "source_file": "diffPreview.ts",
+      "source_location": "L97",
+      "_origin": "ast"
+    },
+    {
+      "id": "diffpreview_editlike",
+      "label": "EditLike",
+      "file_type": "code",
+      "source_file": "diffPreview.ts",
+      "source_location": "L156",
+      "_origin": "ast"
+    },
+    {
+      "id": "diffpreview_hunkfromedit",
+      "label": "hunkFromEdit()",
+      "file_type": "code",
+      "source_file": "diffPreview.ts",
+      "source_location": "L161",
+      "_origin": "ast"
+    },
+    {
+      "id": "diffpreview_computetooldiffpreview",
+      "label": "computeToolDiffPreview()",
+      "file_type": "code",
+      "source_file": "diffPreview.ts",
+      "source_location": "L190",
+      "_origin": "ast"
+    },
+    {
+      "id": "diffstats",
+      "label": "diffStats.ts",
+      "file_type": "code",
+      "source_file": "diffStats.ts",
+      "source_location": "L1",
+      "_origin": "ast"
+    },
+    {
+      "id": "diffstats_diffstats",
+      "label": "DiffStats",
+      "file_type": "code",
+      "source_file": "diffStats.ts",
+      "source_location": "L11",
+      "_origin": "ast"
+    },
+    {
+      "id": "diffstats_file_mutating_tools",
+      "label": "FILE_MUTATING_TOOLS",
+      "file_type": "code",
+      "source_file": "diffStats.ts",
+      "source_location": "L19",
+      "_origin": "ast"
+    },
+    {
+      "id": "diffstats_known_notebook_edit_modes",
+      "label": "KNOWN_NOTEBOOK_EDIT_MODES",
+      "file_type": "code",
+      "source_file": "diffStats.ts",
+      "source_location": "L37",
+      "_origin": "ast"
+    },
+    {
+      "id": "diffstats_countlines",
+      "label": "countLines()",
+      "file_type": "code",
+      "source_file": "diffStats.ts",
+      "source_location": "L50",
+      "_origin": "ast"
+    },
+    {
+      "id": "diffstats_mayberelativize",
+      "label": "maybeRelativize()",
+      "file_type": "code",
+      "source_file": "diffStats.ts",
+      "source_location": "L71",
+      "_origin": "ast"
+    },
+    {
+      "id": "diffstats_editlike",
+      "label": "EditLike",
+      "file_type": "code",
+      "source_file": "diffStats.ts",
+      "source_location": "L87",
+      "_origin": "ast"
+    },
+    {
+      "id": "diffstats_statsfromedit",
+      "label": "statsFromEdit()",
+      "file_type": "code",
+      "source_file": "diffStats.ts",
+      "source_location": "L92",
+      "_origin": "ast"
+    },
+    {
+      "id": "diffstats_computetooldiffstats",
+      "label": "computeToolDiffStats()",
+      "file_type": "code",
+      "source_file": "diffStats.ts",
+      "source_location": "L115",
+      "_origin": "ast"
+    },
+    {
+      "id": "direntries",
+      "label": "dirEntries.ts",
+      "file_type": "code",
+      "source_file": "dirEntries.ts",
+      "source_location": "L1",
+      "_origin": "ast"
+    },
+    {
+      "id": "direntries_capdirentries",
+      "label": "capDirEntries()",
+      "file_type": "code",
+      "source_file": "dirEntries.ts",
+      "source_location": "L20",
+      "_origin": "ast"
+    },
+    {
+      "id": "graphifypaths",
+      "label": "graphifyPaths.ts",
+      "file_type": "code",
+      "source_file": "graphifyPaths.ts",
+      "source_location": "L1",
+      "_origin": "ast"
+    },
+    {
+      "id": "graphifypaths_resourcesroot",
+      "label": "resourcesRoot()",
+      "file_type": "code",
+      "source_file": "graphifyPaths.ts",
+      "source_location": "L15",
+      "_origin": "ast"
+    },
+    {
+      "id": "graphifypaths_platformkey",
+      "label": "platformKey()",
+      "file_type": "code",
+      "source_file": "graphifyPaths.ts",
+      "source_location": "L21",
+      "_origin": "ast"
+    },
+    {
+      "id": "graphifypaths_getbundledgraphifydir",
+      "label": "getBundledGraphifyDir()",
+      "file_type": "code",
+      "source_file": "graphifyPaths.ts",
+      "source_location": "L31",
+      "_origin": "ast"
+    },
+    {
+      "id": "graphifypaths_getbundledgraphifybinary",
+      "label": "getBundledGraphifyBinary()",
+      "file_type": "code",
+      "source_file": "graphifyPaths.ts",
+      "source_location": "L37",
+      "_origin": "ast"
+    },
+    {
+      "id": "graphifypaths_bundledgraphifyexists",
+      "label": "bundledGraphifyExists()",
+      "file_type": "code",
+      "source_file": "graphifyPaths.ts",
+      "source_location": "L42",
+      "_origin": "ast"
+    },
+    {
+      "id": "mempalacepaths",
+      "label": "mempalacePaths.ts",
+      "file_type": "code",
+      "source_file": "mempalacePaths.ts",
+      "source_location": "L1",
+      "_origin": "ast"
+    },
+    {
+      "id": "mempalacepaths_resourcesroot",
+      "label": "resourcesRoot()",
+      "file_type": "code",
+      "source_file": "mempalacePaths.ts",
+      "source_location": "L16",
+      "_origin": "ast"
+    },
+    {
+      "id": "mempalacepaths_platformkey",
+      "label": "platformKey()",
+      "file_type": "code",
+      "source_file": "mempalacePaths.ts",
+      "source_location": "L22",
+      "_origin": "ast"
+    },
+    {
+      "id": "mempalacepaths_getbundleduvdir",
+      "label": "getBundledUvDir()",
+      "file_type": "code",
+      "source_file": "mempalacePaths.ts",
+      "source_location": "L34",
+      "_origin": "ast"
+    },
+    {
+      "id": "mempalacepaths_getbundleduvbinary",
+      "label": "getBundledUvBinary()",
+      "file_type": "code",
+      "source_file": "mempalacePaths.ts",
+      "source_location": "L40",
+      "_origin": "ast"
+    },
+    {
+      "id": "mempalacepaths_bundleduvexists",
+      "label": "bundledUvExists()",
+      "file_type": "code",
+      "source_file": "mempalacePaths.ts",
+      "source_location": "L45",
+      "_origin": "ast"
+    },
+    {
+      "id": "mempalacepaths_getbundledhooksdir",
+      "label": "getBundledHooksDir()",
+      "file_type": "code",
+      "source_file": "mempalacePaths.ts",
+      "source_location": "L53",
+      "_origin": "ast"
+    },
+    {
+      "id": "mempalacepaths_getuvtoolbindir",
+      "label": "getUvToolBinDir()",
+      "file_type": "code",
+      "source_file": "mempalacePaths.ts",
+      "source_location": "L65",
+      "_origin": "ast"
+    },
+    {
+      "id": "mempalacepaths_getclaudedir",
+      "label": "getClaudeDir()",
+      "file_type": "code",
+      "source_file": "mempalacePaths.ts",
+      "source_location": "L75",
+      "_origin": "ast"
+    },
+    {
+      "id": "mempalacepaths_getclaudesettingsfile",
+      "label": "getClaudeSettingsFile()",
+      "file_type": "code",
+      "source_file": "mempalacePaths.ts",
+      "source_location": "L79",
+      "_origin": "ast"
+    },
+    {
+      "id": "mempalacepaths_getinstalledhooksdir",
+      "label": "getInstalledHooksDir()",
+      "file_type": "code",
+      "source_file": "mempalacePaths.ts",
+      "source_location": "L83",
+      "_origin": "ast"
+    },
+    {
+      "id": "mempalacepaths_getmempalaceconfigfile",
+      "label": "getMempalaceConfigFile()",
+      "file_type": "code",
+      "source_file": "mempalacePaths.ts",
+      "source_location": "L87",
+      "_origin": "ast"
+    },
+    {
+      "id": "mempalacepaths_resolvepalacedir",
+      "label": "resolvePalaceDir()",
+      "file_type": "code",
+      "source_file": "mempalacePaths.ts",
+      "source_location": "L101",
+      "_origin": "ast"
+    },
+    {
+      "id": "mempalacepaths_getdefaultvaultdir",
+      "label": "getDefaultVaultDir()",
+      "file_type": "code",
+      "source_file": "mempalacePaths.ts",
+      "source_location": "L128",
+      "_origin": "ast"
+    },
+    {
+      "id": "pathscope_test",
+      "label": "pathScope.test.ts",
+      "file_type": "code",
+      "source_file": "pathScope.test.ts",
+      "source_location": "L1",
+      "_origin": "ast"
+    },
+    {
+      "id": "pathscope",
+      "label": "pathScope.ts",
+      "file_type": "code",
+      "source_file": "pathScope.ts",
+      "source_location": "L1",
+      "_origin": "ast"
+    },
+    {
+      "id": "pathscope_home",
+      "label": "HOME",
+      "file_type": "code",
+      "source_file": "pathScope.ts",
+      "source_location": "L7",
+      "_origin": "ast"
+    },
+    {
+      "id": "pathscope_global_claude",
+      "label": "GLOBAL_CLAUDE",
+      "file_type": "code",
+      "source_file": "pathScope.ts",
+      "source_location": "L8",
+      "_origin": "ast"
+    },
+    {
+      "id": "pathscope_getworkspaceroots",
+      "label": "getWorkspaceRoots()",
+      "file_type": "code",
+      "source_file": "pathScope.ts",
+      "source_location": "L14",
+      "_origin": "ast"
+    },
+    {
+      "id": "pathscope_invalidateworkspacerootscache",
+      "label": "invalidateWorkspaceRootsCache()",
+      "file_type": "code",
+      "source_file": "pathScope.ts",
+      "source_location": "L23",
+      "_origin": "ast"
+    },
+    {
+      "id": "pathscope_rejectiftraversal",
+      "label": "rejectIfTraversal()",
+      "file_type": "code",
+      "source_file": "pathScope.ts",
+      "source_location": "L28",
+      "_origin": "ast"
+    },
+    {
+      "id": "pathscope_isunder",
+      "label": "isUnder()",
+      "file_type": "code",
+      "source_file": "pathScope.ts",
+      "source_location": "L35",
+      "_origin": "ast"
+    },
+    {
+      "id": "pathscope_assertinworkspace",
+      "label": "assertInWorkspace()",
+      "file_type": "code",
+      "source_file": "pathScope.ts",
+      "source_location": "L45",
+      "_origin": "ast"
+    },
+    {
+      "id": "pathscope_assertallowedsettingspath",
+      "label": "assertAllowedSettingsPath()",
+      "file_type": "code",
+      "source_file": "pathScope.ts",
+      "source_location": "L63",
+      "_origin": "ast"
+    },
+    {
+      "id": "pathscope_assertregularfile",
+      "label": "assertRegularFile()",
+      "file_type": "code",
+      "source_file": "pathScope.ts",
+      "source_location": "L87",
+      "_origin": "ast"
+    },
+    {
+      "id": "pathscope_assertgitref",
+      "label": "assertGitRef()",
+      "file_type": "code",
+      "source_file": "pathScope.ts",
+      "source_location": "L98",
+      "_origin": "ast"
+    },
+    {
+      "id": "pathscope_assertrelativepath",
+      "label": "assertRelativePath()",
+      "file_type": "code",
+      "source_file": "pathScope.ts",
+      "source_location": "L108",
+      "_origin": "ast"
+    },
+    {
+      "id": "pathscope_reserved_keys",
+      "label": "RESERVED_KEYS",
+      "file_type": "code",
+      "source_file": "pathScope.ts",
+      "source_location": "L119",
+      "_origin": "ast"
+    },
+    {
+      "id": "pathscope_assertsafekey",
+      "label": "assertSafeKey()",
+      "file_type": "code",
+      "source_file": "pathScope.ts",
+      "source_location": "L122",
+      "_origin": "ast"
+    },
+    {
+      "id": "setuppaths",
+      "label": "setupPaths.ts",
+      "file_type": "code",
+      "source_file": "setupPaths.ts",
+      "source_location": "L1",
+      "_origin": "ast"
+    },
+    {
+      "id": "setuppaths_resourcesroot",
+      "label": "resourcesRoot()",
+      "file_type": "code",
+      "source_file": "setupPaths.ts",
+      "source_location": "L17",
+      "_origin": "ast"
+    },
+    {
+      "id": "setuppaths_getbundledsetuphooksdir",
+      "label": "getBundledSetupHooksDir()",
+      "file_type": "code",
+      "source_file": "setupPaths.ts",
+      "source_location": "L23",
+      "_origin": "ast"
+    },
+    {
+      "id": "setuppaths_getbundledrtkhookfile",
+      "label": "getBundledRtkHookFile()",
+      "file_type": "code",
+      "source_file": "setupPaths.ts",
+      "source_location": "L27",
+      "_origin": "ast"
+    },
+    {
+      "id": "setuppaths_getclaudehooksdir",
+      "label": "getClaudeHooksDir()",
+      "file_type": "code",
+      "source_file": "setupPaths.ts",
+      "source_location": "L31",
+      "_origin": "ast"
+    },
+    {
+      "id": "setuppaths_getinstalledrtkhookfile",
+      "label": "getInstalledRtkHookFile()",
+      "file_type": "code",
+      "source_file": "setupPaths.ts",
+      "source_location": "L35",
+      "_origin": "ast"
+    },
+    {
+      "id": "setuppaths_commonbinpaths",
+      "label": "commonBinPaths()",
+      "file_type": "code",
+      "source_file": "setupPaths.ts",
+      "source_location": "L45",
+      "_origin": "ast"
+    },
+    {
+      "id": "setuppaths_enrichedpath",
+      "label": "enrichedPath()",
+      "file_type": "code",
+      "source_file": "setupPaths.ts",
+      "source_location": "L59",
+      "_origin": "ast"
+    },
+    {
+      "id": "shellenv",
+      "label": "shellEnv.ts",
+      "file_type": "code",
+      "source_file": "shellEnv.ts",
+      "source_location": "L1",
+      "_origin": "ast"
+    },
+    {
+      "id": "shellenv_logger",
+      "label": "logger",
+      "file_type": "code",
+      "source_file": "shellEnv.ts",
+      "source_location": "L16",
+      "_origin": "ast"
+    },
+    {
+      "id": "shellenv_parsenullseparatedenv",
+      "label": "parseNullSeparatedEnv()",
+      "file_type": "code",
+      "source_file": "shellEnv.ts",
+      "source_location": "L23",
+      "_origin": "ast"
+    },
+    {
+      "id": "shellenv_readshellenv",
+      "label": "readShellEnv()",
+      "file_type": "code",
+      "source_file": "shellEnv.ts",
+      "source_location": "L35",
+      "_origin": "ast"
+    },
+    {
+      "id": "shellenv_resolveinteractiveshellenv",
+      "label": "resolveInteractiveShellEnv()",
+      "file_type": "code",
+      "source_file": "shellEnv.ts",
+      "source_location": "L86",
+      "_origin": "ast"
+    },
+    {
+      "id": "shellenv_clearshellenvcache",
+      "label": "clearShellEnvCache()",
+      "file_type": "code",
+      "source_file": "shellEnv.ts",
+      "source_location": "L119",
+      "_origin": "ast"
+    },
+    {
+      "id": "shellenv_getcachedshellenv",
+      "label": "getCachedShellEnv()",
+      "file_type": "code",
+      "source_file": "shellEnv.ts",
+      "source_location": "L124",
+      "_origin": "ast"
+    },
+    {
+      "id": "shellenv_getshellpreferredhome",
+      "label": "getShellPreferredHome()",
+      "file_type": "code",
+      "source_file": "shellEnv.ts",
+      "source_location": "L129",
+      "_origin": "ast"
+    },
+    {
+      "id": "urlsafety",
+      "label": "urlSafety.ts",
+      "file_type": "code",
+      "source_file": "urlSafety.ts",
+      "source_location": "L1",
+      "_origin": "ast"
+    },
+    {
+      "id": "urlsafety_host_blocklist",
+      "label": "HOST_BLOCKLIST",
+      "file_type": "code",
+      "source_file": "urlSafety.ts",
+      "source_location": "L15",
+      "_origin": "ast"
+    },
+    {
+      "id": "urlsafety_isloopback",
+      "label": "isLoopback()",
+      "file_type": "code",
+      "source_file": "urlSafety.ts",
+      "source_location": "L25",
+      "_origin": "ast"
+    },
+    {
+      "id": "urlsafety_isprivateipv4",
+      "label": "isPrivateIpv4()",
+      "file_type": "code",
+      "source_file": "urlSafety.ts",
+      "source_location": "L36",
+      "_origin": "ast"
+    },
+    {
+      "id": "urlsafety_isprivateipv6",
+      "label": "isPrivateIpv6()",
+      "file_type": "code",
+      "source_file": "urlSafety.ts",
+      "source_location": "L46",
+      "_origin": "ast"
+    },
+    {
+      "id": "urlsafety_assertbaseurlopts",
+      "label": "AssertBaseUrlOpts",
+      "file_type": "code",
+      "source_file": "urlSafety.ts",
+      "source_location": "L52",
+      "_origin": "ast"
+    },
+    {
+      "id": "urlsafety_assertsafebaseurl",
+      "label": "assertSafeBaseUrl()",
+      "file_type": "code",
+      "source_file": "urlSafety.ts",
+      "source_location": "L83",
+      "_origin": "ast"
+    },
+    {
+      "id": "urlsafety_issafebaseurl",
+      "label": "isSafeBaseUrl()",
+      "file_type": "code",
+      "source_file": "urlSafety.ts",
+      "source_location": "L135",
+      "_origin": "ast"
+    },
+    {
+      "id": "watchignore",
+      "label": "watchIgnore.ts",
+      "file_type": "code",
+      "source_file": "watchIgnore.ts",
+      "source_location": "L1",
+      "_origin": "ast"
+    },
+    {
+      "id": "watchignore_watch_ignored",
+      "label": "WATCH_IGNORED",
+      "file_type": "code",
+      "source_file": "watchIgnore.ts",
+      "source_location": "L17",
+      "_origin": "ast"
+    },
+    {
+      "id": "watchignore_iswatcherignored",
+      "label": "isWatcherIgnored()",
+      "file_type": "code",
+      "source_file": "watchIgnore.ts",
+      "source_location": "L53",
+      "_origin": "ast"
+    }
+  ],
+  "edges": [
+    {
+      "source": "tests_diffpreview_test",
+      "target": "vitest",
+      "relation": "imports_from",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "__tests__/diffPreview.test.ts",
+      "source_location": "L1",
+      "weight": 1.0
+    },
+    {
+      "source": "tests_diffpreview_test",
+      "target": "diffpreview",
+      "relation": "imports_from",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "__tests__/diffPreview.test.ts",
+      "source_location": "L2",
+      "weight": 1.0
+    },
+    {
+      "source": "tests_diffpreview_test",
+      "target": "diffpreview_computetooldiffpreview",
+      "relation": "imports",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "__tests__/diffPreview.test.ts",
+      "source_location": "L2",
+      "weight": 1.0
+    },
+    {
+      "source": "tests_diffstats_test",
+      "target": "vitest",
+      "relation": "imports_from",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "__tests__/diffStats.test.ts",
+      "source_location": "L1",
+      "weight": 1.0
+    },
+    {
+      "source": "tests_diffstats_test",
+      "target": "diffstats",
+      "relation": "imports_from",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "__tests__/diffStats.test.ts",
+      "source_location": "L3",
+      "weight": 1.0
+    },
+    {
+      "source": "tests_diffstats_test",
+      "target": "diffstats_computetooldiffstats",
+      "relation": "imports",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "__tests__/diffStats.test.ts",
+      "source_location": "L3",
+      "weight": 1.0
+    },
+    {
+      "source": "tests_diffstats_test",
+      "target": "diffstats_countlines",
+      "relation": "imports",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "__tests__/diffStats.test.ts",
+      "source_location": "L3",
+      "weight": 1.0
+    },
+    {
+      "source": "tests_diffstats_test",
+      "target": "diffstats_mayberelativize",
+      "relation": "imports",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "__tests__/diffStats.test.ts",
+      "source_location": "L3",
+      "weight": 1.0
+    },
+    {
+      "source": "tests_direntries_test",
+      "target": "vitest",
+      "relation": "imports_from",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "__tests__/dirEntries.test.ts",
+      "source_location": "L1",
+      "weight": 1.0
+    },
+    {
+      "source": "tests_direntries_test",
+      "target": "users_icue_code_ai_devspace_src_shared_types_ts",
+      "relation": "imports_from",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "__tests__/dirEntries.test.ts",
+      "source_location": "L3",
+      "weight": 1.0
+    },
+    {
+      "source": "tests_direntries_test",
+      "target": "shared_types_direntry",
+      "relation": "imports",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "__tests__/dirEntries.test.ts",
+      "source_location": "L3",
+      "weight": 1.0
+    },
+    {
+      "source": "tests_direntries_test",
+      "target": "direntries",
+      "relation": "imports_from",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "__tests__/dirEntries.test.ts",
+      "source_location": "L5",
+      "weight": 1.0
+    },
+    {
+      "source": "tests_direntries_test",
+      "target": "direntries_capdirentries",
+      "relation": "imports",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "__tests__/dirEntries.test.ts",
+      "source_location": "L5",
+      "weight": 1.0
+    },
+    {
+      "source": "tests_direntries_test",
+      "target": "utils_direntries_max_dir_entries",
+      "relation": "imports",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "__tests__/dirEntries.test.ts",
+      "source_location": "L5",
+      "weight": 1.0
+    },
+    {
+      "source": "tests_direntries_test",
+      "target": "tests_direntries_test_makeentries",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "__tests__/dirEntries.test.ts",
+      "source_location": "L7",
+      "weight": 1.0
+    },
+    {
+      "source": "tests_graphifypaths_test",
+      "target": "vitest",
+      "relation": "imports_from",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "__tests__/graphifyPaths.test.ts",
+      "source_location": "L1",
+      "weight": 1.0
+    },
+    {
+      "source": "tests_graphifypaths_test",
+      "target": "graphifypaths",
+      "relation": "imports_from",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "__tests__/graphifyPaths.test.ts",
+      "source_location": "L7",
+      "weight": 1.0
+    },
+    {
+      "source": "tests_graphifypaths_test",
+      "target": "graphifypaths_getbundledgraphifydir",
+      "relation": "imports",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "__tests__/graphifyPaths.test.ts",
+      "source_location": "L7",
+      "weight": 1.0
+    },
+    {
+      "source": "tests_graphifypaths_test",
+      "target": "graphifypaths_getbundledgraphifybinary",
+      "relation": "imports",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "__tests__/graphifyPaths.test.ts",
+      "source_location": "L7",
+      "weight": 1.0
+    },
+    {
+      "source": "tests_urlsafety_test",
+      "target": "vitest",
+      "relation": "imports_from",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "__tests__/urlSafety.test.ts",
+      "source_location": "L1",
+      "weight": 1.0
+    },
+    {
+      "source": "tests_urlsafety_test",
+      "target": "urlsafety",
+      "relation": "imports_from",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "__tests__/urlSafety.test.ts",
+      "source_location": "L2",
+      "weight": 1.0
+    },
+    {
+      "source": "tests_urlsafety_test",
+      "target": "urlsafety_assertsafebaseurl",
+      "relation": "imports",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "__tests__/urlSafety.test.ts",
+      "source_location": "L2",
+      "weight": 1.0
+    },
+    {
+      "source": "tests_urlsafety_test",
+      "target": "urlsafety_issafebaseurl",
+      "relation": "imports",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "__tests__/urlSafety.test.ts",
+      "source_location": "L2",
+      "weight": 1.0
+    },
+    {
+      "source": "tests_watchignore_test",
+      "target": "vitest",
+      "relation": "imports_from",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "__tests__/watchIgnore.test.ts",
+      "source_location": "L1",
+      "weight": 1.0
+    },
+    {
+      "source": "tests_watchignore_test",
+      "target": "watchignore",
+      "relation": "imports_from",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "__tests__/watchIgnore.test.ts",
+      "source_location": "L3",
+      "weight": 1.0
+    },
+    {
+      "source": "tests_watchignore_test",
+      "target": "watchignore_iswatcherignored",
+      "relation": "imports",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "__tests__/watchIgnore.test.ts",
+      "source_location": "L3",
+      "weight": 1.0
+    },
+    {
+      "source": "atomicwrite",
+      "target": "node_crypto",
+      "relation": "imports_from",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "atomicWrite.ts",
+      "source_location": "L1",
+      "weight": 1.0
+    },
+    {
+      "source": "atomicwrite",
+      "target": "node_fs",
+      "relation": "imports_from",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "atomicWrite.ts",
+      "source_location": "L2",
+      "weight": 1.0
+    },
+    {
+      "source": "atomicwrite",
+      "target": "node_path",
+      "relation": "imports_from",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "atomicWrite.ts",
+      "source_location": "L3",
+      "weight": 1.0
+    },
+    {
+      "source": "atomicwrite",
+      "target": "atomicwrite_sleep",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "atomicWrite.ts",
+      "source_location": "L8",
+      "weight": 1.0
+    },
+    {
+      "source": "atomicwrite",
+      "target": "atomicwrite_renamewithretry",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "atomicWrite.ts",
+      "source_location": "L12",
+      "weight": 1.0
+    },
+    {
+      "source": "atomicwrite",
+      "target": "atomicwrite_atomicwriteopts",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "atomicWrite.ts",
+      "source_location": "L33",
+      "weight": 1.0
+    },
+    {
+      "source": "atomicwrite",
+      "target": "atomicwrite_atomicwriteasync",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "atomicWrite.ts",
+      "source_location": "L54",
+      "weight": 1.0
+    },
+    {
+      "source": "atomicwrite_renamewithretry",
+      "target": "atomicwrite_sleep",
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "atomicWrite.ts",
+      "source_location": "L25",
+      "weight": 1.0
+    },
+    {
+      "source": "atomicwrite_atomicwriteasync",
+      "target": "atomicwrite_renamewithretry",
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "atomicWrite.ts",
+      "source_location": "L82",
+      "weight": 1.0
+    },
+    {
+      "source": "builtinpackpaths",
+      "target": "electron",
+      "relation": "imports_from",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "builtinPackPaths.ts",
+      "source_location": "L1",
+      "weight": 1.0
+    },
+    {
+      "source": "builtinpackpaths",
+      "target": "node_fs",
+      "relation": "imports_from",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "builtinPackPaths.ts",
+      "source_location": "L2",
+      "weight": 1.0
+    },
+    {
+      "source": "builtinpackpaths",
+      "target": "node_path",
+      "relation": "imports_from",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "builtinPackPaths.ts",
+      "source_location": "L3",
+      "weight": 1.0
+    },
+    {
+      "source": "builtinpackpaths",
+      "target": "builtinpackpaths_getbuiltinpacksdir",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "builtinPackPaths.ts",
+      "source_location": "L13",
+      "weight": 1.0
+    },
+    {
+      "source": "builtinpackpaths",
+      "target": "builtinpackpaths_getbuiltinagentsdir",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "builtinPackPaths.ts",
+      "source_location": "L23",
+      "weight": 1.0
+    },
+    {
+      "source": "builtinpackpaths",
+      "target": "builtinpackpaths_getbuiltinskillsdir",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "builtinPackPaths.ts",
+      "source_location": "L27",
+      "weight": 1.0
+    },
+    {
+      "source": "builtinpackpaths",
+      "target": "builtinpackpaths_builtinpacksexist",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "builtinPackPaths.ts",
+      "source_location": "L35",
+      "weight": 1.0
+    },
+    {
+      "source": "builtinpackpaths_getbuiltinagentsdir",
+      "target": "builtinpackpaths_getbuiltinpacksdir",
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "builtinPackPaths.ts",
+      "source_location": "L24",
+      "weight": 1.0
+    },
+    {
+      "source": "builtinpackpaths_getbuiltinskillsdir",
+      "target": "builtinpackpaths_getbuiltinpacksdir",
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "builtinPackPaths.ts",
+      "source_location": "L28",
+      "weight": 1.0
+    },
+    {
+      "source": "builtinpackpaths_builtinpacksexist",
+      "target": "builtinpackpaths_getbuiltinpacksdir",
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "builtinPackPaths.ts",
+      "source_location": "L36",
+      "weight": 1.0
+    },
+    {
+      "source": "designresourcepaths",
+      "target": "electron",
+      "relation": "imports_from",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "designResourcePaths.ts",
+      "source_location": "L1",
+      "weight": 1.0
+    },
+    {
+      "source": "designresourcepaths",
+      "target": "node_fs",
+      "relation": "imports_from",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "designResourcePaths.ts",
+      "source_location": "L2",
+      "weight": 1.0
+    },
+    {
+      "source": "designresourcepaths",
+      "target": "node_path",
+      "relation": "imports_from",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "designResourcePaths.ts",
+      "source_location": "L3",
+      "weight": 1.0
+    },
+    {
+      "source": "designresourcepaths",
+      "target": "designresourcepaths_getbuiltindesignpacksdir",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "designResourcePaths.ts",
+      "source_location": "L18",
+      "weight": 1.0
+    },
+    {
+      "source": "designresourcepaths",
+      "target": "designresourcepaths_getbuiltindesignskillsdir",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "designResourcePaths.ts",
+      "source_location": "L31",
+      "weight": 1.0
+    },
+    {
+      "source": "designresourcepaths",
+      "target": "designresourcepaths_getbuiltindesignsystemsdir",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "designResourcePaths.ts",
+      "source_location": "L36",
+      "weight": 1.0
+    },
+    {
+      "source": "designresourcepaths",
+      "target": "designresourcepaths_designpacksexist",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "designResourcePaths.ts",
+      "source_location": "L46",
+      "weight": 1.0
+    },
+    {
+      "source": "designresourcepaths_getbuiltindesignskillsdir",
+      "target": "designresourcepaths_getbuiltindesignpacksdir",
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "designResourcePaths.ts",
+      "source_location": "L32",
+      "weight": 1.0
+    },
+    {
+      "source": "designresourcepaths_getbuiltindesignsystemsdir",
+      "target": "designresourcepaths_getbuiltindesignpacksdir",
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "designResourcePaths.ts",
+      "source_location": "L37",
+      "weight": 1.0
+    },
+    {
+      "source": "designresourcepaths_designpacksexist",
+      "target": "designresourcepaths_getbuiltindesignpacksdir",
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "designResourcePaths.ts",
+      "source_location": "L47",
+      "weight": 1.0
+    },
+    {
+      "source": "diffpreview",
+      "target": "diffstats",
+      "relation": "imports_from",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "diffPreview.ts",
+      "source_location": "L19",
+      "weight": 1.0
+    },
+    {
+      "source": "diffpreview",
+      "target": "diffstats_mayberelativize",
+      "relation": "imports",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "diffPreview.ts",
+      "source_location": "L19",
+      "weight": 1.0
+    },
+    {
+      "source": "diffpreview",
+      "target": "diffpreview_difflinekind",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "diffPreview.ts",
+      "source_location": "L21",
+      "weight": 1.0
+    },
+    {
+      "source": "diffpreview",
+      "target": "diffpreview_diffline",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "diffPreview.ts",
+      "source_location": "L23",
+      "weight": 1.0
+    },
+    {
+      "source": "diffpreview",
+      "target": "diffpreview_diffhunk",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "diffPreview.ts",
+      "source_location": "L35",
+      "weight": 1.0
+    },
+    {
+      "source": "diffpreview",
+      "target": "diffpreview_diffpreview",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "diffPreview.ts",
+      "source_location": "L49",
+      "weight": 1.0
+    },
+    {
+      "source": "diffpreview",
+      "target": "diffpreview_file_mutating_tools",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "diffPreview.ts",
+      "source_location": "L58",
+      "weight": 1.0
+    },
+    {
+      "source": "diffpreview",
+      "target": "diffpreview_splitlines",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "diffPreview.ts",
+      "source_location": "L76",
+      "weight": 1.0
+    },
+    {
+      "source": "diffpreview",
+      "target": "diffpreview_truncateline",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "diffPreview.ts",
+      "source_location": "L90",
+      "weight": 1.0
+    },
+    {
+      "source": "diffpreview",
+      "target": "diffpreview_difflineslcs",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "diffPreview.ts",
+      "source_location": "L97",
+      "weight": 1.0
+    },
+    {
+      "source": "diffpreview",
+      "target": "diffpreview_editlike",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "diffPreview.ts",
+      "source_location": "L156",
+      "weight": 1.0
+    },
+    {
+      "source": "diffpreview",
+      "target": "diffpreview_hunkfromedit",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "diffPreview.ts",
+      "source_location": "L161",
+      "weight": 1.0
+    },
+    {
+      "source": "diffpreview",
+      "target": "diffpreview_computetooldiffpreview",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "diffPreview.ts",
+      "source_location": "L190",
+      "weight": 1.0
+    },
+    {
+      "source": "diffpreview_hunkfromedit",
+      "target": "diffpreview_splitlines",
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "diffPreview.ts",
+      "source_location": "L167",
+      "weight": 1.0
+    },
+    {
+      "source": "diffpreview_hunkfromedit",
+      "target": "diffpreview_difflineslcs",
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "diffPreview.ts",
+      "source_location": "L170",
+      "weight": 1.0
+    },
+    {
+      "source": "diffpreview_computetooldiffpreview",
+      "target": "diffpreview_hunkfromedit",
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "diffPreview.ts",
+      "source_location": "L202",
+      "weight": 1.0
+    },
+    {
+      "source": "diffpreview_computetooldiffpreview",
+      "target": "diffpreview_splitlines",
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "diffPreview.ts",
+      "source_location": "L242",
+      "weight": 1.0
+    },
+    {
+      "source": "diffstats",
+      "target": "node_path",
+      "relation": "imports_from",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "diffStats.ts",
+      "source_location": "L9",
+      "weight": 1.0
+    },
+    {
+      "source": "diffstats",
+      "target": "diffstats_diffstats",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "diffStats.ts",
+      "source_location": "L11",
+      "weight": 1.0
+    },
+    {
+      "source": "diffstats",
+      "target": "diffstats_file_mutating_tools",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "diffStats.ts",
+      "source_location": "L19",
+      "weight": 1.0
+    },
+    {
+      "source": "diffstats",
+      "target": "diffstats_known_notebook_edit_modes",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "diffStats.ts",
+      "source_location": "L37",
+      "weight": 1.0
+    },
+    {
+      "source": "diffstats",
+      "target": "diffstats_countlines",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "diffStats.ts",
+      "source_location": "L50",
+      "weight": 1.0
+    },
+    {
+      "source": "diffstats",
+      "target": "diffstats_mayberelativize",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "diffStats.ts",
+      "source_location": "L71",
+      "weight": 1.0
+    },
+    {
+      "source": "diffstats",
+      "target": "diffstats_editlike",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "diffStats.ts",
+      "source_location": "L87",
+      "weight": 1.0
+    },
+    {
+      "source": "diffstats",
+      "target": "diffstats_statsfromedit",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "diffStats.ts",
+      "source_location": "L92",
+      "weight": 1.0
+    },
+    {
+      "source": "diffstats",
+      "target": "diffstats_computetooldiffstats",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "diffStats.ts",
+      "source_location": "L115",
+      "weight": 1.0
+    },
+    {
+      "source": "diffstats_statsfromedit",
+      "target": "diffstats_countlines",
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "diffStats.ts",
+      "source_location": "L95",
+      "weight": 1.0
+    },
+    {
+      "source": "diffstats_computetooldiffstats",
+      "target": "diffstats_statsfromedit",
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "diffStats.ts",
+      "source_location": "L127",
+      "weight": 1.0
+    },
+    {
+      "source": "diffstats_computetooldiffstats",
+      "target": "diffstats_mayberelativize",
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "diffStats.ts",
+      "source_location": "L132",
+      "weight": 1.0
+    },
+    {
+      "source": "diffstats_computetooldiffstats",
+      "target": "diffstats_countlines",
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "diffStats.ts",
+      "source_location": "L163",
+      "weight": 1.0
+    },
+    {
+      "source": "direntries",
+      "target": "users_icue_code_ai_devspace_src_shared_types_ts",
+      "relation": "imports_from",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "dirEntries.ts",
+      "source_location": "L1",
+      "weight": 1.0
+    },
+    {
+      "source": "direntries",
+      "target": "shared_types_direntry",
+      "relation": "imports",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "dirEntries.ts",
+      "source_location": "L1",
+      "weight": 1.0
+    },
+    {
+      "source": "direntries",
+      "target": "direntries_capdirentries",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "dirEntries.ts",
+      "source_location": "L20",
+      "weight": 1.0
+    },
+    {
+      "source": "graphifypaths",
+      "target": "electron",
+      "relation": "imports_from",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "graphifyPaths.ts",
+      "source_location": "L1",
+      "weight": 1.0
+    },
+    {
+      "source": "graphifypaths",
+      "target": "node_fs",
+      "relation": "imports_from",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "graphifyPaths.ts",
+      "source_location": "L2",
+      "weight": 1.0
+    },
+    {
+      "source": "graphifypaths",
+      "target": "node_path",
+      "relation": "imports_from",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "graphifyPaths.ts",
+      "source_location": "L3",
+      "weight": 1.0
+    },
+    {
+      "source": "graphifypaths",
+      "target": "graphifypaths_resourcesroot",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "graphifyPaths.ts",
+      "source_location": "L15",
+      "weight": 1.0
+    },
+    {
+      "source": "graphifypaths",
+      "target": "graphifypaths_platformkey",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "graphifyPaths.ts",
+      "source_location": "L21",
+      "weight": 1.0
+    },
+    {
+      "source": "graphifypaths",
+      "target": "graphifypaths_getbundledgraphifydir",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "graphifyPaths.ts",
+      "source_location": "L31",
+      "weight": 1.0
+    },
+    {
+      "source": "graphifypaths",
+      "target": "graphifypaths_getbundledgraphifybinary",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "graphifyPaths.ts",
+      "source_location": "L37",
+      "weight": 1.0
+    },
+    {
+      "source": "graphifypaths",
+      "target": "graphifypaths_bundledgraphifyexists",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "graphifyPaths.ts",
+      "source_location": "L42",
+      "weight": 1.0
+    },
+    {
+      "source": "graphifypaths_getbundledgraphifydir",
+      "target": "graphifypaths_resourcesroot",
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "graphifyPaths.ts",
+      "source_location": "L33",
+      "weight": 1.0
+    },
+    {
+      "source": "graphifypaths_getbundledgraphifydir",
+      "target": "graphifypaths_platformkey",
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "graphifyPaths.ts",
+      "source_location": "L33",
+      "weight": 1.0
+    },
+    {
+      "source": "graphifypaths_getbundledgraphifybinary",
+      "target": "graphifypaths_getbundledgraphifydir",
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "graphifyPaths.ts",
+      "source_location": "L39",
+      "weight": 1.0
+    },
+    {
+      "source": "graphifypaths_bundledgraphifyexists",
+      "target": "graphifypaths_getbundledgraphifybinary",
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "graphifyPaths.ts",
+      "source_location": "L44",
+      "weight": 1.0
+    },
+    {
+      "source": "mempalacepaths",
+      "target": "electron",
+      "relation": "imports_from",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "mempalacePaths.ts",
+      "source_location": "L1",
+      "weight": 1.0
+    },
+    {
+      "source": "mempalacepaths",
+      "target": "node_fs",
+      "relation": "imports_from",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "mempalacePaths.ts",
+      "source_location": "L2",
+      "weight": 1.0
+    },
+    {
+      "source": "mempalacepaths",
+      "target": "node_os",
+      "relation": "imports_from",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "mempalacePaths.ts",
+      "source_location": "L3",
+      "weight": 1.0
+    },
+    {
+      "source": "mempalacepaths",
+      "target": "node_path",
+      "relation": "imports_from",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "mempalacePaths.ts",
+      "source_location": "L4",
+      "weight": 1.0
+    },
+    {
+      "source": "mempalacepaths",
+      "target": "mempalacepaths_resourcesroot",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "mempalacePaths.ts",
+      "source_location": "L16",
+      "weight": 1.0
+    },
+    {
+      "source": "mempalacepaths",
+      "target": "mempalacepaths_platformkey",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "mempalacePaths.ts",
+      "source_location": "L22",
+      "weight": 1.0
+    },
+    {
+      "source": "mempalacepaths",
+      "target": "mempalacepaths_getbundleduvdir",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "mempalacePaths.ts",
+      "source_location": "L34",
+      "weight": 1.0
+    },
+    {
+      "source": "mempalacepaths",
+      "target": "mempalacepaths_getbundleduvbinary",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "mempalacePaths.ts",
+      "source_location": "L40",
+      "weight": 1.0
+    },
+    {
+      "source": "mempalacepaths",
+      "target": "mempalacepaths_bundleduvexists",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "mempalacePaths.ts",
+      "source_location": "L45",
+      "weight": 1.0
+    },
+    {
+      "source": "mempalacepaths",
+      "target": "mempalacepaths_getbundledhooksdir",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "mempalacePaths.ts",
+      "source_location": "L53",
+      "weight": 1.0
+    },
+    {
+      "source": "mempalacepaths",
+      "target": "mempalacepaths_getuvtoolbindir",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "mempalacePaths.ts",
+      "source_location": "L65",
+      "weight": 1.0
+    },
+    {
+      "source": "mempalacepaths",
+      "target": "mempalacepaths_getclaudedir",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "mempalacePaths.ts",
+      "source_location": "L75",
+      "weight": 1.0
+    },
+    {
+      "source": "mempalacepaths",
+      "target": "mempalacepaths_getclaudesettingsfile",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "mempalacePaths.ts",
+      "source_location": "L79",
+      "weight": 1.0
+    },
+    {
+      "source": "mempalacepaths",
+      "target": "mempalacepaths_getinstalledhooksdir",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "mempalacePaths.ts",
+      "source_location": "L83",
+      "weight": 1.0
+    },
+    {
+      "source": "mempalacepaths",
+      "target": "mempalacepaths_getmempalaceconfigfile",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "mempalacePaths.ts",
+      "source_location": "L87",
+      "weight": 1.0
+    },
+    {
+      "source": "mempalacepaths",
+      "target": "mempalacepaths_resolvepalacedir",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "mempalacePaths.ts",
+      "source_location": "L101",
+      "weight": 1.0
+    },
+    {
+      "source": "mempalacepaths",
+      "target": "mempalacepaths_getdefaultvaultdir",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "mempalacePaths.ts",
+      "source_location": "L128",
+      "weight": 1.0
+    },
+    {
+      "source": "mempalacepaths_getbundleduvdir",
+      "target": "mempalacepaths_resourcesroot",
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "mempalacePaths.ts",
+      "source_location": "L36",
+      "weight": 1.0
+    },
+    {
+      "source": "mempalacepaths_getbundleduvdir",
+      "target": "mempalacepaths_platformkey",
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "mempalacePaths.ts",
+      "source_location": "L36",
+      "weight": 1.0
+    },
+    {
+      "source": "mempalacepaths_getbundleduvbinary",
+      "target": "mempalacepaths_getbundleduvdir",
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "mempalacePaths.ts",
+      "source_location": "L42",
+      "weight": 1.0
+    },
+    {
+      "source": "mempalacepaths_bundleduvexists",
+      "target": "mempalacepaths_getbundleduvbinary",
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "mempalacePaths.ts",
+      "source_location": "L47",
+      "weight": 1.0
+    },
+    {
+      "source": "mempalacepaths_getbundledhooksdir",
+      "target": "mempalacepaths_resourcesroot",
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "mempalacePaths.ts",
+      "source_location": "L55",
+      "weight": 1.0
+    },
+    {
+      "source": "mempalacepaths_getclaudesettingsfile",
+      "target": "mempalacepaths_getclaudedir",
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "mempalacePaths.ts",
+      "source_location": "L80",
+      "weight": 1.0
+    },
+    {
+      "source": "mempalacepaths_getinstalledhooksdir",
+      "target": "mempalacepaths_getclaudedir",
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "mempalacePaths.ts",
+      "source_location": "L84",
+      "weight": 1.0
+    },
+    {
+      "source": "mempalacepaths_resolvepalacedir",
+      "target": "mempalacepaths_getmempalaceconfigfile",
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "mempalacePaths.ts",
+      "source_location": "L102",
+      "weight": 1.0
+    },
+    {
+      "source": "mempalacepaths_resolvepalacedir",
+      "target": "mempalacepaths_getdefaultvaultdir",
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "mempalacePaths.ts",
+      "source_location": "L116",
+      "weight": 1.0
+    },
+    {
+      "source": "pathscope_test",
+      "target": "node_os",
+      "relation": "imports_from",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "pathScope.test.ts",
+      "source_location": "L1",
+      "weight": 1.0
+    },
+    {
+      "source": "pathscope_test",
+      "target": "node_path",
+      "relation": "imports_from",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "pathScope.test.ts",
+      "source_location": "L2",
+      "weight": 1.0
+    },
+    {
+      "source": "pathscope_test",
+      "target": "vitest",
+      "relation": "imports_from",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "pathScope.test.ts",
+      "source_location": "L4",
+      "weight": 1.0
+    },
+    {
+      "source": "pathscope_test",
+      "target": "pathscope",
+      "relation": "imports_from",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "pathScope.test.ts",
+      "source_location": "L16",
+      "weight": 1.0
+    },
+    {
+      "source": "pathscope_test",
+      "target": "pathscope_assertallowedsettingspath",
+      "relation": "imports",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "pathScope.test.ts",
+      "source_location": "L16",
+      "weight": 1.0
+    },
+    {
+      "source": "pathscope_test",
+      "target": "pathscope_assertgitref",
+      "relation": "imports",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "pathScope.test.ts",
+      "source_location": "L16",
+      "weight": 1.0
+    },
+    {
+      "source": "pathscope_test",
+      "target": "pathscope_assertinworkspace",
+      "relation": "imports",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "pathScope.test.ts",
+      "source_location": "L16",
+      "weight": 1.0
+    },
+    {
+      "source": "pathscope_test",
+      "target": "pathscope_assertrelativepath",
+      "relation": "imports",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "pathScope.test.ts",
+      "source_location": "L16",
+      "weight": 1.0
+    },
+    {
+      "source": "pathscope_test",
+      "target": "pathscope_assertsafekey",
+      "relation": "imports",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "pathScope.test.ts",
+      "source_location": "L16",
+      "weight": 1.0
+    },
+    {
+      "source": "pathscope_test",
+      "target": "pathscope_invalidateworkspacerootscache",
+      "relation": "imports",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "pathScope.test.ts",
+      "source_location": "L16",
+      "weight": 1.0
+    },
+    {
+      "source": "pathscope",
+      "target": "node_fs",
+      "relation": "imports_from",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "pathScope.ts",
+      "source_location": "L1",
+      "weight": 1.0
+    },
+    {
+      "source": "pathscope",
+      "target": "node_os",
+      "relation": "imports_from",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "pathScope.ts",
+      "source_location": "L2",
+      "weight": 1.0
+    },
+    {
+      "source": "pathscope",
+      "target": "node_path",
+      "relation": "imports_from",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "pathScope.ts",
+      "source_location": "L3",
+      "weight": 1.0
+    },
+    {
+      "source": "pathscope",
+      "target": "users_icue_code_ai_devspace_src_main_services_workspaceservice_ts",
+      "relation": "imports_from",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "pathScope.ts",
+      "source_location": "L5",
+      "weight": 1.0
+    },
+    {
+      "source": "pathscope",
+      "target": "services_workspaceservice_listworkspaces",
+      "relation": "imports",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "pathScope.ts",
+      "source_location": "L5",
+      "weight": 1.0
+    },
+    {
+      "source": "pathscope",
+      "target": "pathscope_home",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "pathScope.ts",
+      "source_location": "L7",
+      "weight": 1.0
+    },
+    {
+      "source": "pathscope",
+      "target": "pathscope_global_claude",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "pathScope.ts",
+      "source_location": "L8",
+      "weight": 1.0
+    },
+    {
+      "source": "pathscope",
+      "target": "pathscope_getworkspaceroots",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "pathScope.ts",
+      "source_location": "L14",
+      "weight": 1.0
+    },
+    {
+      "source": "pathscope",
+      "target": "pathscope_invalidateworkspacerootscache",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "pathScope.ts",
+      "source_location": "L23",
+      "weight": 1.0
+    },
+    {
+      "source": "pathscope",
+      "target": "pathscope_rejectiftraversal",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "pathScope.ts",
+      "source_location": "L28",
+      "weight": 1.0
+    },
+    {
+      "source": "pathscope",
+      "target": "pathscope_isunder",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "pathScope.ts",
+      "source_location": "L35",
+      "weight": 1.0
+    },
+    {
+      "source": "pathscope",
+      "target": "pathscope_assertinworkspace",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "pathScope.ts",
+      "source_location": "L45",
+      "weight": 1.0
+    },
+    {
+      "source": "pathscope",
+      "target": "pathscope_assertallowedsettingspath",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "pathScope.ts",
+      "source_location": "L63",
+      "weight": 1.0
+    },
+    {
+      "source": "pathscope",
+      "target": "pathscope_assertregularfile",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "pathScope.ts",
+      "source_location": "L87",
+      "weight": 1.0
+    },
+    {
+      "source": "pathscope",
+      "target": "pathscope_assertgitref",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "pathScope.ts",
+      "source_location": "L98",
+      "weight": 1.0
+    },
+    {
+      "source": "pathscope",
+      "target": "pathscope_assertrelativepath",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "pathScope.ts",
+      "source_location": "L108",
+      "weight": 1.0
+    },
+    {
+      "source": "pathscope",
+      "target": "pathscope_reserved_keys",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "pathScope.ts",
+      "source_location": "L119",
+      "weight": 1.0
+    },
+    {
+      "source": "pathscope",
+      "target": "pathscope_assertsafekey",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "pathScope.ts",
+      "source_location": "L122",
+      "weight": 1.0
+    },
+    {
+      "source": "pathscope_assertinworkspace",
+      "target": "pathscope_rejectiftraversal",
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "pathScope.ts",
+      "source_location": "L46",
+      "weight": 1.0
+    },
+    {
+      "source": "pathscope_assertinworkspace",
+      "target": "pathscope_getworkspaceroots",
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "pathScope.ts",
+      "source_location": "L48",
+      "weight": 1.0
+    },
+    {
+      "source": "pathscope_assertinworkspace",
+      "target": "pathscope_isunder",
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "pathScope.ts",
+      "source_location": "L50",
+      "weight": 1.0
+    },
+    {
+      "source": "pathscope_assertallowedsettingspath",
+      "target": "pathscope_rejectiftraversal",
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "pathScope.ts",
+      "source_location": "L67",
+      "weight": 1.0
+    },
+    {
+      "source": "pathscope_assertallowedsettingspath",
+      "target": "pathscope_isunder",
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "pathScope.ts",
+      "source_location": "L70",
+      "weight": 1.0
+    },
+    {
+      "source": "setuppaths",
+      "target": "electron",
+      "relation": "imports_from",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "setupPaths.ts",
+      "source_location": "L1",
+      "weight": 1.0
+    },
+    {
+      "source": "setuppaths",
+      "target": "node_os",
+      "relation": "imports_from",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "setupPaths.ts",
+      "source_location": "L2",
+      "weight": 1.0
+    },
+    {
+      "source": "setuppaths",
+      "target": "node_path",
+      "relation": "imports_from",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "setupPaths.ts",
+      "source_location": "L3",
+      "weight": 1.0
+    },
+    {
+      "source": "setuppaths",
+      "target": "mempalacepaths",
+      "relation": "imports_from",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "setupPaths.ts",
+      "source_location": "L5",
+      "weight": 1.0
+    },
+    {
+      "source": "setuppaths",
+      "target": "mempalacepaths_getclaudedir",
+      "relation": "imports",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "setupPaths.ts",
+      "source_location": "L5",
+      "weight": 1.0
+    },
+    {
+      "source": "setuppaths",
+      "target": "mempalacepaths_getclaudesettingsfile",
+      "relation": "imports",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "setupPaths.ts",
+      "source_location": "L5",
+      "weight": 1.0
+    },
+    {
+      "source": "setuppaths",
+      "target": "setuppaths_resourcesroot",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "setupPaths.ts",
+      "source_location": "L17",
+      "weight": 1.0
+    },
+    {
+      "source": "setuppaths",
+      "target": "setuppaths_getbundledsetuphooksdir",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "setupPaths.ts",
+      "source_location": "L23",
+      "weight": 1.0
+    },
+    {
+      "source": "setuppaths",
+      "target": "setuppaths_getbundledrtkhookfile",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "setupPaths.ts",
+      "source_location": "L27",
+      "weight": 1.0
+    },
+    {
+      "source": "setuppaths",
+      "target": "setuppaths_getclaudehooksdir",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "setupPaths.ts",
+      "source_location": "L31",
+      "weight": 1.0
+    },
+    {
+      "source": "setuppaths",
+      "target": "setuppaths_getinstalledrtkhookfile",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "setupPaths.ts",
+      "source_location": "L35",
+      "weight": 1.0
+    },
+    {
+      "source": "setuppaths",
+      "target": "setuppaths_commonbinpaths",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "setupPaths.ts",
+      "source_location": "L45",
+      "weight": 1.0
+    },
+    {
+      "source": "setuppaths",
+      "target": "setuppaths_enrichedpath",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "setupPaths.ts",
+      "source_location": "L59",
+      "weight": 1.0
+    },
+    {
+      "source": "setuppaths_getbundledsetuphooksdir",
+      "target": "setuppaths_resourcesroot",
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "setupPaths.ts",
+      "source_location": "L24",
+      "weight": 1.0
+    },
+    {
+      "source": "setuppaths_getbundledrtkhookfile",
+      "target": "setuppaths_getbundledsetuphooksdir",
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "setupPaths.ts",
+      "source_location": "L28",
+      "weight": 1.0
+    },
+    {
+      "source": "setuppaths_getinstalledrtkhookfile",
+      "target": "setuppaths_getclaudehooksdir",
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "setupPaths.ts",
+      "source_location": "L36",
+      "weight": 1.0
+    },
+    {
+      "source": "setuppaths_enrichedpath",
+      "target": "setuppaths_commonbinpaths",
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "setupPaths.ts",
+      "source_location": "L61",
+      "weight": 1.0
+    },
+    {
+      "source": "shellenv",
+      "target": "node_child_process",
+      "relation": "imports_from",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "shellEnv.ts",
+      "source_location": "L11",
+      "weight": 1.0
+    },
+    {
+      "source": "shellenv",
+      "target": "node_os",
+      "relation": "imports_from",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "shellEnv.ts",
+      "source_location": "L12",
+      "weight": 1.0
+    },
+    {
+      "source": "shellenv",
+      "target": "users_icue_code_ai_devspace_src_shared_logger_ts",
+      "relation": "imports_from",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "shellEnv.ts",
+      "source_location": "L14",
+      "weight": 1.0
+    },
+    {
+      "source": "shellenv",
+      "target": "shared_logger_createlogger",
+      "relation": "imports",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "shellEnv.ts",
+      "source_location": "L14",
+      "weight": 1.0
+    },
+    {
+      "source": "shellenv",
+      "target": "shellenv_logger",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "shellEnv.ts",
+      "source_location": "L16",
+      "weight": 1.0
+    },
+    {
+      "source": "shellenv",
+      "target": "shellenv_parsenullseparatedenv",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "shellEnv.ts",
+      "source_location": "L23",
+      "weight": 1.0
+    },
+    {
+      "source": "shellenv",
+      "target": "shellenv_readshellenv",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "shellEnv.ts",
+      "source_location": "L35",
+      "weight": 1.0
+    },
+    {
+      "source": "shellenv",
+      "target": "shellenv_resolveinteractiveshellenv",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "shellEnv.ts",
+      "source_location": "L86",
+      "weight": 1.0
+    },
+    {
+      "source": "shellenv",
+      "target": "shellenv_clearshellenvcache",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "shellEnv.ts",
+      "source_location": "L119",
+      "weight": 1.0
+    },
+    {
+      "source": "shellenv",
+      "target": "shellenv_getcachedshellenv",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "shellEnv.ts",
+      "source_location": "L124",
+      "weight": 1.0
+    },
+    {
+      "source": "shellenv",
+      "target": "shellenv_getshellpreferredhome",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "shellEnv.ts",
+      "source_location": "L129",
+      "weight": 1.0
+    },
+    {
+      "source": "shellenv_readshellenv",
+      "target": "shellenv_parsenullseparatedenv",
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "shellEnv.ts",
+      "source_location": "L78",
+      "weight": 1.0
+    },
+    {
+      "source": "shellenv_getshellpreferredhome",
+      "target": "shellenv_getcachedshellenv",
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "shellEnv.ts",
+      "source_location": "L130",
+      "weight": 1.0
+    },
+    {
+      "source": "urlsafety",
+      "target": "urlsafety_host_blocklist",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "urlSafety.ts",
+      "source_location": "L15",
+      "weight": 1.0
+    },
+    {
+      "source": "urlsafety",
+      "target": "urlsafety_isloopback",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "urlSafety.ts",
+      "source_location": "L25",
+      "weight": 1.0
+    },
+    {
+      "source": "urlsafety",
+      "target": "urlsafety_isprivateipv4",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "urlSafety.ts",
+      "source_location": "L36",
+      "weight": 1.0
+    },
+    {
+      "source": "urlsafety",
+      "target": "urlsafety_isprivateipv6",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "urlSafety.ts",
+      "source_location": "L46",
+      "weight": 1.0
+    },
+    {
+      "source": "urlsafety",
+      "target": "urlsafety_assertbaseurlopts",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "urlSafety.ts",
+      "source_location": "L52",
+      "weight": 1.0
+    },
+    {
+      "source": "urlsafety",
+      "target": "urlsafety_assertsafebaseurl",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "urlSafety.ts",
+      "source_location": "L83",
+      "weight": 1.0
+    },
+    {
+      "source": "urlsafety",
+      "target": "urlsafety_issafebaseurl",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "urlSafety.ts",
+      "source_location": "L135",
+      "weight": 1.0
+    },
+    {
+      "source": "urlsafety_assertsafebaseurl",
+      "target": "urlsafety_isloopback",
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "urlSafety.ts",
+      "source_location": "L109",
+      "weight": 1.0
+    },
+    {
+      "source": "urlsafety_assertsafebaseurl",
+      "target": "urlsafety_isprivateipv4",
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "urlSafety.ts",
+      "source_location": "L120",
+      "weight": 1.0
+    },
+    {
+      "source": "urlsafety_assertsafebaseurl",
+      "target": "urlsafety_isprivateipv6",
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "urlSafety.ts",
+      "source_location": "L120",
+      "weight": 1.0
+    },
+    {
+      "source": "urlsafety_issafebaseurl",
+      "target": "urlsafety_assertsafebaseurl",
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "urlSafety.ts",
+      "source_location": "L140",
+      "weight": 1.0
+    },
+    {
+      "source": "watchignore",
+      "target": "watchignore_watch_ignored",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "watchIgnore.ts",
+      "source_location": "L17",
+      "weight": 1.0
+    },
+    {
+      "source": "watchignore",
+      "target": "watchignore_iswatcherignored",
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "watchIgnore.ts",
+      "source_location": "L53",
+      "weight": 1.0
+    },
+    {
+      "source": "setuppaths",
+      "target": "mempalacepaths",
+      "relation": "re_exports",
+      "context": "export",
+      "confidence": "EXTRACTED",
+      "source_file": "setupPaths.ts",
+      "source_location": "L15",
+      "weight": 1.0
+    },
+    {
+      "source": "diffpreview_computetooldiffpreview",
+      "target": "diffstats_mayberelativize",
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "diffPreview.ts",
+      "source_location": "L205",
+      "weight": 1.0
+    },
+    {
+      "source": "setuppaths_getclaudehooksdir",
+      "target": "mempalacepaths_getclaudedir",
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "setupPaths.ts",
+      "source_location": "L32",
+      "weight": 1.0
+    }
+  ],
+  "hyperedges": [],
+  "input_tokens": 0,
+  "output_tokens": 0
+}
