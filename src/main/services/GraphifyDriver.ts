@@ -95,13 +95,29 @@ function runExtract(projectRoot: string): Promise<{ code: number | null; stderr:
   });
 }
 
+const inFlightBuilds = new Map<string, Promise<CodeflowFunctionGraph>>();
+
 /**
  * Build the function-level graph by running the bundled graphify binary and
  * adapting its output to CodeflowFunctionGraph. Drop-in replacement for the
  * old CodeflowFunctionAnalyzer.buildFunctionGraph — same signature + return
  * shape, so the IPC handler and renderer are unchanged.
+ *
+ * Concurrent calls for the same project share one in-flight build: the
+ * renderer's effects (+ React StrictMode in dev) fire this 2-3× on mount, and
+ * re-spawning graphify each time is pure waste.
  */
-export async function buildFunctionGraph(
+export function buildFunctionGraph(projectRoot: string): Promise<CodeflowFunctionGraph> {
+  const existing = inFlightBuilds.get(projectRoot);
+  if (existing) return existing;
+  const p = doBuildFunctionGraph(projectRoot).finally(() => {
+    inFlightBuilds.delete(projectRoot);
+  });
+  inFlightBuilds.set(projectRoot, p);
+  return p;
+}
+
+async function doBuildFunctionGraph(
   projectRoot: string,
 ): Promise<CodeflowFunctionGraph> {
   const t0 = Date.now();
