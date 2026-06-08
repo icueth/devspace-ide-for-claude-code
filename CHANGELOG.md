@@ -5,6 +5,38 @@ All notable changes to DevSpace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.38.0-beta.12] — 2026-06-08 (prod branch, local beta — not on GH)
+
+**Phase 1 cleanup — Codeflow is now graphify-only.** Removes the legacy
+TypeScript code-analysis stack that graphify replaced. The Codeflow tab is now
+just the graphify **Visualization** graph + the **Query** tab (+ the orthogonal
+Ultra-Review button). Net ≈ **2,700 lines deleted**.
+
+### Removed
+- **Static-doc generator** (the whole feature the queryable graph replaces):
+  `CodeflowService.ts` (Claude codebase.md / flow-*.md pipeline), the
+  "Generate codeflow" / Re-analyze / Force toolbar + doc tabs + MarkdownPreview
+  doc reader in `CodeflowView`, the 7 doc IPC channels
+  (`GET_STATUS`/`ANALYZE`/`CANCEL`/`READ_DOC`/`LIST_DOCS`/`OPEN_DIR`/`PROGRESS`)
+  with their preload/api wiring, and the `CodeflowStage`/`Doc`/`CacheMeta`/
+  `Status`/`AnalyzeOptions` types.
+- **`CodeflowFunctionAnalyzer.ts`** — the in-house function-call extractor,
+  fully replaced by `GraphifyDriver` (zero importers, zero tests).
+
+### Changed
+- `GraphifyDriver.buildFunctionGraph` de-dupes concurrent builds (renderer
+  effects + StrictMode fired it 3×, re-spawning graphify each time).
+- Workspace close disposes the graphify child; `FileWatcher` no longer tracks
+  doc staleness.
+
+### Kept (orthogonal, still working)
+- File-level import graph (`CodeflowGraphAnalyzer`), live-sync
+  (`CodeflowGraphLive`), and the Claude soft-edge augment overlay.
+
+### Verified
+- typecheck 0 errors · **774/774 tests** · electron-vite build clean. Live app:
+  graphify builds function graphs offline (591–4121 fns on real projects).
+
 ## [0.38.0-beta.11] — 2026-06-08 (prod branch, local beta — not on GH)
 
 **Fix: Codeflow graph build failed on real projects.** First fix from live
