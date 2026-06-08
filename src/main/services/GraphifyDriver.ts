@@ -20,6 +20,19 @@ const logger = createLogger('GraphifyDriver');
 
 const EXTRACT_TIMEOUT_MS = 120_000;
 
+// Every non-code extension graphify recognizes (DOC + PAPER + IMAGE + OFFICE +
+// VIDEO, from graphify/detect.py). graphify routes these through its LLM
+// "semantic" backend, which a bundled OFFLINE binary has no API key/SDK for
+// (it errors: "the 'openai' package is required…"). Excluding them keeps
+// extraction pure tree-sitter AST and fully offline.
+const NON_CODE_EXCLUDES = [
+  '*.md', '*.mdx', '*.qmd', '*.txt', '*.rst', '*.html', '*.yaml', '*.yml',
+  '*.pdf',
+  '*.png', '*.jpg', '*.jpeg', '*.gif', '*.webp', '*.svg',
+  '*.docx', '*.xlsx',
+  '*.mp4', '*.mov', '*.webm', '*.mkv', '*.avi', '*.m4v', '*.mp3', '*.wav', '*.m4a', '*.ogg',
+];
+
 // Per-project graphify output dir under userData (NOT the user's repo). Stable
 // per project so graphify's manifest+graph.json enable incremental re-extracts
 // (only changed files re-parse).
@@ -34,7 +47,7 @@ function graphPathFor(projectRoot: string): string {
 
 const activeChildren = new Map<string, ChildProcess>();
 
-function runExtract(projectRoot: string): Promise<void> {
+function runExtract(projectRoot: string): Promise<{ code: number | null; stderr: string }> {
   return new Promise((resolve, reject) => {
     if (!bundledGraphifyExists()) {
       reject(new Error('graphify binary is not bundled for this platform'));
@@ -45,9 +58,11 @@ function runExtract(projectRoot: string): Promise<void> {
     fs.mkdirSync(out, { recursive: true });
 
     // Single root = the project, so graphify emits project-relative source_file
-    // paths. --no-cluster keeps it to the structural graph (no LLM, fully
-    // offline); community labelling is a separate Phase-3 concern.
+    // paths. --no-cluster keeps it to the structural graph; the NON_CODE_EXCLUDES
+    // keep it pure-AST + offline (no LLM semantic pass on docs/images).
     const args = ['extract', projectRoot, '--out', out, '--no-cluster'];
+    for (const pat of NON_CODE_EXCLUDES) args.push('--exclude', pat);
+
     const child = spawn(bin, args, {
       cwd: projectRoot,
       env: { ...process.env, GRAPHIFY_QUERY_LOG_DISABLE: '1' },
@@ -69,15 +84,13 @@ function runExtract(projectRoot: string): Promise<void> {
       activeChildren.delete(projectRoot);
       reject(err);
     });
+    // Resolve with the exit code (don't reject on non-zero): graphify can exit
+    // non-zero on a partial failure while still writing a valid code graph.
+    // buildFunctionGraph decides based on whether graph.json is usable.
     child.on('exit', (code) => {
       clearTimeout(timer);
       activeChildren.delete(projectRoot);
-      if (code === 0) {
-        resolve();
-      } else {
-        // graphify exits non-zero on the graph-size cap and on fatal errors.
-        reject(new Error(`graphify extract exited ${code}: ${stderr.slice(0, 500)}`));
-      }
+      resolve({ code, stderr });
     });
   });
 }
@@ -92,13 +105,21 @@ export async function buildFunctionGraph(
   projectRoot: string,
 ): Promise<CodeflowFunctionGraph> {
   const t0 = Date.now();
-  await runExtract(projectRoot);
+  const { code, stderr } = await runExtract(projectRoot);
 
+  // Read the graph even on a non-zero exit — graphify may have written a valid
+  // code graph before a non-fatal partial failure. Only hard-fail when there is
+  // no usable graph.json.
   let raw: string;
   try {
     raw = await fs.promises.readFile(graphPathFor(projectRoot), 'utf8');
   } catch {
-    throw new Error(`graphify produced no graph.json at ${graphPathFor(projectRoot)}`);
+    throw new Error(
+      `graphify extract failed (exit ${code}) and wrote no graph.json: ${stderr.slice(0, 400)}`,
+    );
+  }
+  if (code !== 0) {
+    logger.warn(`graphify extract exited ${code} but graph.json exists — using it`);
   }
 
   let g: GraphifyGraph;
