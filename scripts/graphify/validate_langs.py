@@ -31,9 +31,14 @@ def main() -> int:
             env={**os.environ, "GRAPHIFY_QUERY_LOG_DISABLE": "1"},
         )
         combined = proc.stdout + proc.stderr
-        if "not installed" in combined:
-            print(f"FAIL: a grammar reported 'not installed':\n{combined}", file=sys.stderr)
-            return 1
+        # A missing grammar prints "not installed"; a broken frozen-binary
+        # multiprocessing worker prints these — both silently drop files, so
+        # treat any of them as failure.
+        for marker in ("not installed", "terminated abruptly", "worker failed",
+                       "unknown command", "--multiprocessing-fork"):
+            if marker in combined:
+                print(f"FAIL: '{marker}' in graphify output:\n{combined}", file=sys.stderr)
+                return 1
 
         graph_path = Path(out) / "graphify-out" / "graph.json"
         if not graph_path.is_file():
