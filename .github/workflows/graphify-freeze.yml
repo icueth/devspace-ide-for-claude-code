@@ -2,6 +2,12 @@ name: graphify-freeze
 
 on:
   workflow_dispatch:
+  push:
+    branches: [prod]
+    paths:
+      - 'scripts/freeze-graphify.mjs'
+      - 'scripts/graphify/**'
+      - '.github/workflows/graphify-freeze.yml'
   pull_request:
     paths:
       - 'scripts/freeze-graphify.mjs'
