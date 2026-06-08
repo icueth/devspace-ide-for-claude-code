@@ -21,19 +21,23 @@ exports.default = async function afterPack(context) {
 
   const wrongArch = archName === 'arm64' ? 'darwin-x64' : 'darwin-arm64';
   const productFilename = context.packager.appInfo.productFilename;
-  const target = path.join(
+  const resourcesDir = path.join(
     context.appOutDir,
     `${productFilename}.app`,
     'Contents',
     'Resources',
-    'mempalace-uv',
-    wrongArch,
   );
 
-  try {
-    await rm(target, { recursive: true, force: true });
-    console.log(`[after-pack] pruned wrong-arch uv (${wrongArch}) for ${archName} build`);
-  } catch (err) {
-    console.warn(`[after-pack] uv prune skipped: ${err.message}`);
+  // Both uv and graphify ship per-arch native binaries resolved by
+  // process.arch at runtime (mempalacePaths.ts / graphifyPaths.ts), so the
+  // wrong-arch copy is pure dead weight on a single-arch build.
+  for (const bundle of ['mempalace-uv', 'graphify']) {
+    const target = path.join(resourcesDir, bundle, wrongArch);
+    try {
+      await rm(target, { recursive: true, force: true });
+      console.log(`[after-pack] pruned wrong-arch ${bundle} (${wrongArch}) for ${archName} build`);
+    } catch (err) {
+      console.warn(`[after-pack] ${bundle} prune skipped: ${err.message}`);
+    }
   }
 };

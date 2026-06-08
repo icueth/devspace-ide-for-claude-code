@@ -1,0 +1,59 @@
+name: graphify-freeze
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'scripts/freeze-graphify.mjs'
+      - 'scripts/graphify/**'
+      - '.github/workflows/graphify-freeze.yml'
+
+jobs:
+  freeze:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14       # darwin-arm64
+            key: darwin-arm64
+          - os: macos-13       # darwin-x64
+            key: darwin-x64
+          - os: ubuntu-latest  # linux-x64
+            key: linux-x64
+          - os: windows-latest # win32-x64
+            key: win32-x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Freeze graphify (uv provisions Python 3.12)
+        run: node scripts/freeze-graphify.mjs
+
+      - name: Validate every bundled grammar loads (POSIX)
+        if: runner.os != 'Windows'
+        run: |
+          python3 scripts/graphify/validate_langs.py \
+            "resources/graphify/${{ matrix.key }}/graphify" \
+            tests/fixtures/graphify-langs
+
+      - name: Validate every bundled grammar loads (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          python scripts/graphify/validate_langs.py `
+            "resources/graphify/${{ matrix.key }}/graphify.exe" `
+            tests/fixtures/graphify-langs
+
+      - name: Report frozen size
+        if: runner.os != 'Windows'
+        run: du -sh "resources/graphify/${{ matrix.key }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: graphify-${{ matrix.key }}
+          path: resources/graphify/${{ matrix.key }}
+          retention-days: 7

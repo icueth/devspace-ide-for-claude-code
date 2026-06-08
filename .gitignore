@@ -30,3 +30,6 @@ mockup/
 # Bundled uv binaries (fetched at build time via scripts/fetch-uv.mjs)
 resources/mempalace-uv/*/uv
 resources/mempalace-uv/*/uv.exe
+
+# graphify frozen binary tree — built per-OS by scripts/freeze-graphify.mjs (CI), not committed
+resources/graphify/

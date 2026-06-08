@@ -185,6 +185,13 @@
         ]
       },
       {
+        "from": "resources/graphify",
+        "to": "graphify",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
         "from": "resources/setup-hooks",
         "to": "setup-hooks",
         "filter": [
