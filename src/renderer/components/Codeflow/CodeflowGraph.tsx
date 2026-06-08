@@ -132,7 +132,9 @@ export function CodeflowGraphView({
   );
   const [graph, setGraph] = useState<CodeflowGraph | null>(null);
   const [functionGraph, setFunctionGraph] = useState<CodeflowFunctionGraph | null>(null);
-  const [viewMode, setViewMode] = useState<ViewMode>('files');
+  // Functions view is now powered by the bundled graphify binary and is the
+  // primary Codeflow graph; the file (import) view remains as a secondary lens.
+  const [viewMode, setViewMode] = useState<ViewMode>('functions');
   const [hideOrphans, setHideOrphans] = useState(true);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);

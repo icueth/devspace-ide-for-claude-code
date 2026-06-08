@@ -33,7 +33,7 @@ describe('adaptFunctionGraph (real graphify output)', () => {
     expect(out.nodes.length).toBeLessThanOrEqual(withSource);
   });
 
-  it('keeps only call-like edges, remapped onto existing node ids', () => {
+  it('remaps edges onto existing node ids, dropping external endpoints', () => {
     const ids = new Set(out.nodes.map((n) => n.id));
     for (const e of out.edges) {
       expect(ids.has(e.source)).toBe(true);
