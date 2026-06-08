@@ -5,6 +5,60 @@ All notable changes to DevSpace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.38.0-beta.9] — 2026-06-08 (prod branch, local beta — not on GH)
+
+**Codeflow now powered by graphify.** The in-house TypeScript function-graph
+analyzer is replaced by the [graphify](https://github.com/safishamsi/graphify)
+Python engine (tree-sitter AST across 25 languages), shipped as a bundled,
+frozen per-OS binary — no Python on the user's machine, fully offline. The
+Codeflow **Functions view is now the primary graph** and renders graphify's
+symbol-dependency graph. This is Phases 0 + 2 of the migration; the legacy
+doc-generation UI and a queryable-graph panel (Phases 1 + 3) are still to come,
+so the old "Generate codeflow" button + doc tabs remain for now.
+
+### Added
+- **Bundled graphify binary pipeline**, mirroring the existing `uv` bundling:
+  `scripts/freeze-graphify.mjs` (PyInstaller `--onedir`, uv-pinned Python 3.12,
+  25 tree-sitter grammars auto-enumerated from the installed package),
+  `src/main/utils/graphifyPaths.ts` resolver, `extraResources` + `after-pack`
+  prune, and a 4-leg (`darwin-arm64/x64`, `linux-x64`, `win32-x64`) CI freeze +
+  per-language grammar-load validation workflow.
+- `GraphifyDriver` (main): spawns the frozen binary to extract a project
+  (single-root → project-relative paths, `--no-cluster`, offline) and reads
+  `graph.json`; per-project `userData` cache enables incremental re-extracts.
+- `graphifyAdapter`: maps graphify's NetworkX symbol graph onto
+  `CodeflowFunctionGraph` (`<file>::<name>:<line>` ids, `detectLayer`, full
+  structural edge set, aggregated counts + confidence, degree). Unit-tested
+  against real binary output (6/6).
+- `freeze-graphify` npm script; `predist:mac*` hooks now freeze graphify.
+
+### Changed
+- `CODEFLOW_BUILD_FUNCTION_GRAPH` IPC now resolves via `GraphifyDriver` instead
+  of `CodeflowFunctionAnalyzer` — same return shape, renderer unchanged.
+- Default Codeflow `viewMode` → `functions` (graphify-backed).
+
+### Fixed
+- Frozen-binary multiprocessing: PyInstaller `spawn` re-launched the exe per
+  pool worker with `--multiprocessing-fork`/`-B` args graphify's CLI rejected,
+  killing workers and silently dropping files. `freeze_support()` (Windows) +
+  `set_start_method('fork')` (macOS/Linux) fixes it — `src/main` coverage
+  jumped 412 → 1259 nodes.
+
+### Verified
+- typecheck 0 errors · **774/774 tests** · electron-vite build clean · adapter
+  test 6/6 · frozen binary extracts the real repo offline (no Python on PATH) ·
+  **Linux CI freeze green** · macOS-arm64 binary 117 MB.
+
+### Known gaps
+- **Windows CI freeze is red** (all grammar wheels exist — a PyInstaller/Windows
+  script detail, under fix); macOS CI legs were still queued at cut time
+  (local macOS already green).
+- Phases 1 (delete legacy doc-gen/augment UI) + 3 (queryable-graph QueryPanel +
+  MCP query child) pending. Functions live-sync + interactive GUI click-test
+  not yet done.
+- Universal mac dmg needs a per-arch freeze (CI) — single-arch dist builds the
+  host arch only.
+
 ## [0.38.0-beta.8] — 2026-06-02 (prod branch, local beta — not on GH)
 
 **Post-review polish.** An independent multi-agent review of beta.7 caught
