@@ -5,6 +5,42 @@ All notable changes to DevSpace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.38.0-beta.10] — 2026-06-08 (prod branch, local beta — not on GH)
+
+**Queryable graph + Windows freeze fix.** Adds the queryable-graph half of the
+graphify migration (Phase 3) and fixes the Windows binary freeze. The Codeflow
+tab now has a **Query** tab next to Visualization: ask graphify about the
+codebase (`query`), trace a `path` between two symbols, or `explain` a node —
+answered from the code knowledge graph, no static docs to read.
+
+### Added
+- **Codeflow → Query tab** (`QueryPanel`): runs one-shot `graphify
+  query`/`path`/`explain` against the cached `graph.json` (offline, read-only).
+  `CODEFLOW_QUERY` IPC (validated at the boundary) + `GraphifyDriver.query` +
+  preload/api wiring. Chosen over a persistent MCP stdio child for robustness.
+
+### Fixed
+- **Windows binary freeze** (CI was red): PyInstaller succeeded but the move
+  step hit `EXDEV` (temp `C:` → repo `D:` rename). `fs.cp` fixed that but
+  mangled the macOS `_internal/Python` symlink. Final fix: PyInstaller now
+  builds into an in-repo `.graphify-build/` dir, so the move is a same-device
+  `rename` on every platform — preserving the onedir's symlinks + exec bits.
+  Verified on macOS (binary runs, 16 langs); Linux CI already green.
+
+### Verified
+- typecheck 0 errors · **774/774 tests** · electron-vite build clean ·
+  `graphify query/path/explain` confirmed working on a `--no-cluster` graph.
+
+### Known gaps
+- **Phase 1 not done**: the legacy static-doc generator ("Generate codeflow"
+  button + doc tabs + `MarkdownPreview`), `CodeflowGraphAugment`, and
+  `CodeflowFunctionAnalyzer` still ship as harmless extra features. Their
+  removal is a careful follow-up best verified with the app running (the
+  augment layer is coupled into the renderer). The graphify graph + Query tab
+  are the live path; the old doc-gen remains available.
+- Interactive GUI click-test pending (build + typecheck + binary extraction all
+  verified headlessly).
+
 ## [0.38.0-beta.9] — 2026-06-08 (prod branch, local beta — not on GH)
 
 **Codeflow now powered by graphify.** The in-house TypeScript function-graph
