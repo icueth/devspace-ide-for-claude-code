@@ -5,6 +5,26 @@ All notable changes to DevSpace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.38.0-beta.11] — 2026-06-08 (prod branch, local beta — not on GH)
+
+**Fix: Codeflow graph build failed on real projects.** First fix from live
+testing. Opening Codeflow on a project with docs/images threw
+`Error occurred in handler for 'codeflow:build-function-graph': … the 'openai'
+package is required for this backend` and produced no graph.
+
+### Fixed
+- graphify routes doc/paper/image files through its LLM "semantic" backend; the
+  bundled binary is offline-only (no LLM SDK/key), so any `.md`/`.yaml`/`.png`/
+  etc. in the tree made `graphify extract` exit 1. `GraphifyDriver` now passes
+  `--exclude` for every non-code extension (DOC + PAPER + IMAGE + OFFICE + VIDEO
+  from `detect.py`), so extraction is pure tree-sitter AST and fully offline.
+  It also now reads `graph.json` even on a non-zero exit (use a partial code
+  graph rather than discard).
+
+### Verified
+- Repo root extract: **267 code files → 2613 nodes / 6848 edges**, 0 docs, no
+  LLM backend invoked, exit 0. typecheck 0 errors · 774/774 tests · build clean.
+
 ## [0.38.0-beta.10] — 2026-06-08 (prod branch, local beta — not on GH)
 
 **Queryable graph + Windows freeze fix.** Adds the queryable-graph half of the
