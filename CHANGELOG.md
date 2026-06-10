@@ -5,6 +5,24 @@ All notable changes to DevSpace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.38.0-beta.14] — 2026-06-10 (prod branch, local beta — not on GH)
+
+**Sidebar polish.** Two follow-ups to the beta.13 sync work.
+
+### Fixed
+- The sidebar **"All"** project section was force-expanded — with its
+  collapse toggle dead — whenever no sub-project was open (the common
+  workspace-root-only view), so it looked permanently stuck open until you'd
+  opened several projects. It now **defaults collapsed** and the toggle
+  always works; it only force-expands when there is nothing else in the
+  sidebar (no Root section and nothing in Open), which would otherwise leave
+  an empty panel.
+- **Opening a project now always opens its file tree at the root.** Re-visiting
+  a project used to re-expand every subfolder you'd drilled into in a previous
+  visit (restored from the in-memory tree cache). Subfolders now start
+  collapsed and load on demand; the cached root listing is still reused so the
+  top level paints instantly with no flash.
+
 ## [0.38.0-beta.13] — 2026-06-10 (prod branch, local beta — not on GH)
 
 **Sidebar ⇄ tabs ⇄ Claude-CLI dock now stay in lockstep, and CLI teardown
