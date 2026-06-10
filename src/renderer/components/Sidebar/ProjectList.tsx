@@ -38,7 +38,9 @@ export const ProjectList = memo(function ProjectList() {
   const scanning = useWorkspaceStore((s) => s.scanning);
   const activeProjectId = useWorkspaceStore((s) => s.activeProjectId);
   const openedProjectIds = useWorkspaceStore((s) => s.openedProjectIds);
-  const setActiveProject = useWorkspaceStore((s) => s.setActiveProject);
+  // activateProject (not setActiveProject): a sidebar click is user intent,
+  // so it also restores the project's last-used editor tab.
+  const activateProject = useWorkspaceStore((s) => s.activateProject);
   const closeProject = useWorkspaceStore((s) => s.closeProject);
   const allExpanded = useWorkspaceStore((s) => s.allExpanded);
   const setAllExpanded = useWorkspaceStore((s) => s.setAllExpanded);
@@ -101,7 +103,7 @@ export const ProjectList = memo(function ProjectList() {
             project={rootProject}
             isActive={rootProject.id === activeProjectId}
             isOpen={openedProjectIds.includes(rootProject.id)}
-            onClick={() => setActiveProject(rootProject.id)}
+            onClick={() => activateProject(rootProject.id)}
             onClose={
               openedProjectIds.includes(rootProject.id)
                 ? () => closeProject(rootProject.id)
@@ -123,7 +125,7 @@ export const ProjectList = memo(function ProjectList() {
               project={p}
               isActive={p.id === activeProjectId}
               isOpen
-              onClick={() => setActiveProject(p.id)}
+              onClick={() => activateProject(p.id)}
               onClose={() => closeProject(p.id)}
             />
           ))}
@@ -161,7 +163,7 @@ export const ProjectList = memo(function ProjectList() {
                   project={p}
                   isActive={false}
                   isOpen={false}
-                  onClick={() => setActiveProject(p.id)}
+                  onClick={() => activateProject(p.id)}
                 />
               ))}
             </div>

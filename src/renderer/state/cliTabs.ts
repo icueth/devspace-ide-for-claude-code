@@ -1,11 +1,29 @@
 import { create } from 'zustand';
 
 import { api } from '@renderer/lib/api';
+import {
+  addColumnState,
+  arraysEqualUnordered,
+  claudeCliSessionId,
+  computePinnedSessionIds,
+  pinForActiveSelection,
+  removeColumnState,
+  removeTabState,
+  sanitizePersistedColumns,
+  setColumnPinState,
+  splitForTabState,
+  undockProjectState,
+} from '@renderer/state/cliTabsPins';
 import type {
   CliTab,
   DockColumn,
   DockedProjectMeta,
 } from '@shared/types';
+
+// Re-exported so existing importers (ClaudeCliPane, CodeflowView, …) keep
+// working — the implementation moved to cliTabsPins.ts with the other pure
+// helpers when this file hit the 500-line cap.
+export { claudeCliSessionId, computePinnedSessionIds };
 
 const LS_KEY = 'devspace:cliTabs:v1';
 
@@ -44,9 +62,12 @@ function readPersist(): PersistedShape {
     const raw = localStorage.getItem(LS_KEY);
     if (!raw) return { ...EMPTY, columns: [makeDefaultColumn()] };
     const parsed = JSON.parse(raw) as Partial<PersistedShape>;
+    // sanitize: older builds could persist the same (project, tab) in two
+    // columns, which renders one of them permanently blank (last-wins pane
+    // lookup). Keep the first occurrence, null the rest.
     const columns =
       parsed.columns && parsed.columns.length > 0
-        ? parsed.columns
+        ? sanitizePersistedColumns(parsed.columns)
         : [makeDefaultColumn()];
     const activeColumnId =
       parsed.activeColumnId && columns.some((c) => c.id === parsed.activeColumnId)
@@ -79,10 +100,6 @@ function shortId(): string {
   return Math.random().toString(36).slice(2, 8);
 }
 
-export function claudeCliSessionId(projectId: string, tabId: string): string {
-  return `${projectId}:claude-cli:${tabId}`;
-}
-
 interface CliTabsState extends PersistedShape {
   dockProject: (project: DockedProjectMeta) => CliTab;
   undockProject: (projectId: string) => void;
@@ -95,8 +112,9 @@ interface CliTabsState extends PersistedShape {
   // shallow-merge-into-tabs pattern.
   setTabOverlay: (projectId: string, tabId: string, open: boolean) => void;
   reloadTab: (projectId: string, tabId: string) => Promise<void>;
-  // Multi-column dock layout. addColumn duplicates the active column's pin
-  // so the new slot starts populated; the user can then click another chip
+  // Multi-column dock layout. addColumn seeds the new slot with a tab not
+  // yet visible in any column (cloning the active pin would duplicate it
+  // and blank the original column); the user can then click another chip
   // to retarget it. splitForTab creates a column pre-pinned to a specific
   // (project, tab) — used by the drag-from-tab-bar gesture.
   addColumn: () => void;
@@ -121,23 +139,6 @@ function persist(state: PersistedShape): void {
     columns: state.columns,
     activeColumnId: state.activeColumnId,
   });
-}
-
-function pinForActiveSelection(
-  prev: PersistedShape,
-  projectId: string,
-  tabId: string,
-): DockColumn[] {
-  // Update the active column's pin so it tracks the user's last chip click.
-  // Falls back to the first column if the active id has been removed.
-  const activeId =
-    prev.columns.some((c) => c.id === prev.activeColumnId)
-      ? prev.activeColumnId
-      : prev.columns[0]?.id;
-  if (!activeId) return prev.columns;
-  return prev.columns.map((c) =>
-    c.id === activeId ? { ...c, pin: { projectId, tabId } } : c,
-  );
 }
 
 function makeTab(projectId: string, label: string): CliTab {
@@ -203,40 +204,23 @@ export const useCliTabsStore = create<CliTabsState>((set, get) => {
     undockProject(projectId) {
       const s = get();
       const tabs = s.tabsByProject[projectId] ?? [];
-      // Kill PTYs for every tab plus the legacy per-project shell.
+      // Kill the FULL session tree (attach client + backing tmux session)
+      // for every tab plus the legacy per-project shell — a detach-only
+      // kill leaks claude + MCP children in detached tmux sessions.
       for (const tab of tabs) {
         void api.pty
-          .kill(claudeCliSessionId(projectId, tab.id))
+          .killSessionTree(projectId, tab.id, 'claude-cli')
           .catch(() => undefined);
       }
-      void api.pty.kill(`${projectId}:shell:default`).catch(() => undefined);
+      void api.pty
+        .killSessionTree(projectId, 'default', 'shell')
+        .catch(() => undefined);
 
+      // undockProjectState picks ONE fallback for the selection AND the
+      // column re-target (see its doc) — no workspace-store calls here,
+      // App.tsx's isUndockRetargetTransition guard depends on that.
       set((prev) => {
-        const tabsByProject = { ...prev.tabsByProject };
-        delete tabsByProject[projectId];
-        const activeTabIdByProject = { ...prev.activeTabIdByProject };
-        delete activeTabIdByProject[projectId];
-        const projectsById = { ...prev.projectsById };
-        delete projectsById[projectId];
-        const dockedOrder = prev.dockedOrder.filter((id) => id !== projectId);
-        const activeDockedProjectId =
-          prev.activeDockedProjectId === projectId
-            ? (dockedOrder[dockedOrder.length - 1] ?? null)
-            : prev.activeDockedProjectId;
-        // Any column pinned to this project loses its pin so it doesn't
-        // dangle pointing at a non-existent tab.
-        const columns = prev.columns.map((c) =>
-          c.pin?.projectId === projectId ? { ...c, pin: null } : c,
-        );
-        const next: PersistedShape = {
-          tabsByProject,
-          activeTabIdByProject,
-          projectsById,
-          dockedOrder,
-          activeDockedProjectId,
-          columns,
-          activeColumnId: prev.activeColumnId,
-        };
+        const next = undockProjectState(prev, projectId);
         persist(next);
         return next;
       });
@@ -312,31 +296,22 @@ export const useCliTabsStore = create<CliTabsState>((set, get) => {
       // Closing the last tab undocks the project entirely — matches the
       // user's mental model: "ปิดทิ้ง" should remove the chip, not respawn.
       // Re-opening the project from the sidebar gives a fresh Claude 1.
+      // killSessionTree (not kill): the close-tab confirm dialog promises
+      // "ends the tmux session" — a detach-only kill leaves claude running
+      // headless in a detached session.
       if (tabs.length === 0) {
-        void api.pty.kill(claudeCliSessionId(projectId, tabId)).catch(() => undefined);
+        void api.pty
+          .killSessionTree(projectId, tabId, 'claude-cli')
+          .catch(() => undefined);
         get().undockProject(projectId);
         return;
       }
-      void api.pty.kill(claudeCliSessionId(projectId, tabId)).catch(() => undefined);
+      void api.pty
+        .killSessionTree(projectId, tabId, 'claude-cli')
+        .catch(() => undefined);
       set((prev) => {
-        const tabsByProject = { ...prev.tabsByProject, [projectId]: tabs };
-        const activeTabIdByProject = { ...prev.activeTabIdByProject };
-        const fallbackTabId = tabs[tabs.length - 1]!.id;
-        if (activeTabIdByProject[projectId] === tabId) {
-          activeTabIdByProject[projectId] = fallbackTabId;
-        }
-        // Re-target any column pinned to the removed tab.
-        const columns = prev.columns.map((c) =>
-          c.pin?.projectId === projectId && c.pin.tabId === tabId
-            ? { ...c, pin: { projectId, tabId: fallbackTabId } }
-            : c,
-        );
-        const next: PersistedShape = {
-          ...prev,
-          tabsByProject,
-          activeTabIdByProject,
-          columns,
-        };
+        const next = removeTabState(prev, projectId, tabId);
+        if (!next) return prev; // raced: tab already gone
         persist(next);
         return next;
       });
@@ -392,20 +367,7 @@ export const useCliTabsStore = create<CliTabsState>((set, get) => {
     addColumn() {
       set((prev) => {
         if (prev.columns.length >= MAX_COLUMNS) return prev;
-        const active = prev.columns.find((c) => c.id === prev.activeColumnId);
-        const newId = `col-${Math.random().toString(36).slice(2, 8)}`;
-        const newColumn: DockColumn = {
-          id: newId,
-          // Clone the active column's pin so the new slot starts populated;
-          // empty splits are jarring. The user can retarget by clicking a
-          // different chip.
-          pin: active?.pin ? { ...active.pin } : null,
-        };
-        const next: PersistedShape = {
-          ...prev,
-          columns: [...prev.columns, newColumn],
-          activeColumnId: newId,
-        };
+        const next = addColumnState(prev, `col-${shortId()}`);
         persist(next);
         return next;
       });
@@ -414,13 +376,7 @@ export const useCliTabsStore = create<CliTabsState>((set, get) => {
     splitForTab(pin) {
       set((prev) => {
         if (prev.columns.length >= MAX_COLUMNS) return prev;
-        const newId = `col-${Math.random().toString(36).slice(2, 8)}`;
-        const newColumn: DockColumn = { id: newId, pin: { ...pin } };
-        const next: PersistedShape = {
-          ...prev,
-          columns: [...prev.columns, newColumn],
-          activeColumnId: newId,
-        };
+        const next = splitForTabState(prev, `col-${shortId()}`, pin);
         persist(next);
         return next;
       });
@@ -428,19 +384,8 @@ export const useCliTabsStore = create<CliTabsState>((set, get) => {
 
     removeColumn(columnId) {
       set((prev) => {
-        if (prev.columns.length <= 1) return prev;
-        const idx = prev.columns.findIndex((c) => c.id === columnId);
-        if (idx < 0) return prev;
-        const columns = prev.columns.filter((c) => c.id !== columnId);
-        const activeColumnId =
-          prev.activeColumnId === columnId
-            ? (columns[Math.max(0, idx - 1)]?.id ?? columns[0]!.id)
-            : prev.activeColumnId;
-        const next: PersistedShape = {
-          ...prev,
-          columns,
-          activeColumnId,
-        };
+        const next = removeColumnState(prev, columnId);
+        if (!next) return prev; // last column / unknown id
         persist(next);
         return next;
       });
@@ -458,24 +403,25 @@ export const useCliTabsStore = create<CliTabsState>((set, get) => {
 
     setColumnPin(columnId, pin) {
       set((prev) => {
-        const columns = prev.columns.map((c) =>
-          c.id === columnId ? { ...c, pin } : c,
-        );
-        const next: PersistedShape = { ...prev, columns };
+        // SWAP semantics + selection sync — see setColumnPinState.
+        const next = setColumnPinState(prev, columnId, pin);
+        if (!next) return prev; // unknown column id
         persist(next);
         return next;
       });
     },
 
     async reloadTab(projectId, tabId) {
-      // Kill the PTY first so the pool entry is gone before the pane
-      // remounts. The pane keys on (projectId, tabId, reloadGen), so the
-      // gen bump triggers React to unmount and remount — at which point the
-      // pane's spawn-once effect runs again and creates a fresh PTY.
+      // restartClaude kills the PTY pool entry AND the backing tmux session
+      // before the pane remounts. The pane keys on (projectId, tabId,
+      // reloadGen), so the gen bump unmounts/remounts it and its spawn-once
+      // effect's `new-session -A` creates a FRESH claude — picking up new
+      // .mcp.json/env is the whole point of "Reload tab". A plain kill only
+      // detached, so the remount silently reattached to the old claude.
       try {
-        await api.pty.kill(claudeCliSessionId(projectId, tabId));
+        await api.pty.restartClaude(projectId, tabId);
       } catch {
-        /* ignore — PTY may already be gone */
+        /* best-effort — still bump reloadGen so the pane remounts */
       }
       set((prev) => {
         const tabs = (prev.tabsByProject[projectId] ?? []).map((t) =>
@@ -521,23 +467,8 @@ if (typeof window !== 'undefined' && api?.pty?.onAutoClosed) {
 // to `columns` (and `tabsByProject`, since a column's pin → session-id
 // resolution depends on the referenced tab still existing). Source of
 // truth is the renderer — main has no way to know which (project, tab)
-// pair is currently visible in some dock column.
-function computePinnedSessionIds(state: PersistedShape): string[] {
-  const out: string[] = [];
-  for (const col of state.columns) {
-    if (!col.pin) continue;
-    const tabs = state.tabsByProject[col.pin.projectId];
-    if (!tabs?.some((t) => t.id === col.pin!.tabId)) continue;
-    out.push(claudeCliSessionId(col.pin.projectId, col.pin.tabId));
-  }
-  return out;
-}
-function arraysEqualUnordered(a: string[], b: string[]): boolean {
-  if (a.length !== b.length) return false;
-  const set = new Set(a);
-  for (const x of b) if (!set.has(x)) return false;
-  return true;
-}
+// pair is currently visible in some dock column. computePinnedSessionIds /
+// arraysEqualUnordered live in cliTabsPins.ts.
 if (typeof window !== 'undefined' && api?.pty?.setPinned) {
   let prevIds = computePinnedSessionIds(useCliTabsStore.getState());
   try {

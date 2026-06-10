@@ -1,5 +1,5 @@
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
-import { ChevronDown, FolderOpen, FolderPlus } from 'lucide-react';
+import { ChevronDown, FolderOpen, FolderPlus, RefreshCw } from 'lucide-react';
 
 import { cn } from '@renderer/lib/utils';
 import { useWorkspaceStore } from '@renderer/state/workspace';
@@ -16,6 +16,7 @@ export function WorkspacePicker() {
   const projects = useWorkspaceStore((s) => s.projects);
   const pickFolder = useWorkspaceStore((s) => s.pickFolder);
   const setActive = useWorkspaceStore((s) => s.setActive);
+  const rescan = useWorkspaceStore((s) => s.rescan);
 
   const otherWorkspaces = known.filter((w) => w.id !== active?.id);
   const projectCount = active ? projects.length : 0;
@@ -102,6 +103,18 @@ export function WorkspacePicker() {
             >
               <FolderOpen size={13} className="shrink-0 text-accent" />
               <span className="min-w-0 flex-1 truncate">{active.path}</span>
+            </DropdownMenu.Item>
+          )}
+          {active && (
+            <DropdownMenu.Item
+              className="flex items-center gap-2 rounded-[6px] px-2 py-1.5 outline-none hover:bg-surface-overlay"
+              onSelect={() => void rescan()}
+            >
+              <RefreshCw size={13} className="shrink-0 text-text-secondary" />
+              {/* Re-selecting the current workspace is a no-op by design
+                  (setActive same-id guard) — this is the explicit way to
+                  pick up newly created sibling project folders. */}
+              <span>Rescan projects</span>
             </DropdownMenu.Item>
           )}
 

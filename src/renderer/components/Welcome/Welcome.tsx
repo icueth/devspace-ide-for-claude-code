@@ -55,7 +55,8 @@ export function Welcome({ version }: WelcomeProps) {
   const projects = useWorkspaceStore((s) => s.projects);
   const pickFolder = useWorkspaceStore((s) => s.pickFolder);
   const setActive = useWorkspaceStore((s) => s.setActive);
-  const setActiveProject = useWorkspaceStore((s) => s.setActiveProject);
+  // User intent — also restores the project's last-used editor tab.
+  const activateProject = useWorkspaceStore((s) => s.activateProject);
 
   const recent = useMemo(
     () => [...known].sort((a, b) => (b.lastOpened ?? 0) - (a.lastOpened ?? 0)).slice(0, 8),
@@ -106,7 +107,7 @@ export function Welcome({ version }: WelcomeProps) {
             workspaceName={active.name}
             projectCount={projects.length}
             projects={projects}
-            onPickProject={(id) => setActiveProject(id)}
+            onPickProject={(id) => activateProject(id)}
           />
         )}
 

@@ -57,8 +57,18 @@ export function ResourceToastHost(): ReactElement | null {
       const noun = count === 1 ? 'idle CLI tab' : 'idle CLI tabs';
       push(`Closed ${count} ${noun} · ≈${freedMb} MB freed`);
     });
+    // Generic renderer-side producer path: stores can't import this
+    // component (state must stay React-free), so they dispatch a window
+    // CustomEvent instead. Producer today: workspaceStore's MAX_OPEN
+    // eviction (state/workspace.ts announceEviction).
+    const onToastEvent = (e: Event): void => {
+      const msg = (e as CustomEvent<{ message?: string }>).detail?.message;
+      if (typeof msg === 'string' && msg.length > 0) push(msg);
+    };
+    window.addEventListener('devspace:resource-toast', onToastEvent);
     return () => {
       off();
+      window.removeEventListener('devspace:resource-toast', onToastEvent);
       // Tear down any in-flight timers when the host unmounts (rare —
       // it's app-root scoped — but cleanup-on-unmount is the rule).
       for (const handle of timersRef.current.values()) clearTimeout(handle);

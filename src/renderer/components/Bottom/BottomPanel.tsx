@@ -28,6 +28,14 @@ interface BottomPanelProps {
   // to keep one BottomPanel per docked project mounted at all times so dev
   // servers stay visually live across project switches without the buffer
   // replay flicker.
+  //
+  // v0.38 trade-off: hidden panels no longer pre-mount their terminal —
+  // with 8 docked projects that was 8 xterms + 8 live zsh PTYs for panels
+  // never looked at. The first view of a never-viewed panel now pays a
+  // one-time PTY spawn (or rolling-buffer replay for a PTY a dev server is
+  // already running in — the `${projectId}:shell:default` key reattaches).
+  // Once viewed, a panel stays mounted, so the no-flicker property above
+  // still holds for everything the user actually uses.
   isVisible?: boolean;
 }
 
@@ -43,8 +51,16 @@ export const BottomPanel = memo(function BottomPanel({
   const [active, setActive] = useState<Tab>(initialTab ?? 'terminal');
   const setBottomOpen = useLayoutStore((s) => s.setBottomOpen);
   const [mountedTabs, setMountedTabs] = useState<Set<Tab>>(
-    () => new Set<Tab>([initialTab ?? 'terminal']),
+    () => new Set<Tab>(isVisible ? [initialTab ?? 'terminal'] : []),
   );
+
+  // Hidden panels mount nothing; the first time this panel becomes visible,
+  // mount whatever tab is active (covers initialTab='git'/'search' too).
+  // Idempotent with activate() below.
+  useEffect(() => {
+    if (!isVisible) return;
+    setMountedTabs((prev) => (prev.has(active) ? prev : new Set(prev).add(active)));
+  }, [isVisible, active]);
 
   // Per-project shell tabs, keyed by projectId. Reading by projectId means
   // each panel only re-renders when its own tabs change — switching active

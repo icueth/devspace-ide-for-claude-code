@@ -39,6 +39,11 @@ export function deriveProjectIdFromTab(
   let pathForMatch = tabPath;
   if (tabPath.startsWith('diff:')) {
     pathForMatch = tabPath.slice('diff:'.length);
+  } else if (tabPath.startsWith('html-preview:')) {
+    // html-preview:<absolute html path> — the embedded path is the FILE
+    // (under <project>/.devspace/preview/), so longest-prefix matching below
+    // resolves the owning project just like a plain file tab.
+    pathForMatch = tabPath.slice('html-preview:'.length);
   }
   // Longest-prefix match wins (nested workspace safety).
   let best: { id: string; pathLen: number } | null = null;
@@ -72,6 +77,129 @@ export function deriveProjectIdFromDockColumn(
   if (!col?.pin) return null;
   const exists = projects.some((p) => p.id === col.pin!.projectId);
   return exists ? col.pin.projectId : null;
+}
+
+// v0.38 — the dock-follow effect keys its edge detection on
+// `${columnId}|${projectId}:${tabId}` (pin part empty when unpinned). A
+// none→pinned transition on the SAME column is the signature of
+// ClaudeCliDock's defensive auto-pin: it fires from background events too
+// (idle pty auto-close → undockProject nulls the pin), and following it
+// would switch + persist the user's project with zero user action. Every
+// USER gesture that pins an empty column (chip click, drag-drop) activates
+// the project explicitly, so skipping these transitions loses nothing.
+export function isDefensiveAutoPinTransition(
+  prevKey: string | null,
+  nextKey: string,
+): boolean {
+  if (!prevKey) return false;
+  const prevSep = prevKey.indexOf('|');
+  const nextSep = nextKey.indexOf('|');
+  if (prevSep < 0 || nextSep < 0) return false;
+  const sameColumn = prevKey.slice(0, prevSep) === nextKey.slice(0, nextSep);
+  const prevUnpinned = prevSep === prevKey.length - 1;
+  const nextPinned = nextSep < nextKey.length - 1;
+  return sameColumn && prevUnpinned && nextPinned;
+}
+
+// v0.38 — companion rule to the auto-pin skip above: a same-column
+// pinned→pinned transition whose PREVIOUS pin points at a project that is no
+// longer docked is an undock retarget (idle pty auto-close or "Close
+// project" removed the chip and the dock repaired the column), not a user
+// gesture — following it would switch the sidebar with zero user action.
+// Key format is `${columnId}|${projectId}:${tabId}`; column ids (col-…,
+// base36) and project ids (hashPath, 12-hex) never contain '|' or ':', and
+// tab ids (base36) never contain ':', so slicing on the first '|' and the
+// last ':' is unambiguous.
+export function isUndockRetargetTransition(
+  prevKey: string | null,
+  nextKey: string,
+  isProjectDocked: (projectId: string) => boolean,
+): boolean {
+  if (!prevKey) return false;
+  const prevSep = prevKey.indexOf('|');
+  const nextSep = nextKey.indexOf('|');
+  if (prevSep < 0 || nextSep < 0) return false;
+  if (prevKey.slice(0, prevSep) !== nextKey.slice(0, nextSep)) return false;
+  const prevPin = prevKey.slice(prevSep + 1);
+  const nextPin = nextKey.slice(nextSep + 1);
+  // none→pinned is the auto-pin rule's domain; pinned→none never follows
+  // anyway (derive yields null for an unpinned column).
+  if (!prevPin || !nextPin) return false;
+  const lastColon = prevPin.lastIndexOf(':');
+  if (lastColon <= 0) return false;
+  return !isProjectDocked(prevPin.slice(0, lastColon));
+}
+
+// v0.38 — per-project most-recently-used editor tab. Lets activateProject
+// restore the tab the user was last on in that project, so sidebar / dock /
+// editor all agree after a project switch. Session-only by design: editor
+// tabs themselves don't persist across restarts, so persisting this map
+// would only point at tabs that no longer exist.
+const mruTabByProject = new Map<string, string>();
+
+// v0.38 — session-only activation recency for MAX_OPEN eviction. A monotonic
+// counter (not Date.now()) so tests are deterministic. openedProjectIds
+// itself stays in stable insertion order — it drives the sidebar "Open"
+// section, and reordering it would make rows jump on every project switch —
+// so recency has to live outside the array.
+let activationSeq = 0;
+const lastActivated = new Map<string, number>();
+
+// Cap on simultaneously-open projects; setActiveProject evicts beyond it.
+// Module-scoped (not inline in the updater) so the eviction toast can name
+// the limit in its message without drifting from the actual cap.
+const MAX_OPEN = 8;
+
+// Eviction is the ONLY teardown path without a confirm dialog (every
+// explicit close gesture asks first, because teardown kills tmux sessions).
+// A silent disappearance looks like data loss, so surface a non-modal toast
+// naming what was closed. Dispatched as a window CustomEvent — the consumer
+// is ResourceToastHost (components/Toast/ResourceToast.tsx); the store must
+// never import React components. Guarded: tests stub `window` as a bare
+// object, and the toast is best-effort anyway.
+function announceEviction(names: string[]): void {
+  if (names.length === 0) return;
+  try {
+    window.dispatchEvent(
+      new CustomEvent('devspace:resource-toast', {
+        detail: {
+          message: `Closed ${names.join(', ')} — project limit (${MAX_OPEN}) reached`,
+        },
+      }),
+    );
+  } catch {
+    /* no DOM window (tests) — skip */
+  }
+}
+
+export function __resetProjectMruForTests(): void {
+  mruTabByProject.clear();
+  lastActivated.clear();
+  activationSeq = 0;
+}
+
+// Pure tab-picking rule (exported for tests): prefer the project's MRU tab,
+// but only if it is still open AND still attributed to this project —
+// longest-prefix attribution can shift to a deeper project after a rescan
+// (nested workspaces), and activating a re-attributed tab would bounce the
+// sidebar to the wrong project. Fallback: the most recently OPENED tab the
+// project still owns. None → null (caller leaves the editor alone).
+export function pickEditorTabForProject(
+  projectId: string,
+  mru: ReadonlyMap<string, string>,
+  openTabs: ReadonlyArray<{ path: string }>,
+  projects: ReadonlyArray<Pick<Project, 'id' | 'path'>>,
+): string | null {
+  const owned = (path: string): boolean =>
+    deriveProjectIdFromTab(path, projects) === projectId;
+  const mruPath = mru.get(projectId);
+  if (mruPath && openTabs.some((t) => t.path === mruPath) && owned(mruPath)) {
+    return mruPath;
+  }
+  for (let i = openTabs.length - 1; i >= 0; i--) {
+    if (owned(openTabs[i]!.path)) return openTabs[i]!.path;
+  }
+  return null;
 }
 
 // Free PTY sessions tied to a project so closing / evicting releases memory
@@ -136,9 +264,79 @@ interface WorkspaceState {
   pickFolder: () => Promise<void>;
   openPath: (path: string) => Promise<void>;
   setActive: (id: string) => Promise<void>;
+  // Explicit re-walk of the active workspace (WorkspacePicker → "Rescan").
+  // Needed because setActive's same-id guard removed the implicit
+  // click-the-current-workspace rescan — the app's only project-list refresh.
+  rescan: () => Promise<void>;
+  // setActiveProject is the plain mirror used by programmatic followers
+  // (auto-follow effects, boot restore) — it must NEVER move the editor.
   setActiveProject: (id: string | null) => void;
+  // activateProject = user intent (sidebar row, Welcome card, dock chip):
+  // setActiveProject + restore the project's last-used editor tab.
+  activateProject: (id: string | null) => void;
+  // followTab = a tab became active (click or programmatic open): record it
+  // as the project's MRU tab and move the sidebar to the owning project.
+  followTab: (tabPath: string) => void;
   closeProject: (id: string) => void;
   setAllExpanded: (v: boolean) => void;
+}
+
+type WorkspaceSet = (
+  partial:
+    | Partial<WorkspaceState>
+    | ((s: WorkspaceState) => Partial<WorkspaceState>),
+) => void;
+
+// Shared by setActive (workspace switch) and rescan (explicit re-walk of the
+// current workspace): wipe per-workspace state, scan, then restore the
+// persisted opened/active projects for this workspace.
+async function scanWorkspaceIntoStore(
+  set: WorkspaceSet,
+  get: () => WorkspaceState,
+  ws: Workspace,
+): Promise<void> {
+  set({
+    scanning: true,
+    activeProjectId: null,
+    projects: [],
+    openedProjectIds: [],
+    allExpanded: false,
+  });
+  try {
+    const projects = await api.workspace.scan(ws.id, ws.path);
+    // Restore persisted opened-project state for this workspace. Filter out
+    // project IDs that no longer exist (e.g. folder was deleted).
+    const saved = readPersist().perWorkspace[ws.id];
+    const validProjectIds = new Set(projects.map((p) => p.id));
+    let openedProjectIds = (saved?.openedProjectIds ?? []).filter((x) =>
+      validProjectIds.has(x),
+    );
+    let activeProjectId: string | null =
+      saved?.activeProjectId && validProjectIds.has(saved.activeProjectId)
+        ? saved.activeProjectId
+        : (openedProjectIds[openedProjectIds.length - 1] ?? null);
+
+    // First visit to this workspace (no persisted state): auto-activate the
+    // workspace root project if one was detected — a monorepo user expects
+    // the CLI to open at the root, not stare at an empty pane.
+    if (!saved && openedProjectIds.length === 0) {
+      const rootProject = projects.find((p) => p.isWorkspaceRoot);
+      if (rootProject) {
+        activeProjectId = rootProject.id;
+        openedProjectIds = [rootProject.id];
+      }
+    }
+
+    set({
+      projects,
+      scanning: false,
+      openedProjectIds,
+      activeProjectId,
+      allExpanded: saved?.allExpanded ?? false,
+    });
+  } catch (err) {
+    set({ scanning: false, error: (err as Error).message });
+  }
 }
 
 function persistSnapshot(state: {
@@ -193,52 +391,51 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   },
 
   async setActive(id: string) {
+    const s = get();
+    // Same-id no-op guard: re-selecting the already-active workspace must not
+    // wipe state and rescan — WorkspacePicker wires the current row to this
+    // action, and an unguarded click unmounts FileTree (tearing down its
+    // watcher), flashes "Scanning…", and blanks the editor for nothing.
+    // `scanning` short-circuits duplicate in-flight scans; `projects.length`
+    // keeps the boot path (load() → setActive with an empty store) and the
+    // failed-scan retry path working.
+    if (id === s.active?.id && (s.scanning || s.projects.length > 0)) return;
     const ws =
-      get().known.find((w) => w.id === id) ?? (await api.workspace.setActive(id));
+      s.known.find((w) => w.id === id) ?? (await api.workspace.setActive(id));
     if (!ws) return;
-    set({
-      active: ws,
-      scanning: true,
-      activeProjectId: null,
-      projects: [],
-      openedProjectIds: [],
-      allExpanded: false,
-    });
-    try {
-      const projects = await api.workspace.scan(ws.id, ws.path);
-      // Restore persisted opened-project state for this workspace. Filter out
-      // project IDs that no longer exist (e.g. folder was deleted).
-      const saved = readPersist().perWorkspace[ws.id];
-      const validProjectIds = new Set(projects.map((p) => p.id));
-      let openedProjectIds = (saved?.openedProjectIds ?? []).filter((x) =>
-        validProjectIds.has(x),
-      );
-      let activeProjectId: string | null =
-        saved?.activeProjectId && validProjectIds.has(saved.activeProjectId)
-          ? saved.activeProjectId
-          : (openedProjectIds[openedProjectIds.length - 1] ?? null);
-
-      // First visit to this workspace (no persisted state): auto-activate the
-      // workspace root project if one was detected — a monorepo user expects
-      // the CLI to open at the root, not stare at an empty pane.
-      if (!saved && openedProjectIds.length === 0) {
-        const rootProject = projects.find((p) => p.isWorkspaceRoot);
-        if (rootProject) {
-          activeProjectId = rootProject.id;
-          openedProjectIds = [rootProject.id];
-        }
+    // Snapshot the outgoing workspace's opened projects BEFORE the wipe —
+    // after the scan we suspend their main-side per-project state
+    // (dev server, graphify, codeflow-live). Without this, switching
+    // workspaces leaks running dev servers with no UI handle until the
+    // user happens to switch back. Claude/shell PTYs are deliberately NOT
+    // touched: dock chips persist cross-workspace by design.
+    const outgoing = s.openedProjectIds
+      .map((pid) => s.projects.find((p) => p.id === pid))
+      .filter((p): p is Project => !!p);
+    set({ active: ws });
+    await scanWorkspaceIntoStore(set, get, ws);
+    // Suspend only after the incoming scan resolved, and skip any path the
+    // new workspace also contains — nested workspaces share project paths,
+    // and main keys this state by resolved path, so suspending earlier
+    // could kill a dev server belonging to the workspace being entered.
+    // On scan failure skip entirely: the user likely retries, and killing
+    // dev servers on a failed switch helps nobody.
+    if (get().error) return;
+    const incomingPaths = new Set(get().projects.map((p) => p.path));
+    for (const p of outgoing) {
+      if (!incomingPaths.has(p.path)) {
+        void api.workspace.suspend(p.id, p.path).catch(() => undefined);
       }
-
-      set({
-        projects,
-        scanning: false,
-        openedProjectIds,
-        activeProjectId,
-        allExpanded: saved?.allExpanded ?? false,
-      });
-    } catch (err) {
-      set({ scanning: false, error: (err as Error).message });
     }
+  },
+
+  async rescan() {
+    const ws = get().active;
+    // Dedup: a rescan during an in-flight scan would double-walk the
+    // workspace and race the restore; setActive's same-id guard doesn't
+    // cover this entry point.
+    if (!ws || get().scanning) return;
+    await scanWorkspaceIntoStore(set, get, ws);
   },
 
   setActiveProject(id) {
@@ -248,15 +445,42 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       return;
     }
     const evicted: string[] = [];
+    lastActivated.set(id, ++activationSeq);
     set((s) => {
       if (s.openedProjectIds.includes(id)) {
         return { activeProjectId: id };
       }
-      const MAX_OPEN = 8;
-      const next = [...s.openedProjectIds, id];
+      let next = [...s.openedProjectIds, id];
+      // Evict by activation recency, not insertion order (the old shift()
+      // always removed the FIRST-EVER opened project, even one in active
+      // use). Projects pinned in a dock column are exempt — every explicit
+      // close gesture demands a confirm precisely because teardown kills the
+      // tmux session, so silently reaping a session the user keeps visible
+      // is not acceptable.
+      const pinnedProjects = new Set(
+        useCliTabsStore
+          .getState()
+          .columns.map((c) => c.pin?.projectId)
+          .filter((x): x is string => !!x),
+      );
       while (next.length > MAX_OPEN) {
-        const gone = next.shift();
-        if (gone) evicted.push(gone);
+        const candidates = next.filter((x) => x !== id && !pinnedProjects.has(x));
+        if (candidates.length === 0) {
+          // Everything else is pinned — accept exceeding the cap. With
+          // MAX_COLUMNS=3 at most 3 projects can be pinned, so this is a
+          // near-unreachable safety net, not a leak.
+          break;
+        }
+        let victim = candidates[0]!;
+        for (const c of candidates) {
+          // Strict < keeps the earliest-index candidate on ties; a missing
+          // recency entry (never activated this session) counts as oldest.
+          if ((lastActivated.get(c) ?? 0) < (lastActivated.get(victim) ?? 0)) {
+            victim = c;
+          }
+        }
+        evicted.push(victim);
+        next = next.filter((x) => x !== victim);
       }
       return { activeProjectId: id, openedProjectIds: next };
     });
@@ -278,8 +502,14 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       cli.setActiveDockedProject(id);
     }
     evicted.forEach(killProjectPtys);
+    evicted.forEach((x) => lastActivated.delete(x));
     if (evicted.length > 0) {
+      // get().projects is the full scanned list (eviction only edits
+      // openedProjectIds), so evicted names are still resolvable here.
       const projectsById = new Map(get().projects.map((p) => [p.id, p]));
+      announceEviction(
+        evicted.map((x) => projectsById.get(x)?.name ?? x),
+      );
       // v0.26.0 perf: eviction must run the SAME main-side teardown as an
       // explicit closeProject. Previously the silent MAX_OPEN=8 eviction only
       // killed PTYs — leaving the evicted project's file watcher, dev-server,
@@ -298,7 +528,51 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     persistSnapshot(get());
   },
 
+  activateProject(id) {
+    get().setActiveProject(id);
+    if (!id) return;
+    // Editor mirror — only for explicit user gestures. Background mirrors
+    // (auto-follow effects, pty auto-close fallout) call setActiveProject
+    // directly and must not yank the tab the user is working in.
+    const editor = useEditorStore.getState();
+    const projects = get().projects;
+    // MRU tab already visible in the split pane → nothing to restore;
+    // activating the left-pane fallback would cover the tab the user can
+    // already see with an older one.
+    const mruPath = mruTabByProject.get(id);
+    if (
+      mruPath &&
+      editor.splitTabs.some((t) => t.path === mruPath) &&
+      deriveProjectIdFromTab(mruPath, projects) === id
+    ) {
+      return;
+    }
+    const target = pickEditorTabForProject(
+      id,
+      mruTabByProject,
+      editor.tabs,
+      projects,
+    );
+    if (target && editor.activeTabPath !== target) {
+      editor.setActive(target);
+    }
+  },
+
+  followTab(tabPath) {
+    const derived = deriveProjectIdFromTab(tabPath, get().projects);
+    if (!derived) return;
+    // Record BEFORE switching so activateProject's MRU pick resolves to the
+    // tab the user just clicked (no-op) instead of stealing focus to an
+    // older tab of the same project.
+    mruTabByProject.set(derived, tabPath);
+    if (derived !== get().activeProjectId) {
+      get().setActiveProject(derived);
+    }
+  },
+
   closeProject(id) {
+    mruTabByProject.delete(id);
+    lastActivated.delete(id);
     const root = get().projects.find((p) => p.id === id)?.path ?? null;
     set((s) => {
       const next = s.openedProjectIds.filter((x) => x !== id);
@@ -309,16 +583,20 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     killProjectPtys(id);
     // Close any editor tabs anchored to this project so they don't keep
     // firing IPC subscriptions against a workspace the user said goodbye to.
+    // Ownership uses deriveProjectIdFromTab — the same attribution the
+    // follow effect uses. The previous inline predicate missed
+    // `diff:<root>/…` and `html-preview:<root>/…` keys; a surviving tab of
+    // either kind would get promoted by editor.close()'s neighbor fallback,
+    // fire followTab, and silently re-dock the project the user just closed.
+    // Bonus: tabs attributed to a NESTED project (longest-prefix) now
+    // survive closing the enclosing project, since that project stays open.
     if (root) {
       try {
         const editor = useEditorStore.getState();
+        const projects = get().projects;
         const all = [...editor.tabs, ...editor.splitTabs];
         for (const t of all) {
-          const owned =
-            t.path === root ||
-            t.path.startsWith(`${root}/`) ||
-            t.path.endsWith(`:${root}`); // codeflow:<root>, devlog:<root>, etc.
-          if (owned) {
+          if (deriveProjectIdFromTab(t.path, projects) === id) {
             editor.close(t.path, 'left');
             editor.close(t.path, 'right');
           }

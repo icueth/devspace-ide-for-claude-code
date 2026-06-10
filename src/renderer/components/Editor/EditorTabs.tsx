@@ -4,6 +4,7 @@ import { X } from 'lucide-react';
 import { addFileToClaudeCli } from '@renderer/lib/claudeCli';
 import { cn } from '@renderer/lib/utils';
 import { useEditorStore, type PaneId } from '@renderer/state/editor';
+import { useWorkspaceStore } from '@renderer/state/workspace';
 import { getFileIcon } from '@renderer/utils/fileIcons';
 
 interface EditorTabsProps {
@@ -19,6 +20,7 @@ export function EditorTabs({ pane }: EditorTabsProps) {
   const activeTabPath = pane === 'right' ? splitActive : mainActive;
 
   const setActive = useEditorStore((s) => s.setActive);
+  const followTab = useWorkspaceStore((s) => s.followTab);
   const close = useEditorStore((s) => s.close);
   const closeOthers = useEditorStore((s) => s.closeOthers);
   const closeToRight = useEditorStore((s) => s.closeToRight);
@@ -53,7 +55,19 @@ export function EditorTabs({ pane }: EditorTabsProps) {
                   e.dataTransfer.setData('application/x-devspace-tab', tab.path);
                   e.dataTransfer.effectAllowed = 'move';
                 }}
-                onClick={() => setActive(tab.path, pane)}
+                onClick={() => {
+                  setActive(tab.path, pane);
+                  // Explicit follow on click — BOTH panes: clicking any tab
+                  // moves the sidebar to that tab's project. Covers
+                  // re-clicking the already-active tab, where the store value
+                  // doesn't change and the App auto-follow effect therefore
+                  // can't fire. Safe for the split pane: followTab only
+                  // records MRU + switches the sidebar, never the editor, and
+                  // activateProject short-circuits when the MRU tab is
+                  // already visible in the split pane — so a right-pane click
+                  // won't yank the left pane.
+                  followTab(tab.path);
+                }}
                 onAuxClick={(e) => {
                   if (e.button === 1) {
                     e.preventDefault();

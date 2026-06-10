@@ -148,6 +148,11 @@ export const useEditorStore = create<
           ? s.tabs.map((t) => (t.path === path ? { ...t, pendingNav: nav } : t))
           : s.tabs,
       }));
+      // Re-opening covers the already-active case too (Quick Open /
+      // Spotlight / file tree): the store value doesn't change there, so the
+      // App auto-follow effect can't fire — follow explicitly to keep the
+      // sidebar on this tab's project.
+      useWorkspaceStore.getState().followTab(path);
       return;
     }
 

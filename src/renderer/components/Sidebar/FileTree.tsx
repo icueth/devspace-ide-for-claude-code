@@ -43,6 +43,28 @@ interface NodeState {
   error?: string;
 }
 
+// Index-wise listing equality. Valid because main sorts deterministically
+// (directories first, then localeCompare on name — see ipc/fs.ts), so equal
+// content always arrives in equal order. `path` is derived from (dir, name)
+// and needs no separate check. The optional booleans (isSymlink, truncated)
+// are coerced so an omitted flag and an explicit `false` compare equal.
+function sameEntries(a: DirEntry[] | null | undefined, b: DirEntry[]): boolean {
+  if (!a || a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    const x = a[i]!;
+    const y = b[i]!;
+    if (
+      x.name !== y.name ||
+      x.isDirectory !== y.isDirectory ||
+      !!x.isSymlink !== !!y.isSymlink ||
+      !!x.truncated !== !!y.truncated
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
 interface FileTreeProps {
   rootPath: string;
   onOpenFile?: (path: string) => void;
@@ -171,6 +193,65 @@ export const FileTree = memo(function FileTree({ rootPath, onOpenFile }: FileTre
     }
   }, []);
 
+  // Batch refresh for the switch-back cache-hit path ONLY. load() per dir
+  // would cost a loading:true pre-write plus one commit per completion —
+  // ~N+1 commits, each flipping structureToken (re-rendering every folder
+  // row), with the root's loading:true painting a 'Loading…' row over the
+  // already-restored tree. Instead: fetch all dirs in parallel, then commit
+  // every difference in ONE functional setTree. When nothing changed (the
+  // common switch-back) we return the SAME state object so React bails out
+  // entirely — zero re-renders, zero flash. First-expand / manual refresh /
+  // watch-event paths keep using load(), whose eager loading state is
+  // genuinely useful there.
+  const refreshCachedDirs = useCallback(async (dirs: string[]) => {
+    // Same A→B→A poisoning guard as load(): snapshot the active root and
+    // drop the batch if the project flipped while readDirs were in flight.
+    const rootAtStart = activeRootRef.current;
+    const results = await Promise.all(
+      dirs.map((d) =>
+        api.fs.readDir(d).then(
+          (entries) => ({ d, entries }),
+          (err: unknown) => ({ d, error: (err as Error).message }),
+        ),
+      ),
+    );
+    if (activeRootRef.current !== rootAtStart) return;
+    setTree((s) => {
+      let next: Record<string, NodeState> | null = null;
+      for (const r of results) {
+        const prev = s[r.d];
+        if ('entries' in r) {
+          // Unchanged listing → untouched node (reference equality keeps the
+          // row memos quiet). Skipping is only safe when the node is settled:
+          // a lingering loading/error flag must still be cleared below.
+          if (prev && !prev.loading && !prev.error && sameEntries(prev.entries, r.entries)) {
+            continue;
+          }
+          next ??= { ...s };
+          // Spread preserves the CURRENT expanded flag — unlike load(), which
+          // stomps expanded:true and would re-expand folders the user
+          // collapsed while the refresh was in flight.
+          next[r.d] = {
+            ...(prev ?? { expanded: true }),
+            entries: r.entries,
+            loading: false,
+            error: undefined,
+          };
+        } else {
+          // Mirror load()'s catch shape, minus the expanded:true stomp.
+          next ??= { ...s };
+          next[r.d] = {
+            ...(prev ?? { expanded: true }),
+            entries: [],
+            loading: false,
+            error: r.error,
+          };
+        }
+      }
+      return next ?? s;
+    });
+  }, []);
+
   // Track the previous rootPath so we can persist its tree to the cache
   // before swapping to a new project's snapshot.
   const prevRootPathRef = useRef<string | null>(null);
@@ -214,24 +295,23 @@ export const FileTree = memo(function FileTree({ rootPath, onOpenFile }: FileTre
         NodeState
       >;
       setTree(sanitized);
-      // Refresh root + every previously-expanded dir in parallel so external
-      // changes that happened while away surface immediately. We DON'T await
-      // these — the UI is already showing cached entries.
+      // Refresh root + every previously-expanded dir so external changes
+      // that happened while away surface immediately (this also covers
+      // events missed while the project's watcher was force-closed during
+      // eviction). NOT awaited — the UI is already showing cached entries —
+      // and batched through refreshCachedDirs so a nothing-changed
+      // switch-back commits nothing (no 'Loading…' flash, no token flips).
       const dirsToRefresh = new Set<string>([rootPath]);
       for (const [dir, node] of Object.entries(sanitized)) {
         if (node.expanded && node.entries) dirsToRefresh.add(dir);
       }
-      void Promise.all(
-        Array.from(dirsToRefresh).map((dir) =>
-          load(dir).catch(() => undefined),
-        ),
-      );
+      void refreshCachedDirs(Array.from(dirsToRefresh));
       return;
     }
 
     setTree({});
     void load(rootPath);
-  }, [rootPath, load]);
+  }, [rootPath, load, refreshCachedDirs]);
 
   // Persist the current snapshot on unmount so an app-level navigation away
   // from FileTree (rare but possible) doesn't lose state.
@@ -245,14 +325,24 @@ export const FileTree = memo(function FileTree({ rootPath, onOpenFile }: FileTre
     };
   }, []);
 
-  // Watch the project for external file changes and refresh only the directories
-  // that changed. Expanded + loaded directories get re-listed; folded ones are
+  // React to external file changes by refreshing only the directories that
+  // changed. Expanded + loaded directories get re-listed; folded ones are
   // ignored so we don't re-fetch content the user hasn't opened.
+  //
+  // Listener-only on purpose — FileTree must NEVER call api.fs.watch.
+  // Watcher lifecycle belongs to useProjectWatchers (mounted once in
+  // AppInner, one subscription per OPEN project). When FileTree owned the
+  // subscription, every project switch closed + recreated the chokidar
+  // watcher (a fresh depth-8 recursive sweep per switch, even A→B→A) and
+  // left background projects event-blind. Main broadcasts ev.root as
+  // path.resolve(root) and project paths are already absolute, so strict
+  // equality is the correct filter.
   useEffect(() => {
-    const unsubscribe = api.fs.watch(rootPath, (dirs) => {
+    return api.fs.onWatchEvent((ev) => {
+      if (ev.root !== rootPath) return;
       setTree((current) => {
         const next: Record<string, NodeState> = current;
-        for (const dir of dirs) {
+        for (const dir of ev.dirs) {
           // Only refresh directories we've already loaded at least once.
           if (current[dir]) {
             void load(dir);
@@ -261,7 +351,6 @@ export const FileTree = memo(function FileTree({ rootPath, onOpenFile }: FileTre
         return next;
       });
     });
-    return unsubscribe;
   }, [rootPath, load]);
 
   const refreshDir = useCallback(

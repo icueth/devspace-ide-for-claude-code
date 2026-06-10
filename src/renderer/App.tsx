@@ -39,6 +39,7 @@ import { UpdateBadge } from '@renderer/components/UpdateBadge';
 import { Welcome } from '@renderer/components/Welcome/Welcome';
 import { api } from '@renderer/lib/api';
 import { cn } from '@renderer/lib/utils';
+import { useProjectWatchers } from '@renderer/lib/useProjectWatchers';
 import { useRenderTrace } from '@renderer/lib/renderTrace';
 import { pickLatestPreview } from '@renderer/components/Editor/HtmlPreviewView';
 import { useEditorStore } from '@renderer/state/editor';
@@ -51,9 +52,18 @@ import { usePromptStore } from '@renderer/state/prompt';
 import { useSidebarStore } from '@renderer/state/sidebar';
 import {
   deriveProjectIdFromDockColumn,
-  deriveProjectIdFromTab,
+  isDefensiveAutoPinTransition,
+  isUndockRetargetTransition,
   useWorkspaceStore,
 } from '@renderer/state/workspace';
+
+// Edge-detection keys for the two auto-follow effects below. Module-level
+// (not useRef) on purpose: an AppInner remount after a RouteErrorBoundary
+// retry must not reset them — a fresh ref would make the tab-follow effect
+// re-fire against the already-populated stores and snap the sidebar to the
+// focused tab's project, the exact revert class v0.38 fixed.
+let lastFollowedTabPath: string | null = null;
+let lastFollowedDockKey: string | null = null;
 
 export default function App() {
   return (
@@ -70,6 +80,10 @@ function AppInner() {
   const projects = useWorkspaceStore((s) => s.projects);
   const activeProjectId = useWorkspaceStore((s) => s.activeProjectId);
   const openedProjectIds = useWorkspaceStore((s) => s.openedProjectIds);
+  // One main-process fs watcher subscription per OPEN project, owned at the
+  // shell level so project switches never tear watchers down (FileTree only
+  // listens — see useProjectWatchers for the full why).
+  useProjectWatchers(openedProjectIds, projects, activeProjectId);
   const openFile = useEditorStore((s) => s.open);
   const openCodeflow = useEditorStore((s) => s.openCodeflow);
   const openLivePreview = useEditorStore((s) => s.openLivePreview);
@@ -90,40 +104,83 @@ function AppInner() {
   const rightCollapsed = useSidebarStore((s) => s.rightCollapsed);
   const toggleLeftSidebar = useSidebarStore((s) => s.toggleLeft);
   const toggleRightSidebar = useSidebarStore((s) => s.toggleRight);
-  // v0.30.5 — switching to a tab anchored to a different project should
-  // move the sidebar (FileTree + ProjectList highlight + git store + chat
-  // dock) to that project. One-way (tab → sidebar) — clicking the sidebar
-  // never moves any tab, so this can't loop. Uses the pure helper from the
-  // workspace store so the routing rules are testable in isolation.
+  // v0.30.5 / v0.38 — switching to a tab anchored to a different project
+  // moves the sidebar (FileTree + ProjectList highlight + git store + chat
+  // dock) to that project, via workspace.followTab (which also records the
+  // tab as the project's MRU for the reverse sidebar→editor mirror).
+  //
+  // EDGE-triggered on activeTabPath only: the ref is primed unconditionally
+  // on every change so the effect acts exactly once per actual tab switch.
+  // The pre-v0.38 level-triggered version also re-ran when activeProjectId
+  // changed, which re-asserted the (unchanged) tab's project and silently
+  // REVERTED every sidebar/Welcome/dock-chip project click while a foreign
+  // project's tab was focused — the "clicking a project does nothing" bug.
   const activeTabPathRaw = useEditorStore((s) => s.activeTabPath);
   useEffect(() => {
+    if (activeTabPathRaw === lastFollowedTabPath) return;
+    lastFollowedTabPath = activeTabPathRaw;
     if (!activeTabPathRaw) return;
-    const derived = deriveProjectIdFromTab(activeTabPathRaw, projects);
-    if (derived && derived !== activeProjectId) {
-      useWorkspaceStore.getState().setActiveProject(derived);
-    }
-  }, [activeTabPathRaw, projects, activeProjectId]);
-  // v0.30.6 — parallel rule for the chat dock. Clicking the chat tab chip
-  // already calls setActiveProject explicitly (ClaudeCliDock.handleSelect),
+    useWorkspaceStore.getState().followTab(activeTabPathRaw);
+  }, [activeTabPathRaw]);
+  // v0.30.6 / v0.38 — parallel rule for the chat dock. Clicking the chat tab
+  // chip already calls activateProject explicitly (ClaudeCliDock.handleSelect),
   // but other paths that change the active column don't:
   //   • Pane mousedown — only sets activeColumnId
   //   • addColumn / removeColumn / persisted-state restore
-  // This effect derives the project from the active column's pin and syncs
-  // sidebar. One-way (dock → sidebar). The reverse mirror lives in
-  // ClaudeCliDock as `lastMirroredActiveRef`, which guards against firing
-  // again when this effect just set activeProjectId — so no ping-pong loop.
-  const dockColumns = useCliTabsStore((s) => s.columns);
-  const dockActiveColumnId = useCliTabsStore((s) => s.activeColumnId);
+  // Same edge-trigger discipline, keyed on (active column, its pin): the ref
+  // is primed on mount with the PERSISTED dock state, so the post-scan boot
+  // commit no longer overrides the persisted sidebar selection with a stale
+  // column pin (boot race), and projects/activeProjectId changes alone never
+  // re-fire it. Reads projects/activeProjectId fresh from the store — the
+  // decision must use current values, not render-time closures.
+  //
+  // Perf: ONE derived-string subscription instead of the whole columns array
+  // + activeColumnId. Subscribing to `columns` re-rendered the entire
+  // AppInner shell on every pin change anywhere in the dock; computing the
+  // edge key inside the selector means zustand's string equality suppresses
+  // re-renders for column changes that don't move (active column, its pin).
+  // Same key format the guards were written against:
+  // `${columnId}|${projectId}:${tabId}` (pin part empty when unpinned).
+  const dockFollowKey = useCliTabsStore((s) => {
+    const c = s.columns.find((x) => x.id === s.activeColumnId);
+    return `${s.activeColumnId ?? ''}|${
+      c?.pin ? `${c.pin.projectId}:${c.pin.tabId}` : ''
+    }`;
+  });
   useEffect(() => {
-    const derived = deriveProjectIdFromDockColumn(
-      dockColumns,
-      dockActiveColumnId,
-      projects,
-    );
-    if (derived && derived !== activeProjectId) {
-      useWorkspaceStore.getState().setActiveProject(derived);
+    if (dockFollowKey === lastFollowedDockKey) return;
+    const prevKey = lastFollowedDockKey;
+    lastFollowedDockKey = dockFollowKey;
+    // none→pinned on the same column = ClaudeCliDock's defensive auto-pin
+    // (background event, e.g. idle pty auto-close undocked the active
+    // project). Prime the key but don't follow — user gestures that pin an
+    // empty column activate the project explicitly.
+    if (isDefensiveAutoPinTransition(prevKey, dockFollowKey)) return;
+    // Same idea for pinned→pinned repairs after an undock: if the previous
+    // pin's project lost its chip, the new pin is the dock healing itself,
+    // not the user choosing a project.
+    if (
+      isUndockRetargetTransition(
+        prevKey,
+        dockFollowKey,
+        (pid) => !!useCliTabsStore.getState().projectsById[pid],
+      )
+    ) {
+      return;
     }
-  }, [dockColumns, dockActiveColumnId, projects, activeProjectId]);
+    // Columns/activeColumnId come FRESH from getState() — the effect only
+    // closes over the derived key string, never render-time column objects.
+    const { columns, activeColumnId } = useCliTabsStore.getState();
+    const ws = useWorkspaceStore.getState();
+    const derived = deriveProjectIdFromDockColumn(
+      columns,
+      activeColumnId,
+      ws.projects,
+    );
+    if (derived && derived !== ws.activeProjectId) {
+      ws.setActiveProject(derived);
+    }
+  }, [dockFollowKey]);
   const [bottomInitialTab, setBottomInitialTab] = useState<'terminal' | 'git' | 'search'>(
     'terminal',
   );
@@ -194,6 +251,12 @@ function AppInner() {
     () => projects.find((p) => p.id === activeProjectId) ?? null,
     [projects, activeProjectId],
   );
+  // Stable scalar keys for effects that only care about WHICH project is
+  // active. `activeProject` is a fresh object from projects.find() after any
+  // rescan, so keying effects on the object re-fires them (re-running git
+  // status etc.) even when the active project hasn't actually changed.
+  const activeProjectPid = activeProject?.id ?? null;
+  const activeProjectPath = activeProject?.path ?? null;
 
   // Union of (active project) ∪ (docked projects) — one BottomPanel mounts
   // per id so each project's terminal tabs (and the dev servers running in
@@ -219,21 +282,25 @@ function AppInner() {
   }, [activeProject, dockedOrder, dockedProjectsById]);
 
   // Keep git status fresh for the active project — indicators in the file tree
-  // and bottom panel should always reflect real state.
+  // and bottom panel should always reflect real state. Keyed on the scalar
+  // (id, path) pair, NOT the activeProject object (see comment above).
   const refreshGit = useGitStore((s) => s.refresh);
   useEffect(() => {
-    if (!activeProject) return;
-    void refreshGit(activeProject.id, activeProject.path);
-    const id = window.setInterval(() => {
-      void refreshGit(activeProject.id, activeProject.path);
-    }, 15_000);
-    const onFocus = () => void refreshGit(activeProject.id, activeProject.path);
-    window.addEventListener('focus', onFocus);
+    if (!activeProjectPid || !activeProjectPath) return;
+    const doRefresh = () => void refreshGit(activeProjectPid, activeProjectPath);
+    // The initial refresh sits behind a short debounce so chip-hopping
+    // A→B→C only runs git status for the project the user actually lands
+    // on — each hop's cleanup cancels the previous timer. 300ms is below
+    // perception for a deliberate switch but longer than a flyover click.
+    const initialTimer = window.setTimeout(doRefresh, 300);
+    const id = window.setInterval(doRefresh, 15_000);
+    window.addEventListener('focus', doRefresh);
     return () => {
+      window.clearTimeout(initialTimer);
       clearInterval(id);
-      window.removeEventListener('focus', onFocus);
+      window.removeEventListener('focus', doRefresh);
     };
-  }, [activeProject, refreshGit]);
+  }, [activeProjectPid, activeProjectPath, refreshGit]);
 
   // v0.31 — HTML preview auto-open / auto-refresh. For the ACTIVE project we
   // watch `<project>/.devspace/preview/` and react to PREVIEW_CHANGED events:
@@ -277,6 +344,12 @@ function AppInner() {
     return () => {
       disposed = true;
       off?.();
+      // Tear down the main-process chokidar watcher too, not just the
+      // renderer listener — without this every project ever activated kept
+      // its watcher alive until WORKSPACE_CLOSE/quit. Fire-and-forget: React
+      // cleanup can't await, and a failure (project already closed) is fine
+      // because WORKSPACE_CLOSE force-closes watchers itself.
+      void api.preview.unsubscribe(projectPath).catch(() => undefined);
     };
   }, [activeProject, openHtmlPreview]);
 

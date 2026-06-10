@@ -113,9 +113,10 @@ export const useShellTabsStore = create<ShellTabsState>((set, get) => ({
   },
 
   removeTab(projectId, tabId) {
-    // Always nuke the PTY so dev servers running in this tab actually stop —
-    // dropping the tab without killing would leak the process.
-    void api.pty.kill(shellSessionId(projectId, tabId)).catch(() => undefined);
+    // Kill the FULL session tree (attach client + backing tmux session) so
+    // dev servers running in this tab actually stop — a detach-only kill
+    // leaves them running in a detached tmux session, leaking the process.
+    void api.pty.killSessionTree(projectId, tabId, 'shell').catch(() => undefined);
 
     set((prev) => {
       const tabs = (prev.tabsByProject[projectId] ?? []).filter((t) => t.id !== tabId);
