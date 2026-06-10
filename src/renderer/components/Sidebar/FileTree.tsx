@@ -8,7 +8,7 @@ import { addFileToClaudeCli } from '@renderer/lib/claudeCli';
 import { useEditorStore } from '@renderer/state/editor';
 import {
   fileTreeCache,
-  sanitizeForRestore,
+  restoreRootOnly,
   type FileTreeSnapshot,
 } from '@renderer/state/fileTreeCache';
 import { useGitStore } from '@renderer/state/git';
@@ -268,10 +268,16 @@ export const FileTree = memo(function FileTree({ rootPath, onOpenFile }: FileTre
   //
   // New behaviour:
   //   1. Persist the outgoing project's tree to the LRU.
-  //   2. If the new project has a cached snapshot → restore it instantly,
-  //      then refresh the root + previously-expanded dirs in the background
-  //      so externally-changed files surface immediately.
+  //   2. If the new project has a cached ROOT listing → restore just the root
+  //      level instantly, then refresh the root in the background so
+  //      externally-changed files surface immediately.
   //   3. Cache miss → fall back to the old behaviour (empty + load root).
+  //
+  // v0.38 — a project always opens at its ROOT. We used to restore every
+  // subfolder the user had expanded in a prior visit, which made re-opening a
+  // project pop open a deep tree the user didn't ask for. Now subfolders
+  // start collapsed and load on demand; only the cached root entries are
+  // reused (for an instant, flash-free top level). See restoreRootOnly.
   useEffect(() => {
     const prev = prevRootPathRef.current;
     // Persist the outgoing snapshot if it had any content. Empty snapshots
@@ -285,27 +291,15 @@ export const FileTree = memo(function FileTree({ rootPath, onOpenFile }: FileTre
     prevRootPathRef.current = rootPath;
 
     const cached = fileTreeCache.get(rootPath);
-    if (cached) {
-      // SEC-MED-1 hardening (v0.30.7): drop entries for FOLDED dirs on
-      // restore — they may be hours stale and the user can right-click into
-      // them to trigger destructive ops. Helper extracted to fileTreeCache.ts
-      // for unit testing.
-      const sanitized = sanitizeForRestore(cached) as unknown as Record<
-        string,
-        NodeState
-      >;
-      setTree(sanitized);
-      // Refresh root + every previously-expanded dir so external changes
-      // that happened while away surface immediately (this also covers
-      // events missed while the project's watcher was force-closed during
-      // eviction). NOT awaited — the UI is already showing cached entries —
-      // and batched through refreshCachedDirs so a nothing-changed
-      // switch-back commits nothing (no 'Loading…' flash, no token flips).
-      const dirsToRefresh = new Set<string>([rootPath]);
-      for (const [dir, node] of Object.entries(sanitized)) {
-        if (node.expanded && node.entries) dirsToRefresh.add(dir);
-      }
-      void refreshCachedDirs(Array.from(dirsToRefresh));
+    const rootOnly = cached ? restoreRootOnly(cached, rootPath) : null;
+    if (rootOnly) {
+      setTree(rootOnly as unknown as Record<string, NodeState>);
+      // Refresh the root so external changes that happened while away surface
+      // immediately (also covers events missed while the project's watcher was
+      // force-closed during eviction). NOT awaited — the UI already shows the
+      // cached root — and batched through refreshCachedDirs so a
+      // nothing-changed switch-back commits nothing (no 'Loading…' flash).
+      void refreshCachedDirs([rootPath]);
       return;
     }
 

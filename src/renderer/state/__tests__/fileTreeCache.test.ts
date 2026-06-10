@@ -4,7 +4,7 @@ import {
   FileTreeCache,
   FILE_TREE_CACHE_CAP,
   fileTreeCache,
-  sanitizeForRestore,
+  restoreRootOnly,
   type FileTreeSnapshot,
 } from '../fileTreeCache';
 
@@ -122,68 +122,61 @@ describe('FileTreeCache', () => {
   });
 });
 
-describe('sanitizeForRestore (SEC-MED-1, v0.30.7)', () => {
-  it('keeps expanded dirs with their entries intact', () => {
+describe('restoreRootOnly (v0.38 — open project at root)', () => {
+  it('keeps only the root node and drops every cached subfolder', () => {
     const snap: FileTreeSnapshot = {
       '/p/root': {
-        entries: [{ name: 'file.ts', isDirectory: false }] as unknown[],
+        entries: [{ name: 'src', isDirectory: true }] as unknown[],
         loading: false,
         expanded: true,
       },
-    };
-    const out = sanitizeForRestore(snap);
-    expect(out['/p/root']).toBe(snap['/p/root']); // identity preserved
-    expect(out['/p/root'].entries).toHaveLength(1);
-  });
-
-  it('drops entries from folded dirs but keeps the expanded:false flag', () => {
-    // Without sanitization, a folded dir's stale entries could be presented
-    // via right-click context menu and trigger destructive ops on paths
-    // that may no longer exist on disk.
-    const snap: FileTreeSnapshot = {
-      '/p/folded': {
-        entries: [
-          { name: 'deleted-file.ts', isDirectory: false },
-          { name: 'renamed.txt', isDirectory: false },
-        ] as unknown[],
+      '/p/root/src': {
+        entries: [{ name: 'index.ts', isDirectory: false }] as unknown[],
         loading: false,
-        expanded: false,
+        expanded: true,
       },
-    };
-    const out = sanitizeForRestore(snap);
-    expect(out['/p/folded']).toEqual({
-      expanded: false,
-      entries: null,
-      loading: false,
-    });
-    // Crucially: NOT the same identity, so React.memo on rows will see the change.
-    expect(out['/p/folded']).not.toBe(snap['/p/folded']);
-  });
-
-  it('handles mixed expanded + folded dirs in a single snapshot', () => {
-    const snap: FileTreeSnapshot = {
-      '/p/expanded': {
+      '/p/root/src/deep': {
         entries: [] as unknown[],
         loading: false,
         expanded: true,
       },
-      '/p/folded': {
-        entries: [{ name: 'stale.ts', isDirectory: false }] as unknown[],
-        loading: false,
+    };
+    const out = restoreRootOnly(snap, '/p/root');
+    expect(out).not.toBeNull();
+    expect(Object.keys(out!)).toEqual(['/p/root']);
+    expect(out!['/p/root'].entries).toHaveLength(1);
+    expect(out!['/p/root'].expanded).toBe(true);
+  });
+
+  it('returns null when the root listing is missing (cache miss → fresh load)', () => {
+    expect(restoreRootOnly({}, '/p/root')).toBeNull();
+    expect(
+      restoreRootOnly(
+        { '/p/root': { entries: null, loading: true, expanded: true } },
+        '/p/root',
+      ),
+    ).toBeNull();
+  });
+
+  it('forces the restored root expanded + settled even if cached mid-state', () => {
+    const snap: FileTreeSnapshot = {
+      '/p/root': {
+        entries: [] as unknown[],
+        loading: true,
         expanded: false,
       },
     };
-    const out = sanitizeForRestore(snap);
-    expect(out['/p/expanded'].entries).toEqual([]);
-    expect(out['/p/folded'].entries).toBeNull();
+    const out = restoreRootOnly(snap, '/p/root');
+    expect(out!['/p/root'].expanded).toBe(true);
+    expect(out!['/p/root'].loading).toBe(false);
   });
 
-  it('returns a new top-level object (does not mutate input)', () => {
+  it('does not mutate the input snapshot', () => {
     const snap: FileTreeSnapshot = {
-      '/p/dir': { entries: null, loading: false, expanded: false },
+      '/p/root': { entries: [], loading: false, expanded: true },
+      '/p/root/src': { entries: [], loading: false, expanded: true },
     };
-    const out = sanitizeForRestore(snap);
-    expect(out).not.toBe(snap);
-    expect(snap['/p/dir'].entries).toBeNull(); // input unchanged
+    restoreRootOnly(snap, '/p/root');
+    expect(Object.keys(snap)).toHaveLength(2); // input untouched
   });
 });

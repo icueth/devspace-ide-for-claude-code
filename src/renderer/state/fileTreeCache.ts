@@ -26,31 +26,30 @@ export type FileTreeSnapshot = Record<string, FileTreeCacheNode>;
 export const FILE_TREE_CACHE_CAP = 8;
 
 /**
- * SEC-MED-1 hardening (v0.30.7): drop stale entries from FOLDED dirs on
- * cache restore. A folded dir's `entries` may be hours stale; if the user
- * right-clicks an old entry to trigger destructive ops (rename / delete /
- * duplicate), we'd hit the filesystem with paths that may no longer exist.
+ * Restore ONLY the root level of a cached snapshot.
  *
- * Expanded dirs keep their entries (caller refreshes them via background
- * load) so visible content stays instant on switch. Folded dirs keep their
- * `expanded: false` flag (preserving collapsed/expanded UI state) but lose
- * the listings — next expand triggers a fresh load() rather than render
- * stale data.
+ * v0.38: re-opening a project used to pop open every subfolder the user had
+ * drilled into in a previous visit (the restore kept each node's `expanded`
+ * flag). Users found that noisy — a project should open at its root every
+ * time, like a fresh visit. We still reuse the cached ROOT entries so the top
+ * level paints instantly on switch-back (no IPC flash); the caller
+ * background-refreshes the root to catch external changes, and subfolders
+ * start collapsed and load on demand when expanded.
+ *
+ * Returns null when the snapshot has no usable root listing (root never
+ * loaded, or was stored mid-load) so the caller falls back to a fresh load().
+ * Restoring only the root also subsumes the old SEC-MED-1 concern — we no
+ * longer surface any folded dir's hours-stale entries to context menus.
  *
  * Pure helper for unit testing.
  */
-export function sanitizeForRestore(
+export function restoreRootOnly(
   snap: FileTreeSnapshot,
-): FileTreeSnapshot {
-  const out: FileTreeSnapshot = {};
-  for (const [dir, node] of Object.entries(snap)) {
-    if (node.expanded) {
-      out[dir] = node;
-    } else {
-      out[dir] = { expanded: false, entries: null, loading: false };
-    }
-  }
-  return out;
+  rootPath: string,
+): FileTreeSnapshot | null {
+  const root = snap[rootPath];
+  if (!root || !root.entries) return null;
+  return { [rootPath]: { ...root, expanded: true, loading: false } };
 }
 
 /**

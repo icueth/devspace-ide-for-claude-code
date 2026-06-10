@@ -89,10 +89,16 @@ export const ProjectList = memo(function ProjectList() {
     );
   }
 
-  // When nothing is open yet, default to showing the full list — otherwise the
-  // sidebar is empty. Once the user opens something, "All" collapses so the
-  // file tree below has room; they can click to expand again any time.
-  const showAll = opened.length === 0 ? true : allExpanded;
+  // "All" defaults COLLAPSED (allExpanded starts false) so the file tree below
+  // has room, and the toggle always works. It only force-expands when there's
+  // nothing else in the sidebar — no Root section AND nothing in Open —
+  // because collapsing then would leave the panel empty with no way to pick a
+  // project. Previously this was `opened.length === 0 ? true : allExpanded`,
+  // which force-expanded (and disabled the toggle) whenever no sub-project was
+  // open — i.e. on the common workspace-root-only view — so "All" looked stuck
+  // open until several projects were opened.
+  const hasOtherSections = !!rootProject || opened.length > 0;
+  const showAll = hasOtherSections ? allExpanded : true;
 
   return (
     <div className="flex flex-col gap-[2px]">
