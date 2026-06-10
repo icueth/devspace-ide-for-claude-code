@@ -7,6 +7,7 @@ import { promisify } from 'node:util';
 import {
   claudeCliTmuxSessionName,
   resolveTmuxBinary,
+  shellTmuxSessionName,
   tmuxSocketArgs,
 } from '@main/services/ClaudeCliLauncher';
 import {
@@ -55,11 +56,19 @@ interface PoolEntry {
   subscribers: Set<WebContents>;
   dataListeners: Set<PtyDataListener>;
   exitListeners: Set<PtyExitListener>;
-  // Rolling output buffer — replayed to new subscribers so remounted panes
-  // don't show an empty terminal when the PTY already wrote its prompt.
+  // Rolling output buffer — returned by subscribeAndReplay so a remounted
+  // pane can restore xterm scrollback. NOT pushed at create time: the
+  // renderer's data listener attaches only after PTY_CREATE resolves, so a
+  // create-time push always raced the listener and was silently dropped.
   buffer: string;
   pending: string;
   flushTimer: NodeJS.Timeout | null;
+  // Synchronously drain `pending` to current subscribers. Stored on the
+  // entry so subscribeAndReplay can flush BEFORE snapshotting the buffer —
+  // pending bytes are already part of `buffer` (onData appends to both), so
+  // without the pre-flush a new subscriber would receive them twice: once in
+  // the snapshot, once when the batched flush timer fires.
+  flush: () => void;
   // v0.36.0: ms-epoch of the last observed I/O activity on this PTY —
   // either incoming data from the child OR a write() from the renderer.
   // The idle reaper reads this to decide which claude-cli sessions have
@@ -75,18 +84,46 @@ interface PoolEntry {
 
 const entries = new Map<string, PoolEntry>();
 
+// In-flight createPty calls keyed by pool key. Closes the TOCTOU window
+// between the entries.get() check and entries.set() — doCreatePty awaits
+// resolveInteractiveShellEnv() in between, so two concurrent PTY_CREATEs
+// for the same key ("Reload tab" during the initial create is the concrete
+// trigger) would both spawn, and the leaked first child's onExit would
+// later delete the LIVE entry.
+const pendingCreates = new Map<string, Promise<PtySession>>();
+
 const DEFAULT_TAB_ID = 'default';
 
 function sessionKey(projectId: string, kind: string, tabId: string): string {
   return `${projectId}:${kind}:${tabId}`;
 }
 
-export async function createPty(opts: PtyCreateOptions): Promise<PtySession> {
+// Deliberately NOT async: the key must be computed and the pending promise
+// registered synchronously, before any await, so a concurrent caller for
+// the same key joins the in-flight create instead of spawning a second PTY.
+// This guard covers every caller (launchClaudeCli / launchShell / direct).
+export function createPty(opts: PtyCreateOptions): Promise<PtySession> {
   const tabId = opts.tabId ?? DEFAULT_TAB_ID;
   const key = sessionKey(opts.projectId, opts.kind, tabId);
   const existing = entries.get(key);
-  if (existing) return existing.session;
+  if (existing) return Promise.resolve(existing.session);
+  const pending = pendingCreates.get(key);
+  if (pending) return pending;
+  // .finally() so a FAILED spawn also clears the slot — otherwise one bad
+  // create would poison the key and every retry would get the stale
+  // rejection forever.
+  const create = doCreatePty(key, tabId, opts).finally(() => {
+    pendingCreates.delete(key);
+  });
+  pendingCreates.set(key, create);
+  return create;
+}
 
+async function doCreatePty(
+  key: string,
+  tabId: string,
+  opts: PtyCreateOptions,
+): Promise<PtySession> {
   const shellEnv = await resolveInteractiveShellEnv();
   const env: NodeJS.ProcessEnv = {
     ...process.env,
@@ -139,6 +176,9 @@ export async function createPty(opts: PtyCreateOptions): Promise<PtySession> {
     // for unrelated sessions would mean running the regex sweep on every
     // shell keystroke for no benefit.
     approvals: opts.kind === 'claude-cli' ? new ApprovalDetector() : null,
+    // Placeholder — replaced just below once the real closure (which needs
+    // `entry` in scope) exists.
+    flush: () => undefined,
   };
   entries.set(key, entry);
 
@@ -154,6 +194,7 @@ export async function createPty(opts: PtyCreateOptions): Promise<PtySession> {
       if (!wc.isDestroyed()) wc.send(`${IPC.PTY_DATA}:${key}`, payload);
     }
   };
+  entry.flush = flush;
 
   proc.onData((data) => {
     // v0.36.0: any output from the PTY counts as activity — even a single
@@ -218,7 +259,10 @@ export async function createPty(opts: PtyCreateOptions): Promise<PtySession> {
         logger.warn(`exit listener threw on ${key}: ${(err as Error).message}`);
       }
     }
-    entries.delete(key);
+    // Identity check: only delete if WE still own the slot. A stale exit
+    // from a superseded PTY (e.g. killed mid-create, then recreated) must
+    // not delete the live entry that replaced it under the same key.
+    if (entries.get(key) === entry) entries.delete(key);
     logger.info(`session ${key} exited (code=${exitCode})`);
   });
 
@@ -230,10 +274,7 @@ export async function createPty(opts: PtyCreateOptions): Promise<PtySession> {
 // don't attach one per subscribe() call (which leaks listeners under HMR).
 const wcDestroyHooks = new WeakSet<WebContents>();
 
-export function subscribe(key: string, wc: WebContents): void {
-  const entry = entries.get(key);
-  if (!entry) return;
-  if (entry.subscribers.has(wc)) return;
+function addSubscriber(entry: PoolEntry, wc: WebContents): void {
   entry.subscribers.add(wc);
   if (!wcDestroyHooks.has(wc)) {
     wcDestroyHooks.add(wc);
@@ -241,10 +282,45 @@ export function subscribe(key: string, wc: WebContents): void {
       for (const e of entries.values()) e.subscribers.delete(wc);
     });
   }
-  // Replay the rolling buffer so a freshly-mounted xterm doesn't show blank.
-  if (entry.buffer && !wc.isDestroyed()) {
-    wc.send(`${IPC.PTY_DATA}:${key}`, entry.buffer);
-  }
+}
+
+/**
+ * Create-flow subscriber add: live streaming starts immediately, but NO
+ * buffer replay happens here. The renderer's `pty:data:<key>` listener only
+ * attaches after PTY_CREATE resolves (plus the lazy xterm chunk + layout
+ * rAFs), so anything sent from inside the create handler is delivered before
+ * a listener exists and dropped. Scrollback replay is renderer-PULLED via
+ * PTY_SUBSCRIBE → subscribeAndReplay() once the listener is armed.
+ */
+export function subscribe(key: string, wc: WebContents): void {
+  const entry = entries.get(key);
+  if (!entry) return;
+  addSubscriber(entry, wc);
+}
+
+/**
+ * Renderer-pulled replay: add `wc` as a subscriber and return the current
+ * rolling-buffer contents, both in the SAME synchronous turn. Idempotent and
+ * deliberately WITHOUT a has(wc) early-return — the create flow already
+ * subscribed this wc and nothing unsubscribes a live one, so a remounted
+ * pane re-invoking this MUST still get the replay (the old early-return is
+ * exactly what made scrollback restore dead code).
+ *
+ * Atomicity contract: `pending` is drained to existing subscribers first, so
+ * the returned snapshot covers everything emitted up to this instant and any
+ * chunk emitted afterwards arrives only as a PTY_DATA event — no gap. (The
+ * renderer dedups the narrow window where a chunk was evented to an
+ * already-subscribed wc before this snapshot was taken.) Returns '' when the
+ * session doesn't exist.
+ */
+export function subscribeAndReplay(key: string, wc: WebContents): string {
+  const entry = entries.get(key);
+  if (!entry) return '';
+  // Drain BEFORE adding wc: pending bytes are already in `buffer`, so
+  // flushing after the add would send them to wc twice (snapshot + event).
+  entry.flush();
+  addSubscriber(entry, wc);
+  return entry.buffer;
 }
 
 export function unsubscribe(key: string, wc: WebContents): void {
@@ -349,9 +425,15 @@ function killProcessGroup(pid: number, signal: NodeJS.Signals): void {
  * immediately. The pool entry is removed exactly once (in the onExit
  * handler that the spawn site wired up).
  */
-export function killPty(key: string): Promise<void> {
+export async function killPty(key: string): Promise<void> {
+  // Kill-during-create becomes wait-then-kill: if a create for this key is
+  // still in flight, await it so we signal the real PTY instead of racing
+  // entries.set() and missing it entirely. A failed spawn is fine — there
+  // is nothing to kill then.
+  const pending = pendingCreates.get(key);
+  if (pending) await pending.catch(() => undefined);
   const entry = entries.get(key);
-  if (!entry) return Promise.resolve();
+  if (!entry) return;
   if (entry.flushTimer) clearTimeout(entry.flushTimer);
   const pid = entry.pty.pid;
   return new Promise<void>((resolve) => {
@@ -362,10 +444,10 @@ export function killPty(key: string): Promise<void> {
       clearTimeout(graceTimer);
       clearTimeout(overallTimer);
       detach();
-      // Drop the entry defensively in case onExit never fires — the
-      // spawn-site onExit handler will also call delete(), which is a
-      // no-op the second time.
-      entries.delete(key);
+      // Drop the entry defensively in case onExit never fires — but only
+      // if WE still own the slot, so a kill that timed out after the key
+      // was recreated can't delete the fresh live entry.
+      if (entries.get(key) === entry) entries.delete(key);
       resolve();
     };
     // Listen for the PTY's own exit signal — that's the source of truth
@@ -413,16 +495,78 @@ export function getSession(
   return entries.get(sessionKey(projectId, kind, tabId))?.session ?? null;
 }
 
+/** Kill one tmux session on our socket by name. Best-effort: "no such
+ * session" is the normal already-gone case and stays silent; anything else
+ * is logged but never thrown. */
+async function killTmuxSessionByName(name: string): Promise<void> {
+  const tmuxBin = (await resolveTmuxBinary()) ?? 'tmux';
+  try {
+    await execFileP(tmuxBin, [...tmuxSocketArgs(), 'kill-session', '-t', name]);
+    logger.info(`killed tmux session ${name}`);
+  } catch (err) {
+    // Session may not exist — silent is fine, otherwise log.
+    const msg = (err as Error).message;
+    if (!msg.includes('no such session') && !msg.includes('session not found')) {
+      logger.warn(`tmux kill-session ${name} failed: ${msg}`);
+    }
+  }
+}
+
+/**
+ * Kill a claude-cli tab's FULL session tree. With tmux enabled the PTY
+ * child is only the `tmux new-session -A` attach CLIENT — killPty alone
+ * leaves claude + its MCP server children running detached on the tmux
+ * server. The follow-up kill-session is what actually frees them. Works
+ * even when the pool entry is already gone (PTY exited but the detached
+ * session persists): killPty on an unknown key is a no-op and the
+ * kill-session still runs.
+ *
+ * Ordering matters: use the awaitable killPty so we know the client
+ * process tree is actually gone before we tear down the tmux session —
+ * otherwise tmux can race with a still-attached pty and refuse to clean up.
+ */
+export async function killClaudeCliSessionTree(
+  projectId: string,
+  tabId: string = DEFAULT_TAB_ID,
+): Promise<void> {
+  await killPty(sessionKey(projectId, 'claude-cli', tabId));
+  await killTmuxSessionByName(claudeCliTmuxSessionName(projectId, tabId));
+}
+
+/** Shell-tab counterpart of killClaudeCliSessionTree — same client-then-
+ * session ordering, same already-gone semantics. */
+export async function killShellSessionTree(
+  projectId: string,
+  tabId: string = DEFAULT_TAB_ID,
+): Promise<void> {
+  await killPty(sessionKey(projectId, 'shell', tabId));
+  await killTmuxSessionByName(shellTmuxSessionName(projectId, tabId));
+}
+
 /**
  * Kill every PTY belonging to a project (every kind, every tab). Used when a
  * project is closed/evicted so claude/shell processes don't linger.
  * Resolves when every session has reported exit (or hit its kill timeout).
+ * tmux-backed kinds (claude-cli / shell) get the full session-tree kill so
+ * claude + MCP children don't leak detached; other kinds (dev-server etc.)
+ * are not tmux-backed, so plain killPty is the whole teardown.
  */
 export async function killProjectSessions(projectId: string): Promise<void> {
   const prefix = `${projectId}:`;
   const kills: Array<Promise<void>> = [];
-  for (const key of Array.from(entries.keys())) {
-    if (key.startsWith(prefix)) kills.push(killPty(key));
+  for (const [key, entry] of Array.from(entries.entries())) {
+    if (!key.startsWith(prefix)) continue;
+    // Snapshot kind/tabId BEFORE any await — the entry is deleted from the
+    // map when the PTY exits, so reading it after killPty would miss. Use
+    // session fields rather than parsing the key (projectId may contain ':').
+    const { kind, tabId, projectId: pid } = entry.session;
+    if (kind === 'claude-cli') {
+      kills.push(killClaudeCliSessionTree(pid, tabId));
+    } else if (kind === 'shell') {
+      kills.push(killShellSessionTree(pid, tabId));
+    } else {
+      kills.push(killPty(key));
+    }
   }
   await Promise.all(kills);
 }
@@ -436,30 +580,19 @@ export async function restartClaudeCli(
   projectId: string,
   tabId: string = DEFAULT_TAB_ID,
 ): Promise<void> {
-  const key = sessionKey(projectId, 'claude-cli', tabId);
-  // Use the awaitable killPty so we know the process tree is actually
-  // gone before we tear down the tmux session — otherwise tmux can
-  // race with a still-attached pty and refuse to clean up.
-  await killPty(key);
-  const tmuxSession = claudeCliTmuxSessionName(projectId, tabId);
-  const tmuxBin = (await resolveTmuxBinary()) ?? 'tmux';
-  try {
-    await execFileP(tmuxBin, [...tmuxSocketArgs(), 'kill-session', '-t', tmuxSession]);
-    logger.info(`killed tmux session ${tmuxSession}`);
-  } catch (err) {
-    // Session may not exist — silent is fine, otherwise log.
-    const msg = (err as Error).message;
-    if (!msg.includes('no such session') && !msg.includes('session not found')) {
-      logger.warn(`tmux kill-session ${tmuxSession} failed: ${msg}`);
-    }
-  }
+  await killClaudeCliSessionTree(projectId, tabId);
 }
 
 /**
  * Kill all sessions — called on app quit. Returns a promise that
  * resolves when every PTY has exited (or hit its kill timeout). The
  * `before-quit` hook should `await` this before calling `app.exit()` so
- * we don't orphan node/vite/claude children with the app already gone.
+ * we don't orphan node/vite children with the app already gone.
+ *
+ * Deliberately detach-only for tmux-backed sessions: killPty kills the
+ * attach client, so claude/shell keep running on the tmux server and
+ * survive app restart (the persistence feature). The opt-in kill-server
+ * at quit (killSessionsOnQuit) lives in main/index.ts.
  */
 export async function shutdownAll(): Promise<void> {
   const kills: Array<Promise<void>> = [];
@@ -475,8 +608,10 @@ export async function shutdownAll(): Promise<void> {
 // Playwright MCP commonly adds ~165 MB) — with 13 idle tabs the dock alone
 // holds ~5 GB the user can't easily reclaim. This reaper walks every claude-
 // cli PTY on a 60s tick and kills any whose lastActivityAt is older than the
-// configured threshold. Killing the PTY goes through killPty → process-group
-// kill, so claude + its MCP children die together.
+// configured threshold. Each victim goes through killClaudeCliSessionTree
+// (killPty + tmux kill-session): with tmux enabled the PTY child is only the
+// attach client, so killPty alone would leave claude + its MCP children
+// running detached and the memory would never actually be reclaimed.
 //
 // Scoped narrowly to kind === 'claude-cli'. Shell tabs, dev-server PTYs, the
 // AskUserQuestion-aware chat-run reaper, and setup-claude flows are off
@@ -636,7 +771,19 @@ export function startIdleReaper(
       `idle reaper: closing ${victims.length} idle claude-cli session(s) (pinned=${_idleThresholdMinutes}m unpinned=${_unpinnedThresholdMinutes}m)`,
     );
     for (const id of victims) {
-      killPty(id).catch(() => undefined);
+      // Read identity from the live entry BEFORE killPty deletes it on
+      // exit. Never string-parse the pool key — projectId may contain ':'.
+      const sess = entries.get(id)?.session;
+      if (sess) {
+        // Full session-tree kill: the PTY child is only the tmux attach
+        // client; without the kill-session claude + MCP children would
+        // linger detached and no memory would be freed.
+        killClaudeCliSessionTree(sess.projectId, sess.tabId).catch(
+          () => undefined,
+        );
+      } else {
+        killPty(id).catch(() => undefined);
+      }
     }
     try {
       // Report the smaller threshold to the renderer toast. The exact

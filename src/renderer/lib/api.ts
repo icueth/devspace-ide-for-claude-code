@@ -132,6 +132,10 @@ export interface DevspaceApi {
     scan: (id: string, path: string) => Promise<Project[]>;
     setActive: (id: string) => Promise<Workspace | null>;
     close: (id: string, path: string) => Promise<void>;
+    // Lighter than close: frees per-project main-process state (dev-server,
+    // graphify, codeflow-live) but keeps claude/shell PTYs (dock chips
+    // persist cross-workspace) and fs watchers (FileTree's lifecycle) alive.
+    suspend: (id: string, path: string) => Promise<void>;
   };
   fs: {
     readDir: (path: string) => Promise<DirEntry[]>;
@@ -145,6 +149,12 @@ export interface DevspaceApi {
     duplicate: (path: string) => Promise<string>;
     reveal: (path: string) => Promise<void>;
     watch: (root: string, cb: (dirs: string[]) => void) => () => void;
+    // Listener-only tap on watch broadcasts — never toggles the main-process
+    // subscription (see preload: FileWatcherService subscribers are a
+    // Set<WebContents>, not refcounted, so only ONE owner may call watch()
+    // per root). `ev.root` is path.resolve()'d by main; compare with strict
+    // equality against absolute project paths.
+    onWatchEvent: (cb: (ev: { root: string; dirs: string[] }) => void) => () => void;
   };
   git: {
     status: (cwd: string) => Promise<GitSnapshot>;
@@ -169,6 +179,24 @@ export interface DevspaceApi {
     write: (sessionId: string, data: string) => Promise<void>;
     resize: (sessionId: string, cols: number, rows: number) => Promise<void>;
     kill: (sessionId: string) => Promise<void>;
+    // Full session-tree kill: the PTY (tmux attach client) AND the backing
+    // tmux session, so claude + MCP children don't leak detached. `kill`
+    // stays detach-only — reloadTab / ClaudeSetupPane depend on that.
+    killSessionTree: (
+      projectId: string,
+      tabId: string,
+      kind: 'claude-cli' | 'shell',
+    ) => Promise<void>;
+    // Restart one claude-cli tab with a brand-new claude process (picks up
+    // fresh .mcp.json / env). `kill` alone only detaches and the remounted
+    // pane's `new-session -A` reattaches to the same claude.
+    restartClaude: (projectId: string, tabId: string) => Promise<void>;
+    // Pull the session's rolling output buffer for scrollback restore on
+    // pane (re)mount. MUST be called after arming onData: the subscriber-
+    // add + buffer snapshot are atomic in main, so everything after the
+    // returned snapshot arrives as onData events. Resolves '' for unknown
+    // sessions.
+    subscribe: (sessionId: string) => Promise<string>;
     onData: (sessionId: string, cb: (data: string) => void) => () => void;
     onExit: (sessionId: string, cb: (code: number | null) => void) => () => void;
     // v0.36.0 — fires once per reaper tick that closed at least one
@@ -353,6 +381,9 @@ export interface DevspaceApi {
     // Begin watching this project's preview dir (idempotent). Required
     // before onChanged fires.
     subscribe: (projectPath: string) => Promise<void>;
+    // Stop watching for this window. Called from the active-project preview
+    // effect's cleanup so only the active project keeps a chokidar watcher.
+    unsubscribe: (projectPath: string) => Promise<void>;
     // Streamed add/change/unlink events for the project's preview dir.
     // Returns an unsubscribe handle.
     onChanged: (
@@ -640,6 +671,7 @@ function makeStubApi(): DevspaceApi {
       scan: notWired('workspace.scan'),
       setActive: notWired('workspace.setActive'),
       close: notWired('workspace.close'),
+      suspend: notWired('workspace.suspend'),
     },
     fs: {
       readDir: notWired('fs.readDir'),
@@ -653,6 +685,7 @@ function makeStubApi(): DevspaceApi {
       duplicate: notWired('fs.duplicate'),
       reveal: notWired('fs.reveal'),
       watch: () => () => undefined,
+      onWatchEvent: () => () => undefined,
     },
     git: {
       status: notWired('git.status'),
@@ -677,6 +710,9 @@ function makeStubApi(): DevspaceApi {
       write: notWired('pty.write'),
       resize: notWired('pty.resize'),
       kill: notWired('pty.kill'),
+      killSessionTree: notWired('pty.killSessionTree'),
+      restartClaude: notWired('pty.restartClaude'),
+      subscribe: () => Promise.resolve(''),
       onData: () => () => undefined,
       onExit: () => () => undefined,
       onAutoClosed: () => () => undefined,
@@ -789,6 +825,7 @@ function makeStubApi(): DevspaceApi {
       list: () => Promise.resolve([] as PreviewFileInfo[]),
       readHtml: notWired('preview.readHtml'),
       subscribe: () => Promise.resolve(),
+      unsubscribe: () => Promise.resolve(),
       onChanged: () => () => undefined,
     },
     codeflow: {

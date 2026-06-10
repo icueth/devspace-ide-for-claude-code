@@ -16,6 +16,11 @@ export const IPC = {
   WORKSPACE_SCAN: 'workspace:scan',
   WORKSPACE_SET_ACTIVE: 'workspace:set-active',
   WORKSPACE_CLOSE: 'workspace:close',
+  // Lighter sibling of WORKSPACE_CLOSE: tear down per-project main-process
+  // state (dev-server, graphify, codeflow-live) WITHOUT killing claude/shell
+  // PTYs (dock chips persist cross-workspace by design) and WITHOUT closing
+  // fs watchers (FileTree owns that lifecycle). Payload: projectId, projectPath.
+  WORKSPACE_SUSPEND: 'workspace:suspend',
 
   // Filesystem
   FS_READ_DIR: 'fs:read-dir',
@@ -54,6 +59,21 @@ export const IPC = {
   PTY_WRITE: 'pty:write',
   PTY_RESIZE: 'pty:resize',
   PTY_KILL: 'pty:kill',
+  // Kill a claude-cli/shell tab's FULL session tree: the PTY (tmux attach
+  // client) AND the backing tmux session, so claude + MCP children don't
+  // leak detached. Payload: (projectId, tabId, kind) — main derives the
+  // tmux session name itself; the renderer never supplies one. PTY_KILL
+  // stays detach-only (reloadTab / ClaudeSetupPane depend on that).
+  PTY_KILL_SESSION: 'pty:kill-session',
+  // Restart one claude-cli tab: full session-tree kill so the pane's next
+  // `tmux new-session -A` spawns a brand-new claude (fresh .mcp.json / env).
+  PTY_RESTART_CLAUDE: 'pty:restart-claude',
+  // Renderer-pulled scrollback replay. invoke(sessionId) adds the sender as
+  // a live subscriber AND returns the rolling buffer in one atomic main-side
+  // turn. The renderer calls this AFTER arming its `pty:data:<id>` listener —
+  // a main-pushed replay at PTY_CREATE time is always dropped because that
+  // listener only attaches after create() resolves (+ lazy xterm chunk).
+  PTY_SUBSCRIBE: 'pty:subscribe',
   PTY_DATA: 'pty:data',
   PTY_EXIT: 'pty:exit',
   // v0.36.0: emitted when the PtyPool idle reaper auto-closes one or more
@@ -168,6 +188,11 @@ export const IPC = {
   PREVIEW_LIST: 'preview:list',
   PREVIEW_READ_HTML: 'preview:read-html',
   PREVIEW_SUBSCRIBE: 'preview:subscribe',
+  // Drop the sender from a project's preview watcher; the watcher itself is
+  // closed once its subscriber set empties. The renderer calls this from the
+  // preview effect's cleanup so steady-state is exactly ONE watcher (the
+  // active project) instead of one per project ever activated.
+  PREVIEW_UNSUBSCRIBE: 'preview:unsubscribe',
   PREVIEW_CHANGED: 'preview:changed',
 
   // Codeflow — graphify-backed code graph + queryable graph + augment overlay

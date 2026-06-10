@@ -74,9 +74,10 @@ const TURN_PROMPT_RE = /(?:^|\n)(?:\x1b\[[0-9;]*m)*[❯>│]\s/;
 /**
  * Mounts xterm against an existing PTY session. Lazy-rendered by the parent
  * pane so tabs that stay in chat mode never pay the xterm bundle/render
- * cost. PTY is spawned by the parent and stays alive in PtyPool — when this
- * component remounts, PtyPool replays its rolling buffer so scrollback
- * appears instantly.
+ * cost. PTY is spawned by the parent and stays alive in PtyPool — on every
+ * (re)mount this component PULLS the pool's rolling buffer via
+ * api.pty.subscribe() after arming its data listener, so scrollback is
+ * restored without racing the listener attach.
  */
 export function RawTerminalView({ sessionId, isActive }: RawTerminalViewProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
@@ -210,11 +211,7 @@ export function RawTerminalView({ sessionId, isActive }: RawTerminalViewProps) {
             } catch {
               /* ignore */
             }
-            // Subscribe AFTER first fit so the replayed buffer renders at
-            // the correct cols/rows. Sending a 1-col-off resize jolts the
-            // Claude TUI into a fresh repaint.
-            const dispose = api.pty.onData(sessionId, (data) => {
-              if (disposed) return;
+            const writeLive = (data: string) => {
               term.write(data, () => {
                 // Phase 4b: check for a turn-prompt prefix AFTER xterm has
                 // parsed the chunk — the cursor is now on the row we want
@@ -225,12 +222,54 @@ export function RawTerminalView({ sessionId, isActive }: RawTerminalViewProps) {
                   tryRegisterTurnDivider();
                 }
               });
+            };
+
+            // Attach the data listener FIRST (after first fit, so writes
+            // render at correct cols/rows), gated behind a replay barrier:
+            // chunks arriving while the subscribe() invoke is in flight are
+            // queued — writing them now would put them BEFORE their own
+            // history once the replay lands.
+            let replayApplied = false;
+            const preReplayQueue: string[] = [];
+            const dispose = api.pty.onData(sessionId, (data) => {
+              if (disposed) return;
+              if (!replayApplied) {
+                preReplayQueue.push(data);
+                return;
+              }
+              writeLive(data);
             });
+            cleanup.dispose = dispose;
+
+            // Pull the rolling buffer. Main adds this wc as a subscriber and
+            // snapshots the buffer in one atomic turn, so everything after
+            // the snapshot arrives only as onData events above.
+            void api.pty
+              .subscribe(sessionId)
+              .catch(() => '') // session gone / IPC failure → just go live
+              .then((replay) => {
+                if (disposed) return;
+                replayApplied = true;
+                // History only — no turn-divider scan: replayed rows can't
+                // be re-anchored reliably after a remount.
+                if (replay) term.write(replay);
+                // This wc has been a live subscriber since PTY_CREATE, so a
+                // chunk evented while the invoke was in flight was emitted
+                // BEFORE the snapshot — main appends to the buffer before
+                // fanning out, so that chunk is already the replay's tail.
+                // Only write the queue when it is NOT that tail (i.e. the
+                // replay missed it), otherwise we'd duplicate output.
+                const queued = preReplayQueue.join('');
+                preReplayQueue.length = 0;
+                if (queued && !replay.endsWith(queued)) writeLive(queued);
+              });
+
+            // Keep the ±1-col resize jolt: the replay restores xterm
+            // scrollback, but tmux only repaints the live screen (alt-buffer
+            // TUIs like claude) when it observes a size change.
             void api.pty.resize(sessionId, term.cols + 1, term.rows);
             void api.pty.resize(sessionId, term.cols, term.rows);
             term.refresh(0, term.rows - 1);
-
-            cleanup.dispose = dispose;
           });
         });
       });

@@ -16,6 +16,7 @@ import {
   previewDirFor,
   readHtml,
   subscribe,
+  unsubscribe,
 } from '@main/services/PreviewService';
 import { IPC } from '@shared/ipc-channels';
 
@@ -258,16 +259,18 @@ describe('PreviewService.subscribe (watcher)', () => {
   );
 
   it(
-    'subscribes before any preview exists (lazily creates the dir) and detects the first file',
+    'creates preview/ and detects the first file when .devspace already exists',
     async () => {
+      // The project opted into .devspace (e.g. devlog), but no preview yet.
+      await mkdir(path.join(project, '.devspace'), { recursive: true });
       const dir = previewDirFor(project);
-      // The preview dir does NOT exist yet — a brand-new project.
       await expect(stat(dir)).rejects.toBeTruthy();
 
       const wc = new FakeWebContents();
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       expect(() => subscribe(project, wc as any)).not.toThrow();
-      // subscribe() created the dir so the watcher has a real path to watch.
+      // subscribe() created preview/ so the watcher has a real path to
+      // watch (chokidar v4 can't arm on a missing dir).
       await expect(stat(dir)).resolves.toBeTruthy();
       await __whenReady(project);
 
@@ -280,6 +283,19 @@ describe('PreviewService.subscribe (watcher)', () => {
     },
     WATCH_TIMEOUT,
   );
+
+  it('skips both mkdir and watcher for projects without .devspace', async () => {
+    // A repo the user merely clicked once must NOT be dirtied with an empty
+    // .devspace/preview/. No .devspace → subscribe is a silent no-op; a
+    // later activation re-subscribes once .devspace exists.
+    const wc = new FakeWebContents();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect(() => subscribe(project, wc as any)).not.toThrow();
+    await expect(stat(path.join(project, '.devspace'))).rejects.toBeTruthy();
+    await expect(stat(previewDirFor(project))).rejects.toBeTruthy();
+    // No watcher entry → __whenReady resolves immediately (nothing armed).
+    await __whenReady(project);
+  });
 
   it(
     'stops delivering after the webContents is destroyed',
@@ -295,6 +311,62 @@ describe('PreviewService.subscribe (watcher)', () => {
       await writeFile(path.join(dir, 'after.html'), '<h1>after</h1>');
       await wait(600);
       expect(wc.sent).toHaveLength(0);
+    },
+    WATCH_TIMEOUT,
+  );
+});
+
+describe('PreviewService.unsubscribe', () => {
+  it('is an idempotent no-op when no watcher exists', () => {
+    const wc = new FakeWebContents();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect(() => unsubscribe(project, wc as any)).not.toThrow();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect(() => unsubscribe(project, wc as any)).not.toThrow();
+  });
+
+  it(
+    'stops delivery once the last subscriber unsubscribes (watcher closed)',
+    async () => {
+      const dir = previewDirFor(project);
+      await mkdir(dir, { recursive: true });
+      const wc = new FakeWebContents();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      subscribe(project, wc as any);
+      await __whenReady(project);
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      unsubscribe(project, wc as any);
+
+      await writeFile(path.join(dir, 'after-unsub.html'), '<h1>x</h1>');
+      await wait(600);
+      expect(wc.sent).toHaveLength(0);
+    },
+    WATCH_TIMEOUT,
+  );
+
+  it(
+    'keeps the watcher alive for remaining subscribers',
+    async () => {
+      const dir = previewDirFor(project);
+      await mkdir(dir, { recursive: true });
+      const wcA = new FakeWebContents();
+      const wcB = new FakeWebContents();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      subscribe(project, wcA as any);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      subscribe(project, wcB as any);
+      await __whenReady(project);
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      unsubscribe(project, wcA as any);
+
+      await writeFile(path.join(dir, 'still-watched.html'), '<h1>b</h1>');
+      await until(() => wcB.sent.some((m) => kindOf(m) === 'add'));
+      expect(wcB.sent.some((m) => fileOf(m).name === 'still-watched.html')).toBe(
+        true,
+      );
+      expect(wcA.sent).toHaveLength(0);
     },
     WATCH_TIMEOUT,
   );

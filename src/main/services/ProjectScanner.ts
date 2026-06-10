@@ -152,17 +152,17 @@ export async function scanWorkspace(
     // At depth 1 (immediate children of the workspace), treat every remaining
     // folder as a project even without markers. This lets users see empty
     // scaffolds and brand-new folders without having to `git init` first.
+    // forceInclude only relaxes detectProject's null return — markers still
+    // populate vcs/detectedRuntime identically — so a single forced call
+    // replaces the old detect-then-force two-call sequence (which readdir'd
+    // every marker-less child twice per scan).
+    // Note this branch returns before the recursion below, so walk() only
+    // ever runs at depth 0 — the deeper-walk path is currently unreachable.
     if (depth === 0) {
       await Promise.all(
         subdirs.map(async (d) => {
           const childPath = path.join(dir, d.name);
           if (seen.has(childPath)) return;
-          const detected = await detectProject(childPath, workspaceId);
-          if (detected) {
-            projects.push(detected);
-            seen.add(detected.path);
-            return;
-          }
           const forced = await detectProject(childPath, workspaceId, {
             forceInclude: true,
           });

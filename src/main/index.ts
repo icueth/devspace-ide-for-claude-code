@@ -349,11 +349,13 @@ app.whenReady().then(async () => {
   // pay the I/O cost. Best-effort and never throws.
   preloadLlmConfig();
 
-  // v0.36.0: start the idle-CLI-tab reaper. Killing the PTY is process-
-  // group-kill — claude + every MCP server child die together — so each
-  // closed tab frees ~400 MB on average. We load the persisted tmux
-  // config so the user's saved preferences (toggle off, custom timeout)
-  // are honored on boot; the reaper itself never blocks app start.
+  // v0.36.0: start the idle-CLI-tab reaper. Each victim is torn down via
+  // killClaudeCliSessionTree — process-group kill on the PTY child plus
+  // `tmux kill-session` — because with tmux enabled the PTY child is only
+  // the attach client; the kill-session is what actually frees claude +
+  // every MCP server child (~400 MB per tab on average). We load the
+  // persisted tmux config so the user's saved preferences (toggle off,
+  // custom timeout) are honored on boot; the reaper never blocks app start.
   void loadTmuxConfig()
     .then((cfg) => {
       configureIdleReaper({
@@ -381,10 +383,12 @@ app.whenReady().then(async () => {
       );
     });
 
-  // Prune stale tmux sessions older than 2 days. Sessions are created by
-  // chat runs, design generations, and CLI launchers — without this, a
-  // user who runs DevSpace daily ends up with hundreds of dead `devspace-*`
-  // sessions over a month. Deferred 5s so the renderer mounts first.
+  // Prune stale chat-run tmux sessions (devspace-chatrun-*, which covers
+  // chat turns AND design generations) older than 2 days — without this, a
+  // user who runs DevSpace daily ends up with hundreds of dead sessions
+  // over a month. CLI/shell sessions are deliberately NOT pruned: their
+  // cross-restart survival is the persistence feature, and session_created
+  // doesn't reset on reattach. Deferred 5s so the renderer mounts first.
   setTimeout(() => {
     void pruneStaleTmuxSessions().catch((err) => {
       console.error('[main] tmux prune failed:', (err as Error).message);

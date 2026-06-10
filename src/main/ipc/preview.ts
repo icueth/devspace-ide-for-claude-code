@@ -1,7 +1,7 @@
 import { ipcMain } from 'electron';
 import * as path from 'node:path';
 
-import { list, readHtml, subscribe } from '@main/services/PreviewService';
+import { list, readHtml, subscribe, unsubscribe } from '@main/services/PreviewService';
 import { assertInWorkspace } from '@main/utils/pathScope';
 import { IPC } from '@shared/ipc-channels';
 import type { PreviewFileInfo } from '@shared/preview';
@@ -45,5 +45,14 @@ export function registerPreviewIpc(): void {
     // this project's preview dir stream back to it. Idempotent per
     // (project, sender) inside the service.
     subscribe(await assertInWorkspace(assertProjectPath(projectPath)), event.sender);
+  });
+
+  ipcMain.handle(IPC.PREVIEW_UNSUBSCRIBE, async (event, projectPath: string) => {
+    // Same path-scoping as PREVIEW_SUBSCRIBE — only workspace projects can
+    // hold a watcher, so only they can be unsubscribed. Idempotent no-op
+    // when no watcher exists (e.g. the subscribe was skipped because the
+    // project has no .devspace dir, or WORKSPACE_CLOSE already tore it
+    // down via closeWatchersForProject).
+    unsubscribe(await assertInWorkspace(assertProjectPath(projectPath)), event.sender);
   });
 }

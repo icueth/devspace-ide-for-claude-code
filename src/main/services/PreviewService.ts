@@ -194,10 +194,13 @@ function emit(
  * Start watching a project's `.devspace/preview/` directory for `*.html`
  * add/change/unlink and stream PREVIEW_CHANGED to `wc`. Idempotent per
  * (project, webContents) — a repeat call for an already-subscribed pair is a
- * no-op. Subscribing before any preview has been generated is fine — the
- * directory is created lazily so the watcher always has a real path to watch
- * (chokidar v4 does NOT detect a watched path that is created later, so we
- * must ensure it exists up front).
+ * no-op. chokidar v4 does NOT detect a watched path that is created later
+ * (verified against 4.0.3: watching a missing dir fires 'ready' and then
+ * never emits for files added after the dir appears, even in polling mode),
+ * so the dir must exist BEFORE `watch()` — but we only create it inside
+ * projects that already have a `.devspace/` dir. Unconditional mkdir here
+ * used to dirty every repo the user merely clicked once with an empty
+ * `.devspace/preview/`.
  */
 export function subscribe(projectPath: string, wc: WebContents): void {
   const key = keyFor(projectPath);
@@ -205,12 +208,20 @@ export function subscribe(projectPath: string, wc: WebContents): void {
 
   let entry = watchers.get(key);
   if (!entry) {
-    // Ensure the preview dir exists before watching. chokidar v4 will not
-    // pick up a directory that springs into existence after `watch()` is
-    // called, so a fresh project (no preview yet) would otherwise watch a
-    // dead path. Creating an empty `.devspace/preview/` is harmless and
-    // guarantees Claude's first generated file is detected. Best-effort:
-    // never let an mkdir failure crash the subscribe path.
+    // No `.devspace/` → skip watcher creation entirely (a watcher on a
+    // missing path would be dead anyway, see chokidar note above). The
+    // project's first preview won't auto-open during THIS activation, but a
+    // later activation re-subscribes — the renderer's preview effect re-runs
+    // on every project switch — and by then the generated file's mkdir has
+    // created `.devspace/`, so the watcher arms normally.
+    if (!fs.existsSync(path.join(key, '.devspace'))) {
+      logger.debug(`no .devspace in ${key} — preview watcher skipped`);
+      return;
+    }
+
+    // `.devspace/` exists (the project already opted in) — ensure preview/
+    // exists so the watcher has a real path. Best-effort: never let an
+    // mkdir failure crash the subscribe path.
     try {
       fs.mkdirSync(dir, { recursive: true });
     } catch (err) {
@@ -297,6 +308,37 @@ export function subscribe(projectPath: string, wc: WebContents): void {
       }
     });
   }
+}
+
+/** Drop one WebContents from a project's preview watcher; close the watcher
+ *  and forget the entry once the subscriber set empties. Mirrors
+ *  FileWatcherService.unsubscribeWatch. Called from the renderer's preview
+ *  effect cleanup on every project switch, so steady-state is one watcher
+ *  (the active project) instead of one per project ever activated.
+ *  Idempotent no-op on missing entries. */
+export function unsubscribe(projectPath: string, wc: WebContents): void {
+  const key = keyFor(projectPath);
+  const entry = watchers.get(key);
+  if (!entry) return;
+  entry.subscribers.delete(wc);
+  if (entry.subscribers.size === 0) {
+    void entry.watcher.close().catch(() => undefined);
+    watchers.delete(key);
+    logger.info(`stopped watching preview dir ${previewDirFor(key)}`);
+  }
+}
+
+/** Tear down one project's preview watcher regardless of which WebContents
+ *  subscribed — without this, WORKSPACE_CLOSE leaked the chokidar watcher
+ *  until the renderer was destroyed. Mirrors FileWatcherService.
+ *  closeWatchersForRoot. Idempotent no-op when no watcher exists. */
+export function closeWatchersForProject(projectPath: string): void {
+  const key = keyFor(projectPath);
+  const entry = watchers.get(key);
+  if (!entry) return;
+  void entry.watcher.close().catch(() => undefined);
+  watchers.delete(key);
+  logger.info(`force-stopped watching preview dir ${previewDirFor(key)}`);
 }
 
 /** Tear down every preview watcher. Called on app shutdown. */

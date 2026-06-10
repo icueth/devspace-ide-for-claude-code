@@ -19,6 +19,10 @@ const api = {
     setActive: (id: string) => ipcRenderer.invoke(IPC.WORKSPACE_SET_ACTIVE, id),
     close: (id: string, path: string) =>
       ipcRenderer.invoke(IPC.WORKSPACE_CLOSE, id, path),
+    // Lighter than close: frees dev-server/graphify/codeflow-live state but
+    // keeps claude/shell PTYs and fs watchers alive (workspace switch).
+    suspend: (id: string, path: string) =>
+      ipcRenderer.invoke(IPC.WORKSPACE_SUSPEND, id, path),
   },
   // Electron 32+ removed the non-standard `File.path` property from
   // renderer-side File objects when contextIsolation is on. The
@@ -80,6 +84,22 @@ const api = {
         void ipcRenderer.invoke(IPC.FS_WATCH, root, false);
       };
     },
+    // Listener-only tap on FS_WATCH_EVENT — no FS_WATCH invoke in either
+    // direction. This separation is load-bearing, not cosmetic: main's
+    // FileWatcherService tracks subscribers as a Set<WebContents>, NOT a
+    // refcount per watch() call, so with a single window a component-level
+    // watch() cleanup (enable=false) would close the chokidar watcher that a
+    // mount-level owner (useProjectWatchers) still needs. Watcher LIFECYCLE
+    // stays with `watch` callers; this only observes the event stream.
+    // `ev.root` arrives path.resolve()'d by main — callers filter with
+    // strict equality against their (already absolute) project paths.
+    onWatchEvent: (cb: (ev: { root: string; dirs: string[] }) => void) => {
+      const listener = (_e: unknown, ev: { root: string; dirs: string[] }) => cb(ev);
+      ipcRenderer.on(IPC.FS_WATCH_EVENT, listener);
+      return () => {
+        ipcRenderer.off(IPC.FS_WATCH_EVENT, listener);
+      };
+    },
   },
   git: {
     status: (path: string) => ipcRenderer.invoke(IPC.GIT_STATUS, path),
@@ -112,6 +132,22 @@ const api = {
     resize: (sessionId: string, cols: number, rows: number) =>
       ipcRenderer.invoke(IPC.PTY_RESIZE, sessionId, cols, rows),
     kill: (sessionId: string) => ipcRenderer.invoke(IPC.PTY_KILL, sessionId),
+    // Full session-tree kill (PTY + backing tmux session). Main derives the
+    // tmux session name from (projectId, tabId, kind) — never pass one.
+    killSessionTree: (
+      projectId: string,
+      tabId: string,
+      kind: 'claude-cli' | 'shell',
+    ) => ipcRenderer.invoke(IPC.PTY_KILL_SESSION, projectId, tabId, kind),
+    // Restart one claude-cli tab so the remounted pane spawns a brand-new
+    // claude (PTY_KILL alone only detaches; `new-session -A` reattaches).
+    restartClaude: (projectId: string, tabId: string) =>
+      ipcRenderer.invoke(IPC.PTY_RESTART_CLAUDE, projectId, tabId),
+    // Pull the session's rolling buffer for scrollback restore. Call AFTER
+    // arming onData — the subscriber-add and buffer snapshot are atomic in
+    // main, so chunks after the snapshot arrive only as onData events.
+    subscribe: (sessionId: string): Promise<string> =>
+      ipcRenderer.invoke(IPC.PTY_SUBSCRIBE, sessionId),
     onData: (sessionId: string, cb: (data: string) => void) => {
       const channel = `${IPC.PTY_DATA}:${sessionId}`;
       const listener = (_e: unknown, data: string) => cb(data);
@@ -328,6 +364,10 @@ const api = {
       ipcRenderer.invoke(IPC.PREVIEW_READ_HTML, projectPath, htmlPath),
     subscribe: (projectPath: string) =>
       ipcRenderer.invoke(IPC.PREVIEW_SUBSCRIBE, projectPath),
+    // Counterpart of subscribe — drops this window from the project's
+    // preview watcher so main can close it when nobody is listening.
+    unsubscribe: (projectPath: string) =>
+      ipcRenderer.invoke(IPC.PREVIEW_UNSUBSCRIBE, projectPath),
     onChanged: (
       projectPath: string,
       cb: (event: import('@shared/preview').PreviewChangedEvent) => void,

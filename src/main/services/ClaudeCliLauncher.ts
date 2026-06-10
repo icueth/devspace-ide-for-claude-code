@@ -117,6 +117,20 @@ export async function launchClaudeCli(
   // creates it — which gives us free resume-on-reopen.
   if (tmuxBin && claudeBin) {
     const sessionName = tmuxSessionName(cfg, 'cli', opts.projectId, tabId);
+    // Same precedence PtyPool uses for the client env (shell env, then
+    // process env, then default) so a user override still wins. These must
+    // ALSO ride inside the session command: when the tmux SERVER is already
+    // running, the command spawned by `new-session` inherits the server's
+    // env, not the client's — so in steady state claude would launch
+    // without agent teams and with a stale DEVSPACE_PROJECT_ID.
+    const teams =
+      env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS ??
+      process.env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS ??
+      '1';
+    const backend =
+      env.CLAUDE_CODE_SPAWN_BACKEND ??
+      process.env.CLAUDE_CODE_SPAWN_BACKEND ??
+      'tmux';
     logger.info(
       `tmux-backed claude for project=${opts.projectId} tab=${tabId} (${sessionName}) socket=${cfg.socketName}`,
     );
@@ -135,6 +149,15 @@ export async function launchClaudeCli(
         sessionName,
         '-c',
         opts.cwd,
+        // `env VAR=… claude` instead of `new-session -e` — `-e` is missing
+        // on older tmux and we have no version detection. tmux execs this
+        // multi-arg command via execvp (no shell), so no quoting needed,
+        // and when -A attaches to an existing session the trailing command
+        // (wrapper included) is ignored entirely.
+        'env',
+        `DEVSPACE_PROJECT_ID=${opts.projectId}`,
+        `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=${teams}`,
+        `CLAUDE_CODE_SPAWN_BACKEND=${backend}`,
         claudeBin,
         ...claudeArgs,
       ],
@@ -212,6 +235,11 @@ export async function launchShell(opts: ShellLaunchOptions): Promise<PtySession>
         sessionName,
         '-c',
         opts.cwd,
+        // Same env-wrapper rationale as launchClaudeCli: against a running
+        // tmux server the session command inherits the SERVER env, so
+        // DEVSPACE_PROJECT_ID would be stale/missing without this.
+        'env',
+        `DEVSPACE_PROJECT_ID=${opts.projectId}`,
         shell,
         '-l',
       ],

@@ -87,10 +87,39 @@ export function TerminalPane({
             .then((session) => {
               if (disposed) return;
               sessionId = session.sessionId;
+              // Listener first, gated behind a replay barrier: chunks that
+              // arrive while the subscribe() invoke is in flight are queued
+              // so they can't land before the scrollback they follow. This
+              // is what restores history on pane remount — create-time
+              // replay in main is dead (it races this listener attach).
+              let replayApplied = false;
+              const preReplayQueue: string[] = [];
               disposeData = api.pty.onData(session.sessionId, (data) => {
-                if (!disposed) term.write(data);
+                if (disposed) return;
+                if (!replayApplied) {
+                  preReplayQueue.push(data);
+                  return;
+                }
+                term.write(data);
               });
               disposeExit = api.pty.onExit(session.sessionId, () => undefined);
+
+              // Pull the rolling buffer (atomic subscriber-add + snapshot).
+              void api.pty
+                .subscribe(session.sessionId)
+                .catch(() => '') // session gone → just go live
+                .then((replay) => {
+                  if (disposed) return;
+                  replayApplied = true;
+                  if (replay) term.write(replay);
+                  // Chunks evented while the invoke was in flight were
+                  // emitted before the snapshot (this wc subscribed at
+                  // create), so they're already the replay's tail — only
+                  // write the queue when the replay missed it.
+                  const queued = preReplayQueue.join('');
+                  preReplayQueue.length = 0;
+                  if (queued && !replay.endsWith(queued)) term.write(queued);
+                });
 
               const kick = () => {
                 if (disposed || !sessionId) return;

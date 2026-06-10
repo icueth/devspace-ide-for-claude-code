@@ -204,31 +204,45 @@ export interface StaleSession {
   name: string;
   createdAt: number; // epoch ms
   ageMs: number;
+  attached: number; // #{session_attached} — count of attached clients
 }
 
 // Parse tmux list-sessions output. Format string returns one session per
-// line: `name<TAB>session_created_epoch_seconds`. We use TAB explicitly so
-// session names containing dashes never confuse the split.
+// line: `name<TAB>session_created_epoch_seconds<TAB>attached_client_count`.
+// We use TAB explicitly so session names containing dashes never confuse
+// the split. Lines that don't parse fully are skipped — better to leave a
+// session alone than kill one we couldn't classify.
 function parseListSessions(stdout: string): StaleSession[] {
   const now = Date.now();
   const out: StaleSession[] = [];
   for (const line of stdout.split('\n')) {
     const trimmed = line.trim();
     if (!trimmed) continue;
-    const tab = trimmed.indexOf('\t');
-    if (tab < 0) continue;
-    const name = trimmed.slice(0, tab);
-    const epoch = parseInt(trimmed.slice(tab + 1), 10);
+    const parts = trimmed.split('\t');
+    if (parts.length < 3) continue;
+    const name = parts[0];
+    const epoch = parseInt(parts[1], 10);
+    const attached = parseInt(parts[2], 10);
     if (!Number.isFinite(epoch) || epoch <= 0) continue;
+    if (!Number.isFinite(attached)) continue;
     const createdAt = epoch * 1000;
-    out.push({ name, createdAt, ageMs: now - createdAt });
+    out.push({ name, createdAt, ageMs: now - createdAt, attached });
   }
   return out;
 }
 
-// Look at every tmux session on our socket whose name starts with
-// `devspace-` and return the ones older than `maxAgeMs`. Used by the
-// startup pruner so chat/design/CLI sessions don't pile up forever.
+// Look at the chat-run tmux sessions on our socket (`devspace-chatrun-*`
+// covers both chat turns AND design generations) and return the unattached
+// ones older than `maxAgeMs`. Used by the startup pruner so finished/
+// forgotten runs don't pile up forever.
+//
+// IMPORTANT: scoped to the `devspace-chatrun-` prefix on purpose. The
+// broader `devspace-` prefix also matches devspace-cli-* / devspace-shell-*
+// sessions whose whole point is to survive app restarts (`new-session -A`
+// resume-on-reopen) — and tmux does NOT reset #{session_created} on
+// reattach, so any CLI tab older than the cutoff would be killed at every
+// boot right after its pane reattached. The attached === 0 guard is
+// defense-in-depth on top of the prefix.
 export async function findStaleSessions(maxAgeMs: number): Promise<StaleSession[]> {
   const tmuxBin = await resolveTmuxBinary();
   if (!tmuxBin) return [];
@@ -237,10 +251,13 @@ export async function findStaleSessions(maxAgeMs: number): Promise<StaleSession[
       ...tmuxSocketArgs(),
       'list-sessions',
       '-F',
-      '#{session_name}\t#{session_created}',
+      '#{session_name}\t#{session_created}\t#{session_attached}',
     ]);
     return parseListSessions(stdout).filter(
-      (s) => s.name.startsWith('devspace-') && s.ageMs > maxAgeMs,
+      (s) =>
+        s.name.startsWith('devspace-chatrun-') &&
+        s.attached === 0 &&
+        s.ageMs > maxAgeMs,
     );
   } catch (err) {
     // "no server running" is the cold-start case — nothing to prune.
@@ -253,11 +270,16 @@ export async function findStaleSessions(maxAgeMs: number): Promise<StaleSession[
   }
 }
 
-// Kill every devspace-prefixed tmux session older than `maxAgeMs`. Returns
-// the names that were actually killed. The two-day default lines up with
-// "ran a chat over the weekend, forgot about it" — long enough that you
-// rarely lose anything you cared about, short enough that the session
-// list stays manageable.
+// Kill every unattached devspace-chatrun-* tmux session older than
+// `maxAgeMs`. Returns the names that were actually killed. The two-day
+// default lines up with "ran a chat over the weekend, forgot about it" —
+// long enough that you rarely lose anything you cared about, short enough
+// that the session list stays manageable.
+//
+// Accepted trade-off: orphaned devspace-cli-* / devspace-shell-* sessions
+// from deleted projects are no longer age-pruned here (the old broad
+// `devspace-` prefix killed live CLI tabs too — see findStaleSessions).
+// Explicit kill via the tmux manager UI remains the way to clear those.
 export async function pruneStaleSessions(
   maxAgeMs = 2 * 24 * 60 * 60 * 1000,
 ): Promise<string[]> {

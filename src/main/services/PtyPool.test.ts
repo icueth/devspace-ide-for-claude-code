@@ -1,7 +1,15 @@
 import { describe, expect, it } from 'vitest';
 
 import { ApprovalDetector } from './ClaudeToolApprovalParser';
-import { killProjectSessions, killPty, shutdownAll } from './PtyPool';
+import {
+  createPty,
+  killProjectSessions,
+  killPty,
+  shutdownAll,
+  subscribeAndReplay,
+  subscribeData,
+  writeToPty,
+} from './PtyPool';
 
 // PtyPool is heavily coupled to node-pty's native addon, so this suite
 // only exercises the surface that is safe to call without spawning a
@@ -36,6 +44,119 @@ describe('PtyPool — async kill surface', () => {
   it('killPty is idempotent for unknown keys', async () => {
     await expect(killPty('ghost:1')).resolves.toBeUndefined();
     await expect(killPty('ghost:1')).resolves.toBeUndefined();
+  });
+});
+
+// TOCTOU guard: createPty awaits resolveInteractiveShellEnv() between the
+// entries check and entries.set, so two concurrent calls for the same key
+// used to both spawn ("Reload tab" during the initial create). The fix
+// registers the in-flight create in pendingCreates synchronously; the
+// second caller must join it and get the IDENTICAL session object. This is
+// the one place we DO spawn a real PTY (/bin/cat — exits instantly on
+// kill, no shell rc cost); skipped gracefully if node-pty's native addon
+// can't load in this environment.
+describe('PtyPool — concurrent createPty dedup', () => {
+  it('two concurrent createPty calls for the same key return the identical session', async () => {
+    const opts = {
+      projectId: 'ptypool-test-toctou',
+      // 'agent' — a non-tmux-backed kind, so killPty alone fully cleans up
+      // and the claude-cli idle reaper / approval detector stay out of play.
+      kind: 'agent' as const,
+      tabId: 'dedup',
+      cwd: process.cwd(),
+      command: '/bin/cat',
+      args: [],
+    };
+    let sessions: Awaited<ReturnType<typeof createPty>>[];
+    try {
+      // Both calls issued in the same tick — neither has resolved when the
+      // second one checks the pool, which is exactly the raced window.
+      sessions = await Promise.all([createPty(opts), createPty(opts)]);
+    } catch {
+      // node-pty native addon unavailable in this runner — the guard can't
+      // be exercised here; the unknown-key kill tests above still run.
+      return;
+    }
+    try {
+      expect(sessions[0]).toBe(sessions[1]);
+      expect(sessions[0].pid).toBe(sessions[1].pid);
+    } finally {
+      await killPty(sessions[0].sessionId);
+    }
+  });
+});
+
+// Scrollback-replay pull path. subscribeAndReplay is the channel behind
+// PTY_SUBSCRIBE: it must hand back the rolling buffer on EVERY call (the
+// old subscribe() early-returned for an already-subscribed WebContents,
+// which made remount replay dead code), and adding the same wc repeatedly
+// must stay idempotent. The unknown-key case needs no PTY; the buffer case
+// spawns /bin/cat like the dedup suite and skips gracefully when node-pty's
+// native addon can't load in this runner.
+describe('PtyPool — subscribeAndReplay', () => {
+  // Minimal WebContents stand-in: subscribeAndReplay only touches
+  // subscribers.add, the destroy hook, and (via flush) send/isDestroyed.
+  const makeFakeWc = () =>
+    ({
+      send: () => undefined,
+      isDestroyed: () => false,
+      once: () => undefined,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    }) as any;
+
+  it('returns "" for unknown sessions', () => {
+    expect(subscribeAndReplay('does-not-exist:shell:tab', makeFakeWc())).toBe('');
+  });
+
+  it('returns buffer contents and keeps replaying on repeat calls for the same wc', async () => {
+    const opts = {
+      projectId: 'ptypool-test-replay',
+      kind: 'agent' as const, // non-tmux-backed: killPty alone cleans up
+      tabId: 'replay',
+      cwd: process.cwd(),
+      command: '/bin/cat',
+      args: [],
+    };
+    let session: Awaited<ReturnType<typeof createPty>>;
+    try {
+      session = await createPty(opts);
+    } catch {
+      // node-pty native addon unavailable in this runner — skip gracefully,
+      // matching the dedup suite above. The unknown-key test still ran.
+      return;
+    }
+    try {
+      // cat under a PTY echoes its input, so a write is the cheapest way to
+      // get deterministic bytes into the rolling buffer. Await the echo via
+      // the programmatic listener (fires on every chunk, unbatched).
+      const probe = 'replay-probe-payload';
+      let echoed = '';
+      const sawProbe = new Promise<boolean>((resolve) => {
+        const timer = setTimeout(() => resolve(false), 5000);
+        const off = subscribeData(session.sessionId, (chunk) => {
+          echoed += chunk;
+          if (echoed.includes(probe)) {
+            clearTimeout(timer);
+            off();
+            resolve(true);
+          }
+        });
+      });
+      writeToPty(session.sessionId, `${probe}\n`);
+      if (!(await sawProbe)) return; // PTY produced nothing — environment issue
+
+      const wc = makeFakeWc();
+      const first = subscribeAndReplay(session.sessionId, wc);
+      // Same wc again — the remount case. No has(wc) early-return may
+      // suppress the replay.
+      const second = subscribeAndReplay(session.sessionId, wc);
+      expect(first).toContain(probe);
+      expect(second).toContain(probe);
+      // No new output between the calls → identical snapshots.
+      expect(second).toBe(first);
+    } finally {
+      await killPty(session.sessionId);
+    }
   });
 });
 

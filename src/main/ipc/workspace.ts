@@ -3,6 +3,7 @@ import { dialog, ipcMain } from 'electron';
 import { closeWatchersForRoot } from '@main/services/FileWatcherService';
 import { shutdownProject as shutdownDevServerProject } from '@main/services/DevServerService';
 import { killProjectSessions } from '@main/services/PtyPool';
+import { closeWatchersForProject as closePreviewWatchersForProject } from '@main/services/PreviewService';
 import { disposeProject as disposeGraphifyProject } from '@main/services/GraphifyDriver';
 import { disposeProject as disposeCodeflowGraphProject } from '@main/services/CodeflowGraphLive';
 import {
@@ -76,6 +77,13 @@ export function registerWorkspaceIpc(): void {
       } catch (err) {
         logger.warn(`closeWatchersForRoot failed: ${(err as Error).message}`);
       }
+      try {
+        closePreviewWatchersForProject(projectPath);
+      } catch (err) {
+        logger.warn(
+          `closePreviewWatchersForProject failed: ${(err as Error).message}`,
+        );
+      }
       // Evict per-project in-memory service state (graphify child + live
       // graph). Without this the state Maps grow unbounded across a session
       // and runs keep streaming into a closed project. Re-opening re-hydrates
@@ -91,6 +99,43 @@ export function registerWorkspaceIpc(): void {
         logger.warn(`disposeCodeflowGraphProject failed: ${(err as Error).message}`);
       }
       logger.info(`closed workspace ${projectId} (${projectPath})`);
+    },
+  );
+
+  // Lighter sibling of WORKSPACE_CLOSE for switching workspaces rather than
+  // closing one: free per-project main-process state (dev-server, graphify
+  // child, live codeflow graph) but deliberately keep
+  //   * claude/shell PTYs — dock chips persist cross-workspace by design;
+  //   * fs watchers — FileTree owns that lifecycle (subscribe/unsubscribe).
+  ipcMain.handle(
+    IPC.WORKSPACE_SUSPEND,
+    async (_e, projectId: string, projectPath: string) => {
+      if (
+        typeof projectId !== 'string' ||
+        projectId.length === 0 ||
+        typeof projectPath !== 'string' ||
+        projectPath.length === 0
+      ) {
+        throw new Error('WORKSPACE_SUSPEND requires projectId and projectPath');
+      }
+      try {
+        // shutdownProject (not stopDevServer) so an in-flight `pnpm install`
+        // PTY is killed too, not just the dev-server.
+        await shutdownDevServerProject(projectPath).catch(() => undefined);
+      } catch (err) {
+        logger.warn(`shutdownProject failed: ${(err as Error).message}`);
+      }
+      try {
+        disposeGraphifyProject(projectPath);
+      } catch (err) {
+        logger.warn(`disposeGraphifyProject failed: ${(err as Error).message}`);
+      }
+      try {
+        disposeCodeflowGraphProject(projectPath);
+      } catch (err) {
+        logger.warn(`disposeCodeflowGraphProject failed: ${(err as Error).message}`);
+      }
+      logger.info(`suspended workspace ${projectId} (${projectPath})`);
     },
   );
 }
