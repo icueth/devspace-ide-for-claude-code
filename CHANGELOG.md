@@ -5,6 +5,74 @@ All notable changes to DevSpace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.38.0-beta.13] — 2026-06-10 (prod branch, local beta — not on GH)
+
+**Sidebar ⇄ tabs ⇄ Claude-CLI dock now stay in lockstep, and CLI teardown
+actually tears down what it promises.** Driven by an adversarially-verified
+audit (17 confirmed findings across PTY lifecycle, dock state, teardown, and
+switch smoothness).
+
+### Fixed
+- **"Clicking a project does nothing"** — the v0.30.5/0.30.6 auto-follow
+  effects were level-triggered and silently reverted every sidebar/Welcome/
+  dock-chip project click while a foreign project's editor tab was focused.
+  Now edge-triggered, with user-intent `activateProject` (restores the
+  project's last-used editor tab) split from the background-mirror
+  `setActiveProject` (never touches the editor).
+- Clicking **any** tab — both editor panes, including `diff:` and
+  `html-preview:` tabs (previously unattributable) — moves the sidebar and
+  dock to that tab's project, even when re-clicking the already-active tab.
+- **Boot prune killed live CLI sessions**: any `devspace-cli-*`/`-shell-*`
+  tmux session older than 48 h was killed 5 s after every launch — the
+  resume-on-reopen feature destroying itself. Prune is now scoped to
+  `devspace-chatrun-*` and never touches attached sessions.
+- **Closing a tab/project only detached tmux** — claude + its MCP servers
+  kept running forever (~245 MB+ each). Close/undock/evict/idle-reap now
+  kill the real session tree (`PTY_KILL_SESSION`); the close-dialog promise
+  "ends the tmux session" is finally true.
+- **"Reload tab" never respawned claude** (it reattached to the same
+  process). It now goes through `PTY_RESTART_CLAUDE`, picking up fresh
+  `.mcp.json`/env — its documented purpose.
+- Agent-teams env vars + `DEVSPACE_PROJECT_ID` now reach claude via an `env`
+  wrapper even when the tmux server already runs (previously only the first
+  server boot propagated them).
+- TOCTOU double-spawn race in `createPty` (reload during initial create)
+  produced unkillable zombie sessions — in-flight creates are deduped and
+  pool-entry deletes identity-checked.
+- **Scrollback restore on pane remount was dead code** — the replay arrived
+  before the renderer listened. Pull-based `PTY_SUBSCRIBE` returns the
+  rolling buffer after the listener attaches (dock CLI panes + bottom
+  terminals).
+- Dock state machine: duplicate column pins no longer blank a column (drop =
+  swap, chip click = focus-don't-steal), chip highlight now equals the
+  visible pane, undock fallback is consistent, and boot no longer clobbers
+  the persisted dock pin with the workspace restore.
+- `closeProject` missed `diff:`/`html-preview:` tabs; a surviving tab could
+  fire the follow effect and instantly re-dock the project just closed.
+- Preview watchers: per-project unsubscribe (steady-state = 1 watcher),
+  disposal on workspace close, and no more `.devspace/preview/` directories
+  created in repos the user merely clicked once.
+
+### Changed
+- MAX_OPEN(8) eviction is recency-based (was FIFO by first activation),
+  skips projects pinned in a dock column, and announces itself with a toast
+  (every other teardown asks first; eviction was silent).
+- Re-selecting the current workspace is a no-op (was: full destructive
+  rescan — Scanning flash, watcher rebuild, blanked editor); an explicit
+  **Rescan projects** item in the workspace picker covers the real use.
+- Workspace switches suspend the outgoing projects' dev-server/graphify/
+  codeflow state (`WORKSPACE_SUSPEND`); cross-workspace Claude chats keep
+  running by design.
+
+### Performance
+- Project switching: one fs watcher per **open** project survives switches
+  (was: full chokidar re-sweep on every switch + stale background trees);
+  switch-back to a cached project diffs silently in a single commit — no
+  "Loading…" flash, zero re-renders when nothing changed (was: N+1 IPC +
+  ~N commits); git refresh debounced behind 300 ms (was: 3 git children per
+  chip-hop); hidden BottomPanels no longer pre-spawn shells (was: 8 xterm +
+  8 zsh for never-viewed panels); workspace scans halve their readdirs.
+
 ## [0.38.0-beta.12] — 2026-06-08 (prod branch, local beta — not on GH)
 
 **Phase 1 cleanup — Codeflow is now graphify-only.** Removes the legacy
