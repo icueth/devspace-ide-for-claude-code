@@ -488,6 +488,21 @@ export interface DevspaceApi {
       limit?: number;
     }) => Promise<string>;
     buildInjectPreamble: (projectPath: string) => Promise<string>;
+    // sub-project 3 (native learning): manual "Learn from recent work" trigger.
+    // Returns a summary of how many learnings were created / inboxed / skipped.
+    distill: (projectPath: string) => Promise<{
+      status:
+        | 'ok'
+        | 'no-activity'
+        | 'no-claude'
+        | 'run-failed'
+        | 'unparseable'
+        | 'error';
+      created: number;
+      inboxed: number;
+      skippedDup: number;
+      message?: string;
+    }>;
     getSettings: () => Promise<MemorySettings>;
     setSettings: (patch: Partial<MemorySettings>) => Promise<MemorySettings>;
     openDir: (scope: MemoryScope, projectPath?: string) => Promise<void>;
@@ -833,6 +848,14 @@ function makeStubApi(): DevspaceApi {
       writeDiary: notWired('memory.writeDiary'),
       buildRecallContext: () => Promise.resolve(''),
       buildInjectPreamble: () => Promise.resolve(''),
+      distill: () =>
+        Promise.resolve({
+          status: 'error' as const,
+          created: 0,
+          inboxed: 0,
+          skippedDup: 0,
+          message: 'not wired',
+        }),
       getSettings: () =>
         Promise.resolve({
           enabled: true,

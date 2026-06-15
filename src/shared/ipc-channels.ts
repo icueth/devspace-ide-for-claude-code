@@ -231,6 +231,8 @@ export const IPC = {
   MEMORY_RESOLVE_INBOX: 'memory:resolve-inbox',
   MEMORY_DISMISS_INBOX: 'memory:dismiss-inbox',
   MEMORY_PROPOSE_FROM_TURN: 'memory:propose-from-turn',
+  // sub-project 3 (native learning): manual "Learn from recent work" trigger.
+  MEMORY_DISTILL: 'memory:distill',
   MEMORY_LIST_DIARY: 'memory:list-diary',
   MEMORY_GET_DIARY: 'memory:get-diary',
   MEMORY_WRITE_DIARY: 'memory:write-diary',

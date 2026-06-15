@@ -54,6 +54,10 @@ const MEMORY_TYPES: ReadonlySet<MemoryType> = new Set([
   'feedback',
   'project',
   'reference',
+  // sub-project 3 (native learning): distilled-learning types. Validated the
+  // same as any other type so DistillationService.createEntry round-trips.
+  'lesson',
+  'workflow',
 ]);
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 // Thread ids must avoid path-separator chars + leading dashes.
@@ -2210,15 +2214,38 @@ export async function buildRecallContext(input: {
   await ensureInit();
   if (!state.settings.enabled) return '';
   const limit = Math.max(1, Math.min(10, input.limit ?? 3));
-  const hits = await search({
-    query: input.query,
-    projectPath: input.projectPath,
-    limit,
-  });
+  // sub-project 3 (#1 auto-surface): hybrid search blends the keyword index
+  // with the semantic (cosine) index from sub-project 2, so we surface prior
+  // learnings/memory that are RELATED to the current task even when they share
+  // no literal keywords. Additive + bounded — degrades to keyword-only when the
+  // embedder is unavailable, and an empty/failed search just yields no preamble.
+  let hits: MemorySearchHit[] = [];
+  try {
+    hits = await search({
+      query: input.query,
+      projectPath: input.projectPath,
+      mode: 'hybrid',
+      limit,
+    });
+  } catch (err) {
+    // Recall must never break chat finalize — treat any failure as "no recall".
+    logger.warn(`buildRecallContext search failed: ${(err as Error).message}`);
+    return '';
+  }
   if (hits.length === 0) return '';
-  const lines: string[] = [];
+  const lines: string[] = [
+    "You've dealt with something like this before — relevant past notes and learnings:",
+    '',
+  ];
   for (const hit of hits.slice(0, limit)) {
-    lines.push(`### ${sanitizeSingleLine(hit.entry.description, 200)}`);
+    // Flag the durable-learning types so the assistant can weight a distilled
+    // lesson/preference/workflow over an incidental reference note.
+    const isLearning =
+      hit.entry.type === 'lesson' ||
+      hit.entry.type === 'workflow' ||
+      hit.entry.type === 'feedback';
+    const tag = isLearning ? ` _(${hit.entry.type})_` : '';
+    lines.push(`### ${sanitizeSingleLine(hit.entry.description, 200)}${tag}`);
     lines.push(hit.entry.preview);
     lines.push('');
   }

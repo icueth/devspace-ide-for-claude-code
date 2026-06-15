@@ -844,7 +844,18 @@ export interface CodeflowGraphUpdate {
 // `id` is `<scope>/<slug>` (e.g. "project:abc123/feedback_no-mocks" or
 // "global/user_role"). slugs are kebab-case, ASCII, ≤ 80 chars.
 
-export type MemoryType = 'user' | 'feedback' | 'project' | 'reference';
+// 'lesson' and 'workflow' (sub-project 3: native learning) are produced by
+// DistillationService — durable insights distilled from recent activity by
+// real Claude. 'feedback' doubles as the "preference" learning type (it
+// already feeds the inject preamble), so distilled preferences reuse it
+// rather than adding a third learning type.
+export type MemoryType =
+  | 'user'
+  | 'feedback'
+  | 'project'
+  | 'reference'
+  | 'lesson'
+  | 'workflow';
 
 export type MemoryScope = 'project' | 'global';
 

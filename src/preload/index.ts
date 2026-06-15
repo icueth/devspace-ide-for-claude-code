@@ -477,6 +477,8 @@ const api = {
       ipcRenderer.invoke(IPC.MEMORY_BUILD_RECALL_CONTEXT, input),
     buildInjectPreamble: (projectPath: string) =>
       ipcRenderer.invoke(IPC.MEMORY_BUILD_INJECT_PREAMBLE, projectPath),
+    distill: (projectPath: string) =>
+      ipcRenderer.invoke(IPC.MEMORY_DISTILL, projectPath),
     getSettings: () => ipcRenderer.invoke(IPC.MEMORY_GET_SETTINGS),
     setSettings: (patch: unknown) =>
       ipcRenderer.invoke(IPC.MEMORY_SET_SETTINGS, patch),

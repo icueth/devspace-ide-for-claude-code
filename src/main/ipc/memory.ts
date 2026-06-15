@@ -9,6 +9,7 @@
 import { ipcMain, shell } from 'electron';
 import type { IpcMainInvokeEvent } from 'electron';
 
+import { distill } from '@main/services/DistillationService';
 import { assertInWorkspace } from '@main/utils/pathScope';
 import {
   buildInjectPreamble,
@@ -86,7 +87,14 @@ function asScope(x: unknown): MemoryScope {
 }
 
 function asType(x: unknown): MemoryType {
-  if (x !== 'user' && x !== 'feedback' && x !== 'project' && x !== 'reference') {
+  if (
+    x !== 'user' &&
+    x !== 'feedback' &&
+    x !== 'project' &&
+    x !== 'reference' &&
+    x !== 'lesson' &&
+    x !== 'workflow'
+  ) {
     throw new Error(`invalid type: ${String(x)}`);
   }
   return x;
@@ -351,6 +359,16 @@ export function registerMemoryIpc(): void {
     async (event, projectPath: unknown) => {
       setupSubscriber(event);
       return buildInjectPreamble(await assertInWorkspace(asString(projectPath)));
+    },
+  );
+
+  ipcMain.handle(
+    IPC.MEMORY_DISTILL,
+    async (event, projectPath: unknown) => {
+      setupSubscriber(event);
+      // distill() never throws — it returns a DistillSummary with a status —
+      // so we can surface the result directly to the renderer.
+      return distill(await assertInWorkspace(asString(projectPath)));
     },
   );
 

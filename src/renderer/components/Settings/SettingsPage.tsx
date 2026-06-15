@@ -41,7 +41,7 @@ import { AccountSettings } from '@renderer/components/Settings/AccountSettings';
 import { AgentsSettings } from '@renderer/components/Settings/AgentsSettings';
 import { LlmSettings } from '@renderer/components/Settings/LlmSettings';
 import { McpSettings } from '@renderer/components/Settings/McpSettings';
-import { MemPalaceSettings } from '@renderer/components/Settings/MemPalaceSettings';
+import { MemorySettings } from '@renderer/components/Settings/MemorySettings';
 import { SetupSettings } from '@renderer/components/Settings/SetupSettings';
 import { SkillsSettings } from '@renderer/components/Settings/SkillsSettings';
 import { TmuxSection } from '@renderer/components/Settings/TmuxSection';
@@ -179,7 +179,7 @@ export function SettingsPage({ onClose, initialTab = 'account' }: SettingsPagePr
         </TabContainer>
         <TabContainer active={tab === 'memory'}>
           <RouteErrorBoundary label="Settings · memory">
-            <MemPalaceSettings />
+            <MemorySettings />
           </RouteErrorBoundary>
         </TabContainer>
         <TabContainer active={tab === 'skills'}>
