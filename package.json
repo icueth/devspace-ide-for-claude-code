@@ -14,6 +14,7 @@
     "fetch-uv": "node scripts/fetch-uv.mjs",
     "fetch-uv:mac": "node scripts/fetch-uv.mjs --mac",
     "fetch-uv:all": "node scripts/fetch-uv.mjs --all",
+    "fetch:embeddings": "node scripts/fetch-embeddings.mjs",
     "freeze-graphify": "node scripts/freeze-graphify.mjs",
     "prebuild": "node scripts/fetch-uv.mjs",
     "build": "electron-vite build",
@@ -23,15 +24,15 @@
     "test:watch": "vitest",
     "rebuild:native:arm64": "electron-rebuild -f -o node-pty --arch=arm64",
     "rebuild:native:x64": "electron-rebuild -f -o node-pty --arch=x64",
-    "predist:mac": "node scripts/fetch-uv.mjs --mac && node scripts/freeze-graphify.mjs",
+    "predist:mac": "node scripts/fetch-uv.mjs --mac && node scripts/freeze-graphify.mjs && node scripts/fetch-embeddings.mjs",
     "dist:mac": "electron-vite build && electron-builder --mac",
-    "predist:mac:arm64": "node scripts/fetch-uv.mjs && node scripts/freeze-graphify.mjs && pnpm run rebuild:native:arm64",
+    "predist:mac:arm64": "node scripts/fetch-uv.mjs && node scripts/freeze-graphify.mjs && node scripts/fetch-embeddings.mjs && pnpm run rebuild:native:arm64",
     "dist:mac:arm64": "electron-vite build && electron-builder --mac --arm64",
     "postdist:mac:arm64": "pnpm run rebuild:native:arm64",
-    "predist:mac:x64": "node scripts/fetch-uv.mjs --mac && node scripts/freeze-graphify.mjs && pnpm run rebuild:native:x64",
+    "predist:mac:x64": "node scripts/fetch-uv.mjs --mac && node scripts/freeze-graphify.mjs && node scripts/fetch-embeddings.mjs && pnpm run rebuild:native:x64",
     "dist:mac:x64": "electron-vite build && electron-builder --mac --x64",
     "postdist:mac:x64": "pnpm run rebuild:native:arm64",
-    "predist:mac:universal": "node scripts/fetch-uv.mjs --mac && node scripts/freeze-graphify.mjs",
+    "predist:mac:universal": "node scripts/fetch-uv.mjs --mac && node scripts/freeze-graphify.mjs && node scripts/fetch-embeddings.mjs",
     "dist:mac:universal": "electron-vite build && electron-builder --mac --universal",
     "postinstall": "electron-rebuild -f -o node-pty || echo 'native rebuild skipped (terminal features will be disabled)'"
   },
@@ -156,7 +157,8 @@
     "afterPack": "scripts/after-pack.cjs",
     "asar": true,
     "asarUnpack": [
-      "**/node_modules/node-pty/**"
+      "**/node_modules/node-pty/**",
+      "**/node_modules/onnxruntime-node/**"
     ],
     "extraResources": [
       {
@@ -197,6 +199,13 @@
       {
         "from": "resources/setup-hooks",
         "to": "setup-hooks",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "resources/embeddings",
+        "to": "embeddings",
         "filter": [
           "**/*"
         ]

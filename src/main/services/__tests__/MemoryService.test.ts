@@ -229,7 +229,10 @@ describe('MemoryService.search', () => {
       description: 'other ref',
       body: 'mention of unicorn in body only',
     });
-    const hits = await search({ query: 'unicorn', projectPath: projectAbs });
+    // slug>body is a KEYWORD-ranking invariant; assert it in keyword mode
+    // (the new default 'hybrid' may legitimately re-rank by semantic similarity
+    // when the embedder is available — covered by the semantic tests).
+    const hits = await search({ query: 'unicorn', projectPath: projectAbs, mode: 'keyword' });
     expect(hits.length).toBeGreaterThanOrEqual(2);
     expect(hits[0].entry.slug).toBe('unicorn-deploy');
     expect(hits[0].matchedFields).toContain('slug');

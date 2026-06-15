@@ -923,8 +923,10 @@ export interface MemorySearchHit {
   entry: MemoryEntry;
   // Match score (higher = better).
   score: number;
-  // Which fields matched — drives the highlight chip in dashboard.
-  matchedFields: Array<'slug' | 'description' | 'body' | 'tags'>;
+  // Which fields matched — drives the highlight chip in dashboard. 'semantic'
+  // means the hit came from the vector (cosine) index rather than a literal
+  // keyword/substring match (sub-project 2: native semantic search).
+  matchedFields: Array<'slug' | 'description' | 'body' | 'tags' | 'semantic'>;
 }
 
 export interface MemoryStats {

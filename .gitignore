@@ -35,3 +35,6 @@ resources/mempalace-uv/*/uv.exe
 resources/graphify/
 # transient PyInstaller dist output (same-device build dir; removed after freeze)
 .graphify-build/
+
+# embeddings model (all-MiniLM-L6-v2, ~97MB) — vendored by scripts/fetch-embeddings.mjs (CI/predist), not committed
+resources/embeddings/

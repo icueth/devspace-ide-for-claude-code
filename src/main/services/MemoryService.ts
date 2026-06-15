@@ -41,6 +41,9 @@ import type {
   MemoryType,
 } from '@shared/types';
 
+import * as Embedding from './EmbeddingService';
+import { VectorIndex } from './VectorIndex';
+
 const logger = createLogger('Memory');
 
 // ─── constants / regexes ────────────────────────────────────────────────────
@@ -415,6 +418,8 @@ export function __resetForTests(root?: string): void {
   state.loadedProjects.clear();
   state.loadingProjects.clear();
   state.globalLoaded = false;
+  vectorIndexes.clear();
+  vectorRebuilds.clear();
 }
 
 // Test-only inspectors for the M1 lazy-load refactor (v0.30.7). These
@@ -485,6 +490,149 @@ function indexRemove(id: string): void {
     if (set.delete(id) && set.size === 0) state.tokens.delete(token);
   }
 }
+
+// ─── semantic index (sub-project 2: native semantic memory) ──────────────────
+//
+// A per-scope VectorIndex (cosine over MiniLM embeddings) sits ALONGSIDE the
+// inverted index above. It's strictly additive: every code path here is
+// fire-and-forget and swallows its own errors so embedding work can NEVER block
+// or break entry create/update/delete or search. When the embedder is
+// unavailable (model missing / load failed), semantic state stays empty and the
+// service behaves exactly as keyword-only.
+
+// scopeKey ("global" | "project:<hash>") → that scope's vector index.
+const vectorIndexes = new Map<string, VectorIndex>();
+
+// Background rebuild promises keyed by scopeKey, so init() can fire them without
+// blocking and a second caller can await the same rebuild.
+const vectorRebuilds = new Map<string, Promise<void>>();
+
+// Lazily get/create the VectorIndex for a scope and bind it to that scope's
+// `.embeddings/` dir on first touch. Returns null only if dir resolution fails.
+function vectorIndexFor(scope: MemoryScope, hash: string): VectorIndex {
+  const sk = scopeKey(scope, hash);
+  let idx = vectorIndexes.get(sk);
+  if (!idx) {
+    idx = new VectorIndex();
+    vectorIndexes.set(sk, idx);
+  }
+  return idx;
+}
+
+// Compose the text we embed for an entry. Matches what callers search for:
+// the human-written description plus the body. Kept in one place so create,
+// update and rebuild all embed identical text.
+function embedTextFor(description: string, body: string): string {
+  return `${description}\n${body ?? ''}`;
+}
+
+// Fire-and-forget: embed an entry's text and upsert it into its scope's vector
+// index. Never throws into the caller. A failed embed leaves the entry
+// keyword-searchable (the inverted index already has it).
+function embedAndUpsert(entry: MemoryEntry): void {
+  const idx = vectorIndexFor(entry.scope, entry.projectHash);
+  void (async () => {
+    try {
+      const vec = await Embedding.embed(embedTextFor(entry.description, entry.body ?? ''));
+      // Guard against a delete that raced ahead of this async embed.
+      if (!state.entries.has(entry.id)) {
+        idx.remove(entry.id);
+        return;
+      }
+      idx.upsert(entry.id, vec);
+    } catch (err) {
+      // EmbeddingUnavailableError (model absent) or a transient embed failure —
+      // log at debug so we don't spam when semantic search is simply off.
+      logger.debug(`embed skipped for ${entry.id}: ${(err as Error).message}`);
+    }
+  })();
+}
+
+// Remove an entry from its scope's vector index (synchronous; cheap).
+function vectorRemove(scope: MemoryScope, hash: string, id: string): void {
+  const idx = vectorIndexes.get(scopeKey(scope, hash));
+  if (idx) idx.remove(id);
+}
+
+// Bind + load (or schedule a rebuild for) a scope's persisted vector index.
+// Called from init()/ensureProjectLoaded once the scope's markdown entries are
+// in state. Non-blocking: load is awaited (fast — just reads index.bin), but a
+// needed rebuild is fired in the background.
+async function loadOrScheduleVectorIndex(scope: MemoryScope, hash: string): Promise<void> {
+  const sk = scopeKey(scope, hash);
+  if (vectorIndexes.has(sk) && vectorIndexes.get(sk)!.loaded) return;
+  const idx = vectorIndexFor(scope, hash);
+  let dir: string;
+  try {
+    dir = memoryDir(scope, hash);
+  } catch {
+    return; // invalid hash etc. — semantic stays off for this scope
+  }
+  let ok = false;
+  try {
+    ok = await idx.load(dir);
+  } catch (err) {
+    logger.debug(`vector index load failed for ${sk}: ${(err as Error).message}`);
+  }
+  if (!ok) scheduleVectorRebuild(scope, hash);
+}
+
+// Background-rebuild a scope's vector index from its in-memory markdown entries.
+// Triggered when the persisted index is missing or its meta (model/dim) is
+// stale. Batch-embeds; tolerant of the embedder being unavailable (it just
+// does nothing then). Deduped per scope via vectorRebuilds.
+function scheduleVectorRebuild(scope: MemoryScope, hash: string): void {
+  const sk = scopeKey(scope, hash);
+  if (vectorRebuilds.has(sk)) return;
+  const p = (async () => {
+    try {
+      // Cheap probe first so a missing model is a no-op, not N failed embeds.
+      if (!(await Embedding.isAvailable())) return;
+      const idx = vectorIndexFor(scope, hash);
+      const ids: string[] = [];
+      const texts: string[] = [];
+      const bucket = state.byScope.get(sk);
+      if (bucket) {
+        for (const id of bucket) {
+          const e = state.entries.get(id);
+          if (!e) continue;
+          ids.push(id);
+          texts.push(embedTextFor(e.description, e.body ?? ''));
+        }
+      }
+      if (ids.length === 0) return;
+      const vecs = await Embedding.embedBatch(texts);
+      idx.clear();
+      for (let i = 0; i < ids.length; i++) {
+        // An entry may have been deleted mid-rebuild — skip it.
+        if (state.entries.has(ids[i])) idx.upsert(ids[i], vecs[i]);
+      }
+      idx.persist();
+      logger.info(`rebuilt vector index for ${sk}: ${idx.size} entries`);
+    } catch (err) {
+      logger.debug(`vector rebuild failed for ${sk}: ${(err as Error).message}`);
+    } finally {
+      vectorRebuilds.delete(sk);
+    }
+  })();
+  vectorRebuilds.set(sk, p);
+}
+
+// Test-only inspectors / control for the semantic layer. Production must not
+// import these.
+export const __vectorTestHooks = {
+  indexFor: (scope: MemoryScope, hash: string): VectorIndex => vectorIndexFor(scope, hash),
+  rebuild: (scope: MemoryScope, hash: string): Promise<void> => {
+    scheduleVectorRebuild(scope, hash);
+    return vectorRebuilds.get(scopeKey(scope, hash)) ?? Promise.resolve();
+  },
+  pendingRebuild: (scope: MemoryScope, hash: string): Promise<void> | undefined =>
+    vectorRebuilds.get(scopeKey(scope, hash)),
+  reset: (): void => {
+    vectorIndexes.clear();
+    vectorRebuilds.clear();
+  },
+};
 
 // ─── settings persistence ──────────────────────────────────────────────────
 
@@ -760,6 +908,10 @@ async function ensureProjectLoaded(hash: string): Promise<void> {
         console.warn(`[MemoryService] walk failed for project ${hash}:`, err);
       }
       state.loadedProjects.add(hash);
+      // Semantic (sub-project 2): now that this project's entries are in
+      // state, bind/load its persisted vector index (stale/missing → bg
+      // rebuild). Fire-and-forget; never block project hydration.
+      void loadOrScheduleVectorIndex('project', hash);
     } finally {
       state.loadingProjects.delete(hash);
     }
@@ -810,6 +962,11 @@ export function init(): Promise<void> {
       ]);
       await refreshProjectCounts();
       state.initialized = true;
+      // Semantic (sub-project 2): bind + load the persisted vector index for
+      // global now that its entries are in state; a stale/missing index
+      // schedules a background rebuild. Per-project indexes load lazily in
+      // ensureProjectLoaded(). Fire-and-forget — never block init on embeddings.
+      void loadOrScheduleVectorIndex('global', '');
       setImmediate(() =>
         emit({ kind: 'index_rebuilt', ts: Date.now() }),
       );
@@ -1175,6 +1332,9 @@ export async function createEntry(input: {
     preview: buildPreview(body),
   };
   indexAdd(entry);
+  // Semantic (sub-project 2): fire-and-forget embed + vector upsert. Must not
+  // block entry creation; a failed embed leaves the entry keyword-searchable.
+  embedAndUpsert(entry);
   await regenerateIndexMd(input.scope, hash);
   await queueMempalaceSync(entry);
   setImmediate(() =>
@@ -1265,6 +1425,9 @@ export async function updateEntry(input: {
   await atomicWrite(file, serializeFile(fm, body));
   indexRemove(prev.id);
   indexAdd(next);
+  // Semantic (sub-project 2): re-embed the edited text (id is unchanged so this
+  // overwrites the old vector). Fire-and-forget; never blocks the update.
+  embedAndUpsert(next);
   await regenerateIndexMd(prev.scope, prev.projectHash);
   await queueMempalaceSync(next);
   setImmediate(() =>
@@ -1292,6 +1455,9 @@ export async function deleteEntry(id: string): Promise<void> {
     if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
   }
   indexRemove(id);
+  // Semantic (sub-project 2): drop the vector for this id (no-op if absent or
+  // semantic is off). Synchronous + cheap; debounced persist follows.
+  vectorRemove(prev.scope, prev.projectHash, id);
   const pinned = await readPinned(prev.scope, prev.projectHash);
   if (pinned.delete(prev.slug)) {
     await writePinned(prev.scope, prev.projectHash, pinned);
@@ -1359,6 +1525,11 @@ export async function search(input: {
   types?: MemoryType[];
   tags?: string[];
   limit?: number;
+  // Search mode (sub-project 2). 'keyword' = inverted index only (original
+  // behavior). 'semantic' = vector cosine only. 'hybrid' (default) = both,
+  // merged by normalized score. Semantic is ADDITIVE: when the embedder is
+  // unavailable, 'hybrid' and 'semantic' degrade to keyword-only results.
+  mode?: 'keyword' | 'semantic' | 'hybrid';
 }): Promise<MemorySearchHit[]> {
   await ensureInit();
   // Lazy-load: hydrate exactly the project(s) this search can hit before
@@ -1376,6 +1547,7 @@ export async function search(input: {
     // project we know about. Load them all in parallel.
     await ensureAllProjectsLoaded();
   }
+  const mode = input.mode ?? 'hybrid';
   // SEC: cap query length to prevent CPU DoS via huge query strings.
   const rawQuery = (input.query ?? '').slice(0, 256);
   const limit = Math.max(1, Math.min(100, input.limit ?? 25));
@@ -1384,6 +1556,8 @@ export async function search(input: {
   // a substring match on slug/description so short queries like "go",
   // "v0", "db" still return hits.
   const shortFallback = rawQuery.trim().toLowerCase();
+  // Empty query: nothing for either path to do (keyword needs tokens; semantic
+  // an embedding of "" is meaningless).
   if (queryTokens.length === 0 && shortFallback.length === 0) return [];
 
   let candidates: Set<string> | null = null;
@@ -1399,89 +1573,212 @@ export async function search(input: {
     ]);
   }
 
-  const scores = new Map<
-    string,
-    { score: number; fields: Set<'slug' | 'description' | 'body' | 'tags'> }
-  >();
-  for (const token of queryTokens) {
-    const set = state.tokens.get(token);
-    if (!set) continue;
-    for (const id of set) {
-      if (candidates && !candidates.has(id)) continue;
-      const entry = state.entries.get(id);
-      if (!entry) continue;
-      if (input.types && !input.types.includes(entry.type)) continue;
-      if (
-        input.tags &&
-        input.tags.length > 0 &&
-        !input.tags.every((t) => entry.tags.includes(t.toLowerCase()))
-      ) {
-        continue;
+  type MatchField = 'slug' | 'description' | 'body' | 'tags' | 'semantic';
+  const scores = new Map<string, { score: number; fields: Set<MatchField> }>();
+
+  // ── keyword path (original behavior) ──────────────────────────────────────
+  // Skipped entirely for mode==='semantic'. Runs for 'keyword' and 'hybrid'.
+  if (mode !== 'semantic') {
+    for (const token of queryTokens) {
+      const set = state.tokens.get(token);
+      if (!set) continue;
+      for (const id of set) {
+        if (candidates && !candidates.has(id)) continue;
+        const entry = state.entries.get(id);
+        if (!entry) continue;
+        if (input.types && !input.types.includes(entry.type)) continue;
+        if (
+          input.tags &&
+          input.tags.length > 0 &&
+          !input.tags.every((t) => entry.tags.includes(t.toLowerCase()))
+        ) {
+          continue;
+        }
+        const bucket = scores.get(id) ?? { score: 0, fields: new Set<MatchField>() };
+        if (entry.slug.toLowerCase().includes(token)) {
+          bucket.score += 5;
+          bucket.fields.add('slug');
+        }
+        if (entry.description.toLowerCase().includes(token)) {
+          bucket.score += 3;
+          bucket.fields.add('description');
+        }
+        if (entry.tags.includes(token)) {
+          bucket.score += 4;
+          bucket.fields.add('tags');
+        }
+        if ((entry.body ?? '').toLowerCase().includes(token)) {
+          bucket.score += 1;
+          bucket.fields.add('body');
+        }
+        if (entry.pinned) bucket.score += 0.5;
+        scores.set(id, bucket);
       }
-      const bucket = scores.get(id) ?? { score: 0, fields: new Set() };
-      if (entry.slug.toLowerCase().includes(token)) {
-        bucket.score += 5;
-        bucket.fields.add('slug');
+    }
+
+    // Short-fallback: if the trimmed-lowered query is <3 chars (where
+    // tokenize discards everything), substring-match slug/description.
+    // This lets users find "go-config" by typing "go".
+    if (queryTokens.length === 0 && shortFallback.length > 0) {
+      for (const entry of state.entries.values()) {
+        if (candidates && !candidates.has(entry.id)) continue;
+        if (input.types && !input.types.includes(entry.type)) continue;
+        if (
+          input.tags &&
+          input.tags.length > 0 &&
+          !input.tags.every((t) => entry.tags.includes(t))
+        )
+          continue;
+        const fields = new Set<MatchField>();
+        let score = 0;
+        if (entry.slug.toLowerCase().includes(shortFallback)) {
+          score += 5;
+          fields.add('slug');
+        }
+        if (entry.description.toLowerCase().includes(shortFallback)) {
+          score += 3;
+          fields.add('description');
+        }
+        if (entry.tags.some((t) => t.includes(shortFallback))) {
+          score += 4;
+          fields.add('tags');
+        }
+        if (score > 0) {
+          if (entry.pinned) score += 0.5;
+          scores.set(entry.id, { score, fields });
+        }
       }
-      if (entry.description.toLowerCase().includes(token)) {
-        bucket.score += 3;
-        bucket.fields.add('description');
-      }
-      if (entry.tags.includes(token)) {
-        bucket.score += 4;
-        bucket.fields.add('tags');
-      }
-      if ((entry.body ?? '').toLowerCase().includes(token)) {
-        bucket.score += 1;
-        bucket.fields.add('body');
-      }
-      if (entry.pinned) bucket.score += 0.5;
-      scores.set(id, bucket);
     }
   }
 
-  // Short-fallback: if the trimmed-lowered query is <3 chars (where
-  // tokenize discards everything), substring-match slug/description.
-  // This lets users find "go-config" by typing "go".
-  if (queryTokens.length === 0 && shortFallback.length > 0) {
-    for (const entry of state.entries.values()) {
-      if (candidates && !candidates.has(entry.id)) continue;
-      if (input.types && !input.types.includes(entry.type)) continue;
-      if (
-        input.tags &&
-        input.tags.length > 0 &&
-        !input.tags.every((t) => entry.tags.includes(t))
-      )
-        continue;
-      const fields = new Set<'slug' | 'description' | 'body' | 'tags'>();
-      let score = 0;
-      if (entry.slug.toLowerCase().includes(shortFallback)) {
-        score += 5;
-        fields.add('slug');
-      }
-      if (entry.description.toLowerCase().includes(shortFallback)) {
-        score += 3;
-        fields.add('description');
-      }
-      if (entry.tags.some((t) => t.includes(shortFallback))) {
-        score += 4;
-        fields.add('tags');
-      }
-      if (score > 0) {
-        if (entry.pinned) score += 0.5;
-        scores.set(entry.id, { score, fields });
-      }
-    }
-  }
-
-  const hits: MemorySearchHit[] = [];
+  // Build keyword hits (raw scores). We normalize at merge time below.
+  const keywordHits: MemorySearchHit[] = [];
   for (const [id, { score, fields }] of scores) {
     const entry = state.entries.get(id);
     if (!entry || score <= 0) continue;
-    hits.push({ entry, score, matchedFields: [...fields] });
+    keywordHits.push({ entry, score, matchedFields: [...fields] });
   }
+
+  // ── semantic path (sub-project 2) ─────────────────────────────────────────
+  // Additive: only runs for 'semantic'/'hybrid', and only when the embedder is
+  // actually available. Any failure here leaves keyword results untouched.
+  let semanticHits: Array<{ id: string; cosine: number }> = [];
+  if (mode !== 'keyword') {
+    semanticHits = await semanticSearch(
+      rawQuery,
+      candidates,
+      input.types,
+      input.tags,
+      limit,
+    );
+  }
+
+  // Pure keyword mode (or no semantic results): preserve exact original output.
+  if (mode === 'keyword' || semanticHits.length === 0) {
+    keywordHits.sort(
+      (a, b) => b.score - a.score || b.entry.updatedAt - a.entry.updatedAt,
+    );
+    return keywordHits.slice(0, limit);
+  }
+
+  // ── merge keyword + semantic by normalized score ──────────────────────────
+  // Min-max normalize each list to [0,1] independently, then combine
+  // 0.5*keyword + 0.5*cosine, deduped by id. Cosine is already in [-1,1]; we
+  // rescale it the same way for a fair blend.
+  const merged = new Map<string, MemorySearchHit>();
+  const maxKw = keywordHits.reduce((m, h) => Math.max(m, h.score), 0);
+  for (const h of keywordHits) {
+    const norm = maxKw > 0 ? h.score / maxKw : 0;
+    merged.set(h.entry.id, {
+      entry: h.entry,
+      score: 0.5 * norm,
+      matchedFields: [...h.matchedFields],
+    });
+  }
+  const semVals = semanticHits.map((s) => s.cosine);
+  const semMin = Math.min(...semVals);
+  const semMax = Math.max(...semVals);
+  const semRange = semMax - semMin;
+  for (const s of semanticHits) {
+    const entry = state.entries.get(s.id);
+    if (!entry) continue;
+    const norm = semRange > 0 ? (s.cosine - semMin) / semRange : 1;
+    const existing = merged.get(s.id);
+    if (existing) {
+      existing.score += 0.5 * norm;
+      if (!existing.matchedFields.includes('semantic')) {
+        existing.matchedFields.push('semantic');
+      }
+    } else {
+      merged.set(s.id, {
+        entry,
+        score: 0.5 * norm,
+        matchedFields: ['semantic'],
+      });
+    }
+  }
+
+  const hits = [...merged.values()];
   hits.sort((a, b) => b.score - a.score || b.entry.updatedAt - a.entry.updatedAt);
   return hits.slice(0, limit);
+}
+
+// Semantic sub-query: embed the raw query, run a cosine query against each
+// relevant scope's VectorIndex, then apply the same candidate/type/tag filters
+// the keyword path uses. Returns [] (never throws) when the embedder is
+// unavailable, so 'hybrid'/'semantic' transparently degrade to keyword-only.
+async function semanticSearch(
+  rawQuery: string,
+  candidates: Set<string> | null,
+  types: MemoryType[] | undefined,
+  tags: string[] | undefined,
+  limit: number,
+): Promise<Array<{ id: string; cosine: number }>> {
+  const q = rawQuery.trim();
+  if (!q) return [];
+  let qvec: Float32Array;
+  try {
+    qvec = await Embedding.embed(q);
+  } catch {
+    return []; // embedder unavailable → keyword-only
+  }
+  // Which scope indexes can this search hit? Mirror the candidate scoping.
+  const scopeKeys = candidates === null ? [...vectorIndexes.keys()] : scopeKeysForCandidates(candidates);
+  const raw: Array<{ id: string; cosine: number }> = [];
+  // Over-fetch per scope (k = limit*4) so post-filtering by type/tag still
+  // leaves enough survivors to fill the result set.
+  const k = Math.max(limit * 4, 20);
+  for (const sk of scopeKeys) {
+    const idx = vectorIndexes.get(sk);
+    if (!idx || idx.size === 0) continue;
+    for (const hit of idx.query(qvec, k)) {
+      const entry = state.entries.get(hit.id);
+      if (!entry) continue;
+      if (candidates && !candidates.has(hit.id)) continue;
+      if (types && !types.includes(entry.type)) continue;
+      if (
+        tags &&
+        tags.length > 0 &&
+        !tags.every((t) => entry.tags.includes(t.toLowerCase()))
+      ) {
+        continue;
+      }
+      raw.push({ id: hit.id, cosine: hit.score });
+    }
+  }
+  raw.sort((a, b) => b.cosine - a.cosine);
+  return raw.slice(0, limit);
+}
+
+// Map a candidate id-set to the distinct scope keys it spans, so semanticSearch
+// only touches the relevant VectorIndex instances.
+function scopeKeysForCandidates(candidates: Set<string>): string[] {
+  const keys = new Set<string>();
+  for (const id of candidates) {
+    const slash = id.indexOf('/');
+    if (slash > 0) keys.add(id.slice(0, slash));
+  }
+  return [...keys];
 }
 
 // ─── public: stats ─────────────────────────────────────────────────────────
