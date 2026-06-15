@@ -108,9 +108,6 @@ interface CliTabsState extends PersistedShape {
   removeTab: (projectId: string, tabId: string) => void;
   setActiveTab: (projectId: string, tabId: string) => void;
   renameTab: (projectId: string, tabId: string, label: string) => void;
-  // Phase 3 (Ruflo overlay): persist the drawer-open state per tab using a
-  // shallow-merge-into-tabs pattern.
-  setTabOverlay: (projectId: string, tabId: string, open: boolean) => void;
   reloadTab: (projectId: string, tabId: string) => Promise<void>;
   // Multi-column dock layout. addColumn seeds the new slot with a tab not
   // yet visible in any column (cloning the active pin would duplicate it
@@ -334,26 +331,6 @@ export const useCliTabsStore = create<CliTabsState>((set, get) => {
       set((prev) => {
         const tabs = (prev.tabsByProject[projectId] ?? []).map((t) =>
           t.id === tabId ? { ...t, label } : t,
-        );
-        const next: PersistedShape = {
-          ...prev,
-          tabsByProject: { ...prev.tabsByProject, [projectId]: tabs },
-        };
-        persist(next);
-        return next;
-      });
-    },
-
-    setTabOverlay(projectId, tabId, open) {
-      set((prev) => {
-        const existing = prev.tabsByProject[projectId] ?? [];
-        // Skip the write + persist when the value is already correct —
-        // toggling the same value would re-render every subscriber and
-        // re-fire the pinned-session push for no reason.
-        const target = existing.find((t) => t.id === tabId);
-        if (!target || (target.overlayOpen ?? false) === open) return prev;
-        const tabs = existing.map((t) =>
-          t.id === tabId ? { ...t, overlayOpen: open } : t,
         );
         const next: PersistedShape = {
           ...prev,

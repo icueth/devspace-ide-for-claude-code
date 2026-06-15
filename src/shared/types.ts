@@ -420,11 +420,6 @@ export interface CliTab {
   // remounts and re-spawns its PTY (the previous PTY is killed by the
   // store action before the bump).
   reloadGen?: number;
-  // Phase 3 (Ruflo overlay): whether the Ruflo side drawer is open on this
-  // tab. Persisted per-tab so the user's drawer choice survives reloads.
-  // Default false — drawer is fully unmounted when closed (zero render
-  // cost).
-  overlayOpen?: boolean;
 }
 
 // Per-project shell terminal tab. The bottom-panel terminal supports many

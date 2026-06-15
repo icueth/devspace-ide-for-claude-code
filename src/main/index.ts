@@ -39,7 +39,6 @@ import { registerMcpIpc } from '@main/ipc/mcp';
 import { registerMemoryIpc } from '@main/ipc/memory';
 import { registerMempalaceIpc } from '@main/ipc/mempalace';
 import { registerPreviewIpc } from '@main/ipc/preview';
-import { registerRufloIpc } from '@main/ipc/ruflo';
 import { registerSetupIpc } from '@main/ipc/setup';
 import { registerSkillsIpc } from '@main/ipc/skills';
 import { registerPtyIpc } from '@main/ipc/pty';
@@ -289,7 +288,6 @@ app.whenReady().then(async () => {
   registerMempalaceIpc();
   registerSetupIpc();
   registerBgClaudeIpc();
-  registerRufloIpc();
 
   // Warm the memory index in the background so the dashboard doesn't
   // pay the walk cost on first open. ensureInit() is idempotent — every

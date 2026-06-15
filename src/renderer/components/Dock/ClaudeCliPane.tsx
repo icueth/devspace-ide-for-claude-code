@@ -1,10 +1,10 @@
-import { PanelRight, Target } from 'lucide-react';
+import { Target } from 'lucide-react';
 import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 
 import { useClaudeVersion } from '@renderer/hooks/useClaudeVersion';
 import { api } from '@renderer/lib/api';
 import { cn } from '@renderer/lib/utils';
-import { claudeCliSessionId, useCliTabsStore } from '@renderer/state/cliTabs';
+import { claudeCliSessionId } from '@renderer/state/cliTabs';
 import { useGitStore } from '@renderer/state/git';
 
 // /goal needs claude-code 2.1.154+. We gate the Goal QuickAction on this.
@@ -14,13 +14,6 @@ const MIN_CLAUDE_FOR_NEW_SLASH = { major: 2, minor: 1, patch: 154 };
 const RawTerminalView = lazy(() =>
   import('@renderer/components/Dock/RawTerminalView').then((m) => ({
     default: m.RawTerminalView,
-  })),
-);
-// Phase 3: Ruflo side-drawer overlay. Lazy so tabs that never open it pay
-// nothing for the bundle.
-const RufloOverlay = lazy(() =>
-  import('@renderer/components/Dock/RufloOverlay').then((m) => ({
-    default: m.RufloOverlay,
   })),
 );
 // Phase 4a: tool-approval banner. Lazy so a tab pays its bundle cost only
@@ -111,15 +104,6 @@ export function ClaudeCliPane({
     void api.pty.write(sessionId, `${cmd}\r`);
   };
 
-  // Phase 3: Ruflo overlay open state — persisted per tab via cliTabs.
-  // Default false on tabs that never had the field set.
-  const overlayOpen = useCliTabsStore(
-    (s) =>
-      s.tabsByProject[projectId]?.find((t) => t.id === tabId)?.overlayOpen ??
-      false,
-  );
-  const setTabOverlay = useCliTabsStore((s) => s.setTabOverlay);
-
   return (
     <div className="flex h-full flex-col">
       <div
@@ -167,21 +151,6 @@ export function ClaudeCliPane({
           )}
         </div>
         <div className="flex-1" />
-        <button
-          type="button"
-          onClick={() => setTabOverlay(projectId, tabId, !overlayOpen)}
-          title="Toggle Ruflo overlay"
-          aria-label="Toggle Ruflo overlay"
-          aria-pressed={overlayOpen}
-          className={cn(
-            'inline-flex h-[22px] w-[22px] items-center justify-center rounded-[6px] border transition',
-            overlayOpen
-              ? 'border-accent/50 bg-accent/15 text-accent'
-              : 'border-border-subtle bg-surface-3 text-text-secondary hover:border-border-hi hover:bg-surface-4 hover:text-text',
-          )}
-        >
-          <PanelRight size={11} />
-        </button>
       </div>
       <ContextChips shortCwd={shortCwd} branch={branch} ahead={ahead} dirty={dirty} />
       <div className="relative min-h-0 flex-1 overflow-hidden bg-surface">
@@ -200,18 +169,6 @@ export function ClaudeCliPane({
               />
             </Suspense>
           </>
-        )}
-        {/* Drawer overlays the body — absolute positioning anchored to this
-            relative container. Fully unmounted when closed so the lazy
-            chunk only loads after the first open. */}
-        {overlayOpen && (
-          <Suspense fallback={null}>
-            <RufloOverlay
-              open={overlayOpen}
-              projectPath={projectPath}
-              onClose={() => setTabOverlay(projectId, tabId, false)}
-            />
-          </Suspense>
         )}
       </div>
       <QuickActions onSend={sendSlash} disabled={status !== 'running'} />

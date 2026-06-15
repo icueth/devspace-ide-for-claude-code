@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 
 /**
  * Perf R1 (v0.30.7): SettingsPage no longer remounts the active tab subtree
- * on every click. All 10 tabs stay mounted; only the active one is visible.
+ * on every click. All 9 tabs stay mounted; only the active one is visible.
  *
  * SettingsPage.tsx exports a `TabContainer({ active, children })` helper that
  * encodes the visibility contract:
@@ -94,9 +94,8 @@ describe('SettingsPage · TabContainer contract (Perf R1)', () => {
     expect(visible.children).toBe(hidden.children);
   });
 
-  it('renders all 10 Settings tabs simultaneously with exactly one visible', () => {
-    // Models the actual SettingsPage layout: 10 wrappers, one active.
-    // Phase 2 added 'ruflo' for the ruvnet/ruflo plugin manager.
+  it('renders all 9 Settings tabs simultaneously with exactly one visible', () => {
+    // Models the actual SettingsPage layout: 9 wrappers, one active.
     const TABS: string[] = [
       'setup',
       'account',
@@ -105,7 +104,6 @@ describe('SettingsPage · TabContainer contract (Perf R1)', () => {
       'llm',
       'agents',
       'mcp',
-      'ruflo',
       'memory',
       'skills',
     ];
@@ -113,7 +111,7 @@ describe('SettingsPage · TabContainer contract (Perf R1)', () => {
     const wrappers = TABS.map((id) =>
       tabContainer(id === active, createElement('section', { 'data-tab-id': id })),
     );
-    expect(wrappers).toHaveLength(10);
+    expect(wrappers).toHaveLength(9);
     const visibleCount = wrappers.filter(
       (w) => propsOf(w)['data-tab-active'] === 'true',
     ).length;

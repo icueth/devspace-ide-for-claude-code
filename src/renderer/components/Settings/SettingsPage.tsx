@@ -32,7 +32,6 @@ import {
   Save,
   Server,
   Settings as SettingsIcon,
-  Waves,
   Wrench,
 } from 'lucide-react';
 import { createContext, useContext, useEffect, useRef, useState } from 'react';
@@ -43,7 +42,6 @@ import { AgentsSettings } from '@renderer/components/Settings/AgentsSettings';
 import { LlmSettings } from '@renderer/components/Settings/LlmSettings';
 import { McpSettings } from '@renderer/components/Settings/McpSettings';
 import { MemPalaceSettings } from '@renderer/components/Settings/MemPalaceSettings';
-import { RufloSettings } from '@renderer/components/Settings/RufloSettings';
 import { SetupSettings } from '@renderer/components/Settings/SetupSettings';
 import { SkillsSettings } from '@renderer/components/Settings/SkillsSettings';
 import { TmuxSection } from '@renderer/components/Settings/TmuxSection';
@@ -61,7 +59,6 @@ type Tab =
   | 'llm'
   | 'agents'
   | 'mcp'
-  | 'ruflo'
   | 'memory'
   | 'skills';
 
@@ -130,7 +127,7 @@ export function SettingsPage({ onClose, initialTab = 'account' }: SettingsPagePr
       </div>
 
       {/*
-        Perf R1 (v0.30.7): keep ALL 11 tab subtrees mounted and toggle visibility
+        Perf R1 (v0.30.7): keep ALL tab subtrees mounted and toggle visibility
         via the HTML `hidden` attribute instead of mounting/unmounting via
         `tab === ...` guards + a `key={tab}` boundary.
 
@@ -178,11 +175,6 @@ export function SettingsPage({ onClose, initialTab = 'account' }: SettingsPagePr
         <TabContainer active={tab === 'mcp'}>
           <RouteErrorBoundary label="Settings · mcp">
             <McpSettings />
-          </RouteErrorBoundary>
-        </TabContainer>
-        <TabContainer active={tab === 'ruflo'}>
-          <RouteErrorBoundary label="Settings · ruflo">
-            <RufloSettings />
           </RouteErrorBoundary>
         </TabContainer>
         <TabContainer active={tab === 'memory'}>
@@ -249,7 +241,6 @@ function TabSwitch({ tab, onChange }: { tab: Tab; onChange: (t: Tab) => void }) 
     { id: 'agents', label: 'Agents', icon: <Bot size={11} /> },
     { id: 'skills', label: 'Skills', icon: <Lightbulb size={11} /> },
     { id: 'mcp', label: 'MCP', icon: <Plug size={11} /> },
-    { id: 'ruflo', label: 'Ruflo', icon: <Waves size={11} /> },
     { id: 'memory', label: 'Memory', icon: <Brain size={11} /> },
     { id: 'files', label: 'Files', icon: <FileText size={11} /> },
     { id: 'tmux', label: 'tmux', icon: <Server size={11} /> },

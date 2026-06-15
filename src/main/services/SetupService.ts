@@ -283,22 +283,6 @@ async function detectRtkHook(rtkState: SetupCheckState): Promise<SetupCheck> {
   return { ...base, state: 'missing' };
 }
 
-async function detectRuflo(): Promise<SetupCheck> {
-  const base: Omit<SetupCheck, 'state'> = {
-    id: 'ruflo',
-    label: 'Ruflo',
-    description:
-      'Multi-agent orchestration for Claude — 100+ agents, swarm coordination, RAG memory, GOAP goal planner. Run `npx ruflo init` in any project to wire it up.',
-    installable: true,
-  };
-  const bin = await whichBin('ruflo');
-  if (!bin) return { ...base, state: 'missing' };
-  // ruflo --version typically prints "ruflo X.Y.Z" on the first line.
-  const v = await runCapture(bin, ['--version']);
-  const version = v.stdout.split('\n')[0]?.trim() || undefined;
-  return { ...base, state: 'ok', path: bin, version };
-}
-
 async function detectMempalace(): Promise<SetupCheck> {
   const base: Omit<SetupCheck, 'state'> = {
     id: 'mempalace',
@@ -351,7 +335,6 @@ export async function getStatus(): Promise<SetupStatus> {
   );
   const rtkHook = await detectRtkHook(rtk.state);
   const mempalace = await detectMempalace();
-  const ruflo = await detectRuflo();
 
   const checks: SetupCheck[] = [
     brew,
@@ -361,7 +344,6 @@ export async function getStatus(): Promise<SetupStatus> {
     jq,
     rtkHook,
     mempalace,
-    ruflo,
   ];
 
   // "complete" treats unsupported platforms as a pass for tools that simply
@@ -458,27 +440,6 @@ async function installRtkHook(): Promise<void> {
   await writeSettings(next);
 }
 
-async function installRuflo(): Promise<void> {
-  const npmBin = await whichBin('npm');
-  if (!npmBin) {
-    throw new Error(
-      'npm is required to install Ruflo (comes with Node.js — install Node first).',
-    );
-  }
-  step('ruflo', 'install', 'npm install -g ruflo@latest…');
-  const { code } = await runStream('ruflo', npmBin, [
-    'install',
-    '-g',
-    'ruflo@latest',
-  ]);
-  if (code !== 0) throw new Error(`npm install -g ruflo exited ${code}`);
-  step(
-    'ruflo',
-    'verify',
-    'Ruflo installed. Run `npx ruflo init` in any project to wire up agents.',
-  );
-}
-
 async function uninstallRtkHook(): Promise<void> {
   const dest = getInstalledRtkHookFile();
   step('rtkHook', 'configure', 'Removing rtk hook from settings.json…');
@@ -549,9 +510,6 @@ export async function installTool(toolId: SetupToolId): Promise<SetupInstallResu
         throw new Error(
           'Install MemPalace from the Memory tab (it has its own dedicated wizard).',
         );
-      case 'ruflo':
-        await installRuflo();
-        break;
     }
     const status = await getStatus();
     emit({ toolId, stage: 'done', message: 'Done.', done: true });

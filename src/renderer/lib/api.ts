@@ -78,17 +78,6 @@ import type {
   MemPalaceUninstallInput,
 } from '@shared/mempalace';
 import type {
-  RufloActionResult,
-  RufloDashAgentsResult,
-  RufloDashMemoryResult,
-  RufloDashSwarmsResult,
-  RufloInitProgressEvent,
-  RufloInitResult,
-  RufloMarketplaceStatus,
-  RufloPlugin,
-  RufloProjectStatus,
-} from '@shared/ruflo';
-import type {
   SetupClaudeRunResult,
   SetupInstallResult,
   SetupProgressEvent,
@@ -564,36 +553,6 @@ export interface DevspaceApi {
     ) => Promise<{ text: string; bytes: number; status: BackgroundRunStatus }>;
     kill: (runId: string) => Promise<boolean>;
   };
-  // Per-project Ruflo init. Phase 0 (global install) is exposed via
-  // `setup.*`; this namespace covers per-project status + one-click
-  // `npx ruflo@latest init`.
-  ruflo: {
-    getProjectStatus: (projectPath: string) => Promise<RufloProjectStatus>;
-    initProject: (projectPath: string) => Promise<RufloInitResult>;
-    onInitProgress: (cb: (ev: RufloInitProgressEvent) => void) => () => void;
-    // Phase 2: plugin management (Settings → Ruflo tab). Wraps `claude
-    // plugin {list,install,uninstall,enable,disable,marketplace}`.
-    plugins: {
-      list: () => Promise<RufloPlugin[]>;
-      install: (name: string) => Promise<RufloActionResult>;
-      uninstall: (id: string) => Promise<RufloActionResult>;
-      toggle: (id: string, enable: boolean) => Promise<RufloActionResult>;
-      marketplaceStatus: () => Promise<RufloMarketplaceStatus>;
-      marketplaceAdd: () => Promise<RufloActionResult>;
-    };
-    // Phase 3 — Terminal-mode overlay drawer. Read-only `ruflo …` wrappers
-    // with a 5s server-side timeout.
-    dashboard: {
-      isInstalled: () => Promise<boolean>;
-      listAgents: () => Promise<RufloDashAgentsResult>;
-      listSwarms: (projectPath: string) => Promise<RufloDashSwarmsResult>;
-      searchMemory: (
-        projectPath: string,
-        query: string,
-        limit?: number,
-      ) => Promise<RufloDashMemoryResult>;
-    };
-  };
   forge: {
     listDrafts: (projectPath: string) => Promise<ForgeDraft[]>;
     getDraft: (draftId: string) => Promise<ForgeDraft | null>;
@@ -956,38 +915,6 @@ function makeStubApi(): DevspaceApi {
       list: () => Promise.resolve([]),
       readLog: () => Promise.resolve({ text: '', bytes: 0, status: 'pending' }),
       kill: () => Promise.resolve(false),
-    },
-    ruflo: {
-      getProjectStatus: async () => ({
-        projectPath: '',
-        initialized: false,
-      }),
-      initProject: async () => ({
-        ok: false,
-        status: { projectPath: '', initialized: false },
-        error: 'no-bridge',
-      }),
-      onInitProgress: () => () => undefined,
-      plugins: {
-        list: () => Promise.resolve([]),
-        install: () => Promise.resolve({ ok: false, error: 'no-bridge' }),
-        uninstall: () => Promise.resolve({ ok: false, error: 'no-bridge' }),
-        toggle: () => Promise.resolve({ ok: false, error: 'no-bridge' }),
-        // Fail open in the stub: matches the main-process fallback so the
-        // UI doesn't surface a fake "Add marketplace" button before the
-        // preload bridge wires up.
-        marketplaceStatus: () => Promise.resolve({ added: true }),
-        marketplaceAdd: () => Promise.resolve({ ok: false, error: 'no-bridge' }),
-      },
-      dashboard: {
-        isInstalled: () => Promise.resolve(false),
-        listAgents: () =>
-          Promise.resolve({ ok: false, agents: [], error: 'no-bridge' }),
-        listSwarms: () =>
-          Promise.resolve({ ok: false, sessions: [], error: 'no-bridge' }),
-        searchMemory: () =>
-          Promise.resolve({ ok: false, results: [], error: 'no-bridge' }),
-      },
     },
     forge: {
       listDrafts: () => Promise.resolve([]),

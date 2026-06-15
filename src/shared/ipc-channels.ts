@@ -306,33 +306,6 @@ export const IPC = {
   BG_CLAUDE_LIST: 'bg-claude:list',
   BG_CLAUDE_READ_LOG: 'bg-claude:read-log',
   BG_CLAUDE_KILL: 'bg-claude:kill',
-
-  // Ruflo per-project init (Settings → Setup tab). Phase 0 (global install)
-  // rides on SETUP_* — these channels cover per-project detection of
-  // `.claude-flow/` and one-click `npx ruflo@latest init`.
-  RUFLO_PROJECT_STATUS: 'ruflo:project-status',
-  RUFLO_PROJECT_INIT: 'ruflo:project-init',
-  RUFLO_PROJECT_INIT_PROGRESS: 'ruflo:project-init-progress',
-
-  // Phase 2: Ruflo plugin management (Settings → Ruflo tab). Wraps
-  // `claude plugin list|install|uninstall|enable|disable` and marketplace
-  // registration so users can manage the ruflo plugin ecosystem from a
-  // dedicated tab without dropping to a shell.
-  RUFLO_PLUGINS_LIST: 'ruflo:plugins-list',
-  RUFLO_PLUGINS_INSTALL: 'ruflo:plugins-install',
-  RUFLO_PLUGINS_UNINSTALL: 'ruflo:plugins-uninstall',
-  RUFLO_PLUGINS_TOGGLE: 'ruflo:plugins-toggle',
-  RUFLO_MARKETPLACE_ADD: 'ruflo:marketplace-add',
-  RUFLO_MARKETPLACE_STATUS: 'ruflo:marketplace-status',
-
-  // Phase 3: Terminal-mode side-drawer overlay (RufloOverlay). Read-only
-  // inspectors that shell out to `ruflo {agent list, hive-mind sessions,
-  // memory search}` with a 5s timeout. Each call is on-demand from the
-  // visible drawer — no subscription channel, no global state.
-  RUFLO_DASH_INSTALLED: 'ruflo:dash-installed',
-  RUFLO_DASH_AGENTS: 'ruflo:dash-agents',
-  RUFLO_DASH_SWARMS: 'ruflo:dash-swarms',
-  RUFLO_DASH_MEMORY_SEARCH: 'ruflo:dash-memory-search',
 } as const;
 
 export type IpcChannel = (typeof IPC)[keyof typeof IPC];
