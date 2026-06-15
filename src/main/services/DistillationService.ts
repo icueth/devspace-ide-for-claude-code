@@ -13,24 +13,32 @@
 // Design split (so the heavy MemoryService stays untouched):
 //   - gatherActivityDigest / buildDistillPrompt / parseLearnings are PURE-ish
 //     and unit-tested (no LLM, no spawn).
-//   - distill() is the orchestrator: gather → BackgroundClaudeRunner → poll →
-//     read log → parse → semantic de-dupe → createEntry (or route low-confidence
+//   - distill() is the orchestrator: gather → run `claude -p` (print mode) →
+//     parse stdout → semantic de-dupe → createEntry (or route low-confidence
 //     to the inbox). It is non-blocking and NEVER throws to the caller; any
 //     failure (no claude binary, run failure, unparseable output) is a clean
 //     no-op with a status string.
+//
+// IMPORTANT — why `claude -p` and not BackgroundClaudeRunner: distill needs the
+// model's OUTPUT back. BackgroundClaudeRunner spawns `claude --bg --exec` which
+// backgrounds the work and returns a stub immediately (the log only echoes the
+// run id + prompt, never the response), so the JSON learnings never appear.
+// `claude -p` (print / non-interactive) executes the prompt and prints the
+// response to stdout synchronously, using the user's normal Claude Code login
+// (NOT the Agent SDK credit pool).
 //
 // The *quality* of Claude's distillation is a judgment call and is NOT
 // unit-testable. Tests cover the plumbing (digest bounds, prompt grounding,
 // parse tolerance + schema validation, de-dupe decision). Quality is validated
 // by a manual run + the user's ability to prune.
 
+import { spawn } from 'node:child_process';
+
+import { resolveClaudeBinary } from '@main/services/ClaudeCliLauncher';
+import { enrichedPath } from '@main/utils/setupPaths';
 import { createLogger } from '@shared/logger';
 import type { MemoryType } from '@shared/types';
 
-import {
-  readBackgroundRunLog,
-  startBackgroundRun,
-} from './BackgroundClaudeRunner';
 import * as Memory from './MemoryService';
 
 const logger = createLogger('Distillation');
@@ -65,10 +73,8 @@ const DEDUPE_SCORE_THRESHOLD = 0.6;
 export const LEARNINGS_START = '<<<LEARNINGS>>>';
 export const LEARNINGS_END = '<<<END>>>';
 
-// Poll cadence + ceiling for waiting on the background run to finish. The run
-// is detached; we poll its status via the runner's log reader. The ceiling is a
-// safety net so a hung claude can't keep distill() pending forever.
-const POLL_INTERVAL_MS = 1_000;
+// Hard ceiling for the synchronous `claude -p` run. A safety net so a hung
+// claude can't keep distill() pending forever; on timeout we kill the child.
 const POLL_TIMEOUT_MS = 5 * 60_000;
 
 // ─── learning schema (Claude's output contract) ─────────────────────────────
@@ -442,44 +448,100 @@ function memoryTypeForKind(kind: LearningKind): MemoryType {
   }
 }
 
-// Poll the background run to completion via its log-reader status. Resolves with
-// the final log text. Bounded by POLL_TIMEOUT_MS so a hung run can't pend
-// forever. The injected `sleep`/`now` make this testable without real timers.
-async function waitForRun(
-  runId: string,
-  deps: {
-    readLog: typeof readBackgroundRunLog;
-    sleep: (ms: number) => Promise<void>;
-    now: () => number;
-  },
-): Promise<{ status: 'done' | 'failed' | 'timeout'; text: string }> {
-  const started = deps.now();
-  // eslint-disable-next-line no-constant-condition
-  while (true) {
-    let snapshot: Awaited<ReturnType<typeof readBackgroundRunLog>>;
-    try {
-      snapshot = await deps.readLog(runId, 0);
-    } catch (err) {
-      logger.warn(`distill read log failed: ${(err as Error).message}`);
-      return { status: 'failed', text: '' };
-    }
-    if (snapshot.status === 'done') return { status: 'done', text: snapshot.text };
-    if (snapshot.status === 'failed') {
-      return { status: 'failed', text: snapshot.text };
-    }
-    if (deps.now() - started > POLL_TIMEOUT_MS) {
-      return { status: 'timeout', text: snapshot.text };
-    }
-    await deps.sleep(POLL_INTERVAL_MS);
-  }
+// Result of running `claude -p`: the captured stdout (`text`) plus an ok flag.
+// NEVER throws — every failure mode (binary absent, non-zero exit, timeout,
+// spawn error) resolves to `{ ok:false, text:'', error }` so distill() can map
+// it to a clean status without a try/catch around the call site.
+export interface RunClaudeResult {
+  ok: boolean;
+  text: string;
+  error?: string;
 }
 
-// Injectable dependency seam — production wires the real runner + MemoryService;
-// tests inject mocks so no real claude is ever spawned.
+/**
+ * Run a prompt through `claude -p` (print / non-interactive mode) and return
+ * its stdout. The prompt is written to the child's stdin (so arbitrary length /
+ * special chars are safe — no shell quoting), then stdin is closed. Captures
+ * stdout + stderr; resolves `{ ok: code===0, text: stdout }` on exit, or an
+ * error result on non-zero exit / timeout / missing binary. Bounded by
+ * POLL_TIMEOUT_MS; on timeout the child is killed.
+ *
+ * Uses the user's normal Claude Code login (same auth as interactive `claude`),
+ * NOT the Agent SDK credit pool.
+ */
+export async function runClaudePrint(prompt: string): Promise<RunClaudeResult> {
+  const claudeBin = await resolveClaudeBinary();
+  if (!claudeBin) {
+    return { ok: false, text: '', error: 'claude not found' };
+  }
+
+  return new Promise<RunClaudeResult>((resolve) => {
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const finish = (r: RunClaudeResult): void => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      resolve(r);
+    };
+
+    let child: ReturnType<typeof spawn>;
+    try {
+      child = spawn(claudeBin, ['-p'], {
+        env: { ...process.env, PATH: enrichedPath() },
+      });
+    } catch (err) {
+      finish({ ok: false, text: '', error: (err as Error).message });
+      return;
+    }
+
+    timer = setTimeout(() => {
+      try {
+        child.kill('SIGKILL');
+      } catch {
+        /* already gone */
+      }
+      finish({ ok: false, text: '', error: 'timed out' });
+    }, POLL_TIMEOUT_MS);
+
+    let stdout = '';
+    let stderr = '';
+    child.stdout?.on('data', (d) => {
+      stdout += d.toString();
+    });
+    child.stderr?.on('data', (d) => {
+      stderr += d.toString();
+    });
+
+    child.on('error', (err) => {
+      finish({ ok: false, text: '', error: err.message });
+    });
+    child.on('close', (code) => {
+      finish({
+        ok: code === 0,
+        text: stdout,
+        error: code !== 0 ? stderr || `exit ${code}` : undefined,
+      });
+    });
+
+    // Feed the prompt via stdin then close it.
+    try {
+      child.stdin?.write(prompt);
+      child.stdin?.end();
+    } catch (err) {
+      logger.warn(`distill stdin write failed: ${(err as Error).message}`);
+      // Don't settle here — let the child's own exit/error drive the result.
+    }
+  });
+}
+
+// Injectable dependency seam — production wires the real `claude -p` runner +
+// MemoryService; tests inject mocks so no real claude is ever spawned.
 export interface DistillDeps {
   gather: typeof gatherActivityDigest;
-  startRun: typeof startBackgroundRun;
-  readLog: typeof readBackgroundRunLog;
+  // Run the distill prompt through real Claude and return its stdout. The
+  // default wires `runClaudePrint`; tests inject a stub returning {ok,text}.
+  runClaude: (prompt: string) => Promise<RunClaudeResult>;
   search: typeof Memory.search;
   createEntry: typeof Memory.createEntry;
   // Routes a low-confidence learning to the inbox for human review.
@@ -487,12 +549,6 @@ export interface DistillDeps {
     projectPath: string;
     learning: Learning;
   }) => Promise<void>;
-  sleep: (ms: number) => Promise<void>;
-  now: () => number;
-}
-
-function realSleep(ms: number): Promise<void> {
-  return new Promise((r) => setTimeout(r, ms));
 }
 
 // Default inbox router: reuse the chat-turn capture path so low-confidence
@@ -524,21 +580,17 @@ async function defaultAddToInbox(input: {
 function defaultDeps(): DistillDeps {
   return {
     gather: gatherActivityDigest,
-    startRun: startBackgroundRun,
-    readLog: readBackgroundRunLog,
+    runClaude: (p) => runClaudePrint(p),
     search: Memory.search,
     createEntry: Memory.createEntry,
     addToInbox: defaultAddToInbox,
-    sleep: realSleep,
-    now: Date.now,
   };
 }
 
 /**
  * Orchestrate a distillation run for one project:
- *   gather → BackgroundClaudeRunner → poll → read log → parseLearnings →
- *   semantic de-dupe → createEntry each (auto-embeds) OR route low-confidence
- *   to the inbox.
+ *   gather → run `claude -p` → parseLearnings(stdout) → semantic de-dupe →
+ *   createEntry each (auto-embeds) OR route low-confidence to the inbox.
  *
  * Non-blocking and NEVER throws to the caller — every failure path returns a
  * DistillSummary with a status, so the IPC handler / UI can show a clear note
@@ -567,46 +619,17 @@ export async function distill(
 
     const prompt = buildDistillPrompt(digest);
 
-    let runId: string;
-    try {
-      const meta = await deps.startRun(prompt);
-      runId = meta.runId;
-      // A spawn that immediately failed (e.g. claude not on PATH) flips the
-      // run to 'failed' synchronously in the runner.
-      if (meta.status === 'failed') {
-        return {
-          status: 'no-claude',
-          created: 0,
-          inboxed: 0,
-          skippedDup: 0,
-          message: 'Could not start a Claude background run (is claude installed?).',
-        };
-      }
-    } catch (err) {
+    // Run the prompt through real Claude (`claude -p`) and get stdout back.
+    // runClaude NEVER throws — a missing binary / non-zero exit / timeout all
+    // resolve to { ok:false, error }, which we map to 'no-claude'.
+    const run = await deps.runClaude(prompt);
+    if (!run.ok) {
       return {
         status: 'no-claude',
         created: 0,
         inboxed: 0,
         skippedDup: 0,
-        message: `Could not start a Claude run: ${(err as Error).message}`,
-      };
-    }
-
-    const run = await waitForRun(runId, {
-      readLog: deps.readLog,
-      sleep: deps.sleep,
-      now: deps.now,
-    });
-    if (run.status !== 'done') {
-      return {
-        status: 'run-failed',
-        created: 0,
-        inboxed: 0,
-        skippedDup: 0,
-        message:
-          run.status === 'timeout'
-            ? 'The Claude run did not finish in time.'
-            : 'The Claude run failed.',
+        message: `Could not run Claude: ${run.error ?? 'unknown error'}`,
       };
     }
 

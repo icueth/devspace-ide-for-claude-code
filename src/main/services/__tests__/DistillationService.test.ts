@@ -249,9 +249,9 @@ describe('DistillationService.isDuplicateLearning', () => {
 // ─── distill orchestrator (deps injected — no real claude) ───────────────────
 
 describe('DistillationService.distill (orchestrator, mocked LLM)', () => {
-  // Build a deps object that fakes the runner producing a given log, and wires
-  // the real-ish MemoryService search/createEntry. sleep/now are stubbed so no
-  // wall-clock waiting occurs.
+  // Build a deps object whose `runClaude` returns a canned stdout, and wires
+  // the real-ish MemoryService search/createEntry. No real claude is spawned —
+  // `runClaude` is a stub returning { ok, text }.
   function makeDeps(overrides: Partial<DistillDeps> = {}): Partial<DistillDeps> {
     return {
       // Force a non-empty digest so distill proceeds to the run.
@@ -261,34 +261,26 @@ describe('DistillationService.distill (orchestrator, mocked LLM)', () => {
         items: [{ source: 'diary' as const, label: 'd', text: 'activity', ts: 1 }],
         truncated: false,
       })),
-      startRun: vi.fn(async () => ({
-        runId: 'run-1',
-        command: 'claude',
-        status: 'running' as const,
-        startedAt: Date.now(),
-        exitCode: null,
-        logPath: '/tmp/x.log',
-        logBytes: 0,
-      })),
-      sleep: vi.fn(async () => undefined),
-      now: () => Date.now(),
+      // Default: a successful run with no learnings. Individual tests override.
+      runClaude: vi.fn(async () => ({ ok: true, text: '' })),
       ...overrides,
     };
   }
 
-  function logWith(learnings: Array<Partial<Learning>>): string {
-    return `${LEARNINGS_START}\n${JSON.stringify(learnings)}\n${LEARNINGS_END}\n# exited 0\n`;
+  // stdout shaped like `claude -p` would print: the JSON learnings between the
+  // sentinel markers (parseLearnings tolerates surrounding noise).
+  function stdoutWith(learnings: Array<Partial<Learning>>): string {
+    return `${LEARNINGS_START}\n${JSON.stringify(learnings)}\n${LEARNINGS_END}\n`;
   }
 
   it('creates high-confidence learnings as memory entries (auto-commit)', async () => {
     const deps = makeDeps({
-      readLog: vi.fn(async () => ({
-        text: logWith([
+      runClaude: vi.fn(async () => ({
+        ok: true,
+        text: stdoutWith([
           { kind: 'lesson', title: 'Await embeds in tests', body: 'They race otherwise.', confidence: 0.9 },
           { kind: 'preference', title: 'Use pnpm', body: 'pnpm monorepo.', confidence: 0.85 },
         ]),
-        bytes: 100,
-        status: 'done' as const,
       })),
       // Real services for the persistence side.
       search,
@@ -321,12 +313,11 @@ describe('DistillationService.distill (orchestrator, mocked LLM)', () => {
 
   it('routes low-confidence learnings to the inbox, not memory', async () => {
     const deps = makeDeps({
-      readLog: vi.fn(async () => ({
-        text: logWith([
+      runClaude: vi.fn(async () => ({
+        ok: true,
+        text: stdoutWith([
           { kind: 'lesson', title: 'Shaky guess about caching', body: 'Maybe cache here.', confidence: 0.3 },
         ]),
-        bytes: 100,
-        status: 'done' as const,
       })),
       search,
       createEntry,
@@ -352,12 +343,11 @@ describe('DistillationService.distill (orchestrator, mocked LLM)', () => {
     });
 
     const deps = makeDeps({
-      readLog: vi.fn(async () => ({
-        text: logWith([
+      runClaude: vi.fn(async () => ({
+        ok: true,
+        text: stdoutWith([
           { kind: 'lesson', title: 'Await embeds in tests', body: 'Dup attempt.', confidence: 0.9 },
         ]),
-        bytes: 100,
-        status: 'done' as const,
       })),
       // search returns the seeded entry as a hit; isDuplicateLearning sees the
       // verbatim description match and skips.
@@ -371,7 +361,8 @@ describe('DistillationService.distill (orchestrator, mocked LLM)', () => {
     expect(summary.skippedDup).toBe(1);
   });
 
-  it('no-ops cleanly when there is no activity', async () => {
+  it('no-ops cleanly when there is no activity (never calls runClaude)', async () => {
+    const runClaude = vi.fn(async () => ({ ok: true, text: '' }));
     const deps = makeDeps({
       gather: vi.fn(async () => ({
         projectPath: projectAbs,
@@ -379,42 +370,29 @@ describe('DistillationService.distill (orchestrator, mocked LLM)', () => {
         items: [],
         truncated: false,
       })),
+      runClaude,
     });
     const summary = await distill(projectAbs, deps);
     expect(summary.status).toBe('no-activity');
     expect(summary.created).toBe(0);
+    // The no-activity short-circuit must happen BEFORE spending a Claude run.
+    expect(runClaude).not.toHaveBeenCalled();
   });
 
-  it('reports no-claude when the background run fails to start', async () => {
+  it('reports no-claude when the Claude run is not ok (missing binary / failure)', async () => {
     const deps = makeDeps({
-      startRun: vi.fn(async () => ({
-        runId: 'run-x',
-        command: 'claude',
-        status: 'failed' as const,
-        startedAt: Date.now(),
-        exitCode: null,
-        logPath: '/tmp/x.log',
-        logBytes: 0,
-      })),
+      runClaude: vi.fn(async () => ({ ok: false, text: '', error: 'claude not found' })),
     });
     const summary = await distill(projectAbs, deps);
     expect(summary.status).toBe('no-claude');
-  });
-
-  it('reports run-failed when the run ends in failure', async () => {
-    const deps = makeDeps({
-      readLog: vi.fn(async () => ({ text: '', bytes: 0, status: 'failed' as const })),
-    });
-    const summary = await distill(projectAbs, deps);
-    expect(summary.status).toBe('run-failed');
+    expect(summary.message).toContain('claude not found');
   });
 
   it('reports unparseable when Claude emits no usable learnings', async () => {
     const deps = makeDeps({
-      readLog: vi.fn(async () => ({
-        text: 'I could not find any durable learnings.\n# exited 0\n',
-        bytes: 50,
-        status: 'done' as const,
+      runClaude: vi.fn(async () => ({
+        ok: true,
+        text: 'I could not find any durable learnings.\n',
       })),
     });
     const summary = await distill(projectAbs, deps);
