@@ -37,6 +37,14 @@ memory. ruflo's headline "learning" is a stub — so "porting" it means **buildi
 
 Decided scope: all three (user: "Rip-out + Semantic + Native learning"). Sequence: 1 → 2 → 3.
 
+**Sub-project 2 data decision (locked 2026-06-15):** START CLEAN — the native semantic index
+covers only DevSpace's own curated memory (`~/.devspace/projects/<sha1>/memory/*.md` + global)
+and new native capture. Do NOT import the ~1500 raw ruflo log entries (commands/feedback/session)
+from `~/.devspace/ruflo-archive/` — different nature, would pollute curated memory. There is NO
+runtime dependency on `ruflo-archive/`; it is a deletable backup. The vector index + model use
+DevSpace-native names/locations (e.g. `~/.devspace/projects/<sha1>/memory/.embeddings/`,
+`resources/embeddings/`) — no `.swarm`/`ruvector`/ruflo naming.
+
 ---
 
 # Sub-project 1: Rip-out ruflo
