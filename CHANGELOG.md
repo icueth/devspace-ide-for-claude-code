@@ -5,6 +5,30 @@ All notable changes to DevSpace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.38.0-beta.15] — 2026-06-15 (prod branch, local beta — not on GH)
+
+**Two workflow-breaking fixes: file-tree clicks no longer hijack the dock, and
+idle CLI tabs stop disappearing on their own.**
+
+### Fixed
+- **Clicking a file in the sidebar file tree no longer spawns or switches a
+  Claude-CLI dock chip.** The FileTree is always rooted at the active project,
+  so opening a file under a *nested* detected sub-project let longest-prefix
+  attribution yank the active project into the child and dock a CLI chip the
+  user never asked for. The open now carries a gesture-origin tag
+  (`markTreeOpen`) so `followTab` records the MRU but never switches/docks for
+  an in-tree browse. Genuine cross-project gestures (editor-tab click, Quick
+  Open, Spotlight) are untagged and still follow normally.
+- **Idle CLI tabs no longer auto-close by default.** The dual-tier idle reaper
+  killed *unpinned* tabs — any CLI session not currently visible in one of the
+  ≤3 dock columns — after just **10 minutes** of no PTY output. A `claude`
+  session left idle while you stepped away got torn down (`tmux kill-session`)
+  and couldn't be resumed when you came back. Auto-close is now **opt-in**:
+  `autoCloseIdleCliTabs` defaults to `false` and the reaper starts disabled
+  until the loaded config enables it. Users who want the RAM back (~400 MB per
+  idle tab) can re-enable it in Settings → tmux; the 120 m / 10 m thresholds
+  are retained for when they do.
+
 ## [0.38.0-beta.14] — 2026-06-10 (prod branch, local beta — not on GH)
 
 **Sidebar polish.** Two follow-ups to the beta.13 sync work.
