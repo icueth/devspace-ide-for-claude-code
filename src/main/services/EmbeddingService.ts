@@ -124,6 +124,11 @@ async function loadPipeline(): Promise<FeatureExtractionPipeline> {
   if (haveVendored) {
     // Vendored model present → run fully offline (deterministic, no network).
     env.allowRemoteModels = false;
+    // Force loads from localModelPath (a REAL path under Resources/) and skip
+    // transformers' FS cache: in a packaged build that cache lives inside
+    // app.asar, which onnxruntime's native loader cannot read (ENOTDIR / errno
+    // 20). Disabling it makes resolution use the unpacked vendored model.
+    env.useFSCache = false;
     logger.info(`loading vendored model from ${root} (offline)`);
   } else if (isPackaged()) {
     // Packaged build with no vendored model is a packaging bug. We still try

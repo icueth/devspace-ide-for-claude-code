@@ -151,6 +151,7 @@
       "!**/node_modules/node-pty/prebuilds/darwin-x64/**",
       "!**/node_modules/node-pty/bin/darwin-x64-*/**",
       "!**/node_modules/**/*.test.js",
+      "!**/node_modules/**/@huggingface/transformers/.cache/**",
       "!**/*.d.ts",
       "!**/*.md"
     ],

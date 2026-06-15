@@ -7,8 +7,13 @@ import type { Plugin } from 'vite';
 const pkg = JSON.parse(readFileSync(resolve(__dirname, 'package.json'), 'utf-8'));
 const prodDeps = Object.keys(pkg.dependencies ?? {});
 
-// node-pty is a native addon; must stay external at runtime.
-const bundledDeps = prodDeps.filter((d) => d !== 'node-pty');
+// Native-addon-bearing deps must stay EXTERNAL so their (often dynamic) `.node`
+// requires resolve from node_modules (asarUnpack'd) at runtime instead of being
+// bundled by Rollup — which breaks dynamic requires in the packaged app.
+// node-pty is a direct native addon; @huggingface/transformers pulls
+// onnxruntime-node (+sharp), whose native bindings are dynamically required.
+const KEEP_EXTERNAL = new Set(['node-pty', '@huggingface/transformers']);
+const bundledDeps = prodDeps.filter((d) => !KEEP_EXTERNAL.has(d));
 
 // Stub native .node addon imports so Rollup doesn't choke on them.
 function nativeModuleStub(): Plugin {
