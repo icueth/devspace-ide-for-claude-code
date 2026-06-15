@@ -81,7 +81,7 @@ export function TmuxSettings() {
     };
   }, []);
 
-  const autoCloseEnabled = tmuxCfg?.autoCloseIdleCliTabs ?? true;
+  const autoCloseEnabled = tmuxCfg?.autoCloseIdleCliTabs ?? false;
   const idleTimeoutMinutes = tmuxCfg?.idleCliTabTimeoutMinutes ?? 120;
   const unpinnedTimeoutMinutes = tmuxCfg?.unpinnedCliTabTimeoutMinutes ?? 10;
 

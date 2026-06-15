@@ -8,6 +8,7 @@ import {
   deriveProjectIdFromTab,
   isDefensiveAutoPinTransition,
   isUndockRetargetTransition,
+  markTreeOpen,
   pickEditorTabForProject,
   useWorkspaceStore,
 } from '../workspace';
@@ -481,6 +482,72 @@ describe('workspace store — sidebar/tab sync actions', () => {
   it('followTab is a no-op for unattributable tabs', () => {
     useWorkspaceStore.getState().followTab('/Users/x/Other/file.ts');
     expect(useWorkspaceStore.getState().activeProjectId).toBe('a');
+  });
+
+  // Nested/monorepo layout: the workspace root is a project AND a sub-folder is
+  // its own detected project. The FileTree is always rooted at the active
+  // project, so clicking a file under the nested sub-project must NOT yank the
+  // active project into the child and dock a CLI chip for it. The distinction
+  // is gesture origin (markTreeOpen), not path topology — see lastTreeOpenPath.
+  const parent = {
+    id: 'p',
+    name: 'mono',
+    path: '/Users/x/Code/mono',
+    workspaceId: 'ws',
+    vcs: 'git' as const,
+    detectedRuntime: [],
+  };
+  const child = {
+    id: 'c',
+    name: 'child',
+    path: '/Users/x/Code/mono/packages/child',
+    workspaceId: 'ws',
+    vcs: 'git' as const,
+    detectedRuntime: [],
+  };
+  const childFile = '/Users/x/Code/mono/packages/child/index.ts';
+
+  it('followTab from a FileTree click never switches into a nested sub-project', () => {
+    useWorkspaceStore.setState({
+      projects: [parent, child],
+      activeProjectId: 'p',
+      openedProjectIds: ['p'],
+    });
+    // FileTree click on a file that longest-prefix-attributes to the nested
+    // child: tagged via markTreeOpen → stays on the parent, no dock.
+    markTreeOpen(childFile);
+    useWorkspaceStore.getState().followTab(childFile);
+    expect(useWorkspaceStore.getState().activeProjectId).toBe('p');
+  });
+
+  it('followTab from a non-tree gesture still follows into a nested sub-project', () => {
+    useWorkspaceStore.setState({
+      projects: [parent, child],
+      activeProjectId: 'p',
+      openedProjectIds: ['p'],
+    });
+    // No markTreeOpen → a genuine editor-tab click / Quick Open on the same
+    // child file still moves the sidebar+dock to the child (shipped follow).
+    useWorkspaceStore.getState().followTab(childFile);
+    expect(useWorkspaceStore.getState().activeProjectId).toBe('c');
+  });
+
+  it('a real project switch clears the in-tree browse context', () => {
+    useWorkspaceStore.setState({
+      projects: [parent, child],
+      activeProjectId: 'p',
+      openedProjectIds: ['p'],
+    });
+    // Browse a child file from the tree (suppressed, stays on parent)…
+    markTreeOpen(childFile);
+    useWorkspaceStore.getState().followTab(childFile);
+    expect(useWorkspaceStore.getState().activeProjectId).toBe('p');
+    // …then a non-tree gesture on a parent file clears the browse context…
+    useWorkspaceStore.getState().followTab('/Users/x/Code/mono/readme.md');
+    expect(useWorkspaceStore.getState().activeProjectId).toBe('p');
+    // …so a subsequent genuine tab click on the child file now follows.
+    useWorkspaceStore.getState().followTab(childFile);
+    expect(useWorkspaceStore.getState().activeProjectId).toBe('c');
   });
 
   it('activateProject falls back to the last-opened owned tab when MRU is gone', () => {

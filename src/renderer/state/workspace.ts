@@ -145,6 +145,26 @@ const mruTabByProject = new Map<string, string>();
 let activationSeq = 0;
 const lastActivated = new Map<string, number>();
 
+// v0.38.x — the path most recently opened by a FileTree click. The FileTree is
+// always rooted at the ACTIVE project (App renders a single
+// <FileTree rootPath={activeProject.path}>), so every file clicked there lives
+// inside the active project's own subtree. followTab must therefore NOT
+// switch/dock the project for such a click — even when longest-prefix
+// attribution maps the file to a NESTED detected sub-project — because that
+// silently spawns a CLI dock chip the user never asked for (the reported bug:
+// "clicking a file/folder in a project opens a CLI tab"). This is a
+// GESTURE-ORIGIN signal, not a path-topology guess: editor-tab clicks / Quick
+// Open / Spotlight don't tag the path, so genuine cross-project navigation
+// still follows. Cleared on any real project switch (setActiveProject) so
+// returning to the file from another project later follows normally.
+let lastTreeOpenPath: string | null = null;
+
+// Tag the next file-open as originating from the FileTree (see lastTreeOpenPath).
+// Call immediately before opening the editor tab.
+export function markTreeOpen(path: string): void {
+  lastTreeOpenPath = path;
+}
+
 // Cap on simultaneously-open projects; setActiveProject evicts beyond it.
 // Module-scoped (not inline in the updater) so the eviction toast can name
 // the limit in its message without drifting from the actual cap.
@@ -176,6 +196,7 @@ export function __resetProjectMruForTests(): void {
   mruTabByProject.clear();
   lastActivated.clear();
   activationSeq = 0;
+  lastTreeOpenPath = null;
 }
 
 // Pure tab-picking rule (exported for tests): prefer the project's MRU tab,
@@ -439,6 +460,10 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   },
 
   setActiveProject(id) {
+    // Any real project switch ends an in-tree browse context (see
+    // lastTreeOpenPath): after this, returning to a tree-opened file from a
+    // different project must follow normally.
+    lastTreeOpenPath = null;
     if (!id) {
       set({ activeProjectId: null });
       persistSnapshot(get());
@@ -565,6 +590,17 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     // tab the user just clicked (no-op) instead of stealing focus to an
     // older tab of the same project.
     mruTabByProject.set(derived, tabPath);
+    // A FileTree click (markTreeOpen tagged this exact path) opens a file inside
+    // the active project's own tree — record its MRU but NEVER switch/dock the
+    // project, even when longest-prefix attribution maps it to a nested detected
+    // sub-project. Without this, browsing a parent project's files would spawn a
+    // CLI dock chip for the sub-project. Genuine cross-project gestures
+    // (editor-tab click, Quick Open, Spotlight) don't tag the path, so they
+    // still follow.
+    if (tabPath === lastTreeOpenPath) return;
+    // Any non-tree tab gesture ends the browse context (so returning to the
+    // tree-opened file from another project later follows normally).
+    lastTreeOpenPath = null;
     if (derived !== get().activeProjectId) {
       get().setActiveProject(derived);
     }

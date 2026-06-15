@@ -51,8 +51,14 @@ export const DEFAULT_TMUX_CONFIG: TmuxConfig = {
   historyLimit: 50000,
   statusBar: false,
   killSessionsOnQuit: false,
-  // v0.36.0: default ON, 2h timeout — see RAM-overhead context in the PR.
-  autoCloseIdleCliTabs: true,
+  // v0.36.0: idle-CLI-tab reaper. v0.38.0-beta.15: default OFF. The dual-tier
+  // reaper killed unpinned tabs (any not visible in one of the ≤3 dock columns)
+  // after just 10 min of no PTY output — so a claude session sitting idle while
+  // the user stepped away got torn down (tmux kill-session) and couldn't be
+  // resumed. Session persistence is DevSpace's whole point, so auto-close is now
+  // opt-in: users who want the RAM back enable it in Settings. Thresholds below
+  // are retained for when it's re-enabled.
+  autoCloseIdleCliTabs: false,
   idleCliTabTimeoutMinutes: IDLE_CLI_TAB_DEFAULT_MINUTES,
   // v0.36.1: unpinned tabs close faster — they're not visible in any column.
   unpinnedCliTabTimeoutMinutes: UNPINNED_CLI_TAB_DEFAULT_MINUTES,
@@ -147,7 +153,7 @@ export async function saveTmuxConfig(next: TmuxConfig): Promise<TmuxConfig> {
   try {
     const { configureIdleReaper } = await import('@main/services/PtyPool');
     configureIdleReaper({
-      enabled: clean.autoCloseIdleCliTabs ?? true,
+      enabled: clean.autoCloseIdleCliTabs ?? false,
       thresholdMinutes:
         clean.idleCliTabTimeoutMinutes ?? IDLE_CLI_TAB_DEFAULT_MINUTES,
       unpinnedThresholdMinutes:

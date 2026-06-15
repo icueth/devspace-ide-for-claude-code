@@ -620,7 +620,11 @@ export async function shutdownAll(): Promise<void> {
 const IDLE_REAPER_TICK_MS = 60_000;
 
 let _idleReaperTimer: NodeJS.Timeout | null = null;
-let _idleReaperEnabled = true;
+// v0.38.0-beta.15: off until configureIdleReaper runs with the loaded config.
+// Auto-close is now opt-in (DEFAULT_TMUX_CONFIG.autoCloseIdleCliTabs = false),
+// so the safe initial state is disabled — a boot path that starts the reaper
+// before configuring it must never reap on the stale built-in default.
+let _idleReaperEnabled = false;
 let _idleThresholdMinutes = 120;
 // v0.36.1: dual-tier reaper. Tabs not present in any dock column close much
 // faster — they're the chips the user can't see. Renderer pushes the pinned

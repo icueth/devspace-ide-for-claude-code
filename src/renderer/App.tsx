@@ -54,6 +54,7 @@ import {
   deriveProjectIdFromDockColumn,
   isDefensiveAutoPinTransition,
   isUndockRetargetTransition,
+  markTreeOpen,
   useWorkspaceStore,
 } from '@renderer/state/workspace';
 
@@ -91,7 +92,19 @@ function AppInner() {
   const openHtmlPreview = useEditorStore((s) => s.openHtmlPreview);
   // Stable identity so the memoized <FileTree> isn't re-rendered every shell
   // render by a fresh inline arrow. `open` is a stable store action.
-  const handleOpenFile = useCallback((path: string) => void openFile(path), [openFile]);
+  //
+  // markTreeOpen tags this as an in-tree browse gesture so the follow effect
+  // opens the editor tab WITHOUT switching/docking the project — browsing the
+  // active project's tree must never spawn a CLI chip, even for files under a
+  // nested detected sub-project. Editor-tab / Quick Open / Spotlight opens don't
+  // route through here, so they still follow normally.
+  const handleOpenFile = useCallback(
+    (path: string) => {
+      markTreeOpen(path);
+      void openFile(path);
+    },
+    [openFile],
+  );
 
   // Width values are intentionally NOT read here — they live in the
   // SidebarSection / DockSection leaf wrappers so a resize tick re-renders

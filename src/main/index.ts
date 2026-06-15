@@ -359,7 +359,7 @@ app.whenReady().then(async () => {
   void loadTmuxConfig()
     .then((cfg) => {
       configureIdleReaper({
-        enabled: cfg.autoCloseIdleCliTabs ?? true,
+        enabled: cfg.autoCloseIdleCliTabs ?? false,
         thresholdMinutes: cfg.idleCliTabTimeoutMinutes ?? 120,
         unpinnedThresholdMinutes: cfg.unpinnedCliTabTimeoutMinutes ?? 10,
       });
