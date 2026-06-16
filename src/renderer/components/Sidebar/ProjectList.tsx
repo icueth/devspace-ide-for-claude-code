@@ -3,7 +3,7 @@ import { memo, useMemo } from 'react';
 
 import { cn } from '@renderer/lib/utils';
 import { useRenderTrace } from '@renderer/lib/renderTrace';
-import { SidebarLearnButton } from '@renderer/components/Sidebar/SidebarLearnButton';
+import { SidebarLearnings } from '@renderer/components/Sidebar/SidebarLearnings';
 import { useGitStore } from '@renderer/state/git';
 import { useWorkspaceStore } from '@renderer/state/workspace';
 import type { Project } from '@shared/types';
@@ -103,9 +103,11 @@ export const ProjectList = memo(function ProjectList() {
 
   return (
     <div className="flex flex-col gap-[2px]">
-      {/* Native-learning trigger lives above the project root (moved here from
-          Settings → Memory). Renders null when there's no active project. */}
-      <SidebarLearnButton />
+      {/* Learnings viewer lives above the project root. Shows how many durable
+          learnings DevSpace has distilled for the active project and lets you
+          browse/delete them. Distillation is automatic now — no manual trigger.
+          Renders null when there's no active project. */}
+      <SidebarLearnings />
 
       {rootProject && (
         <div className="flex flex-col gap-[2px]">

@@ -27,8 +27,10 @@ import {
   isDuplicateLearning,
   LEARNINGS_END,
   LEARNINGS_START,
+  maybeAutoDistill,
   parseLearnings,
   type ActivityDigest,
+  type AutoDistillDeps,
   type DistillDeps,
   type Learning,
 } from '@main/services/DistillationService';
@@ -408,5 +410,178 @@ describe('DistillationService.distill (orchestrator, mocked LLM)', () => {
     const summary = await distill(projectAbs, deps);
     expect(summary.status).toBe('error');
     expect(summary.message).toContain('boom');
+  });
+});
+
+// ─── maybeAutoDistill (throttle + activity gate, deps injected) ───────────────
+
+describe('DistillationService.maybeAutoDistill', () => {
+  const THROTTLE_MS = 30 * 60_000;
+
+  // A non-empty digest so the activity gate passes by default. Individual
+  // tests override `gather` to return an empty digest.
+  function nonEmptyGather(): AutoDistillDeps['gather'] {
+    return vi.fn(async () => ({
+      projectPath: projectAbs,
+      generatedAt: Date.now(),
+      items: [{ source: 'diary' as const, label: 'd', text: 'activity', ts: 1 }],
+      truncated: false,
+    }));
+  }
+
+  function makeAutoDeps(
+    overrides: Partial<AutoDistillDeps> = {},
+  ): Partial<AutoDistillDeps> {
+    return {
+      now: () => 1_000_000,
+      readLast: vi.fn(() => 0), // never distilled before
+      writeLast: vi.fn(),
+      gather: nonEmptyGather(),
+      // distill is stubbed — no real claude is ever spawned.
+      distill: vi.fn(async () => ({
+        status: 'ok' as const,
+        created: 1,
+        inboxed: 0,
+        skippedDup: 0,
+      })),
+      throttleMs: THROTTLE_MS,
+      ...overrides,
+    };
+  }
+
+  it('runs when there is activity and the throttle window has passed', async () => {
+    const distillFn = vi.fn(async () => ({
+      status: 'ok' as const,
+      created: 2,
+      inboxed: 0,
+      skippedDup: 0,
+    }));
+    const writeLast = vi.fn();
+    const deps = makeAutoDeps({
+      now: () => 5_000_000,
+      readLast: vi.fn(() => 1_000_000), // long ago → window passed
+      writeLast,
+      distill: distillFn,
+    });
+
+    await maybeAutoDistill(projectAbs, deps);
+
+    expect(distillFn).toHaveBeenCalledTimes(1);
+    expect(distillFn).toHaveBeenCalledWith(projectAbs);
+    // Marker is stamped with the current clock BEFORE awaiting distill.
+    expect(writeLast).toHaveBeenCalledWith(projectAbs, 5_000_000);
+  });
+
+  it('skips (no distill, no marker write) when throttled', async () => {
+    const distillFn = vi.fn();
+    const writeLast = vi.fn();
+    const deps = makeAutoDeps({
+      now: () => 1_000_000,
+      // Last run was 60s ago — well inside the 30-min window.
+      readLast: vi.fn(() => 1_000_000 - 60_000),
+      writeLast,
+      distill: distillFn,
+    });
+
+    await maybeAutoDistill(projectAbs, deps);
+
+    expect(distillFn).not.toHaveBeenCalled();
+    expect(writeLast).not.toHaveBeenCalled();
+  });
+
+  it('runs at exactly the throttle boundary (window strictly less-than)', async () => {
+    const distillFn = vi.fn(async () => ({
+      status: 'ok' as const,
+      created: 0,
+      inboxed: 0,
+      skippedDup: 0,
+    }));
+    const deps = makeAutoDeps({
+      now: () => 1_000_000,
+      // Exactly THROTTLE_MS ago → now - last === throttleMs, NOT < throttleMs.
+      readLast: vi.fn(() => 1_000_000 - THROTTLE_MS),
+      distill: distillFn,
+    });
+
+    await maybeAutoDistill(projectAbs, deps);
+    expect(distillFn).toHaveBeenCalledTimes(1);
+  });
+
+  it('skips (no distill) when the digest has no new activity', async () => {
+    const distillFn = vi.fn();
+    const writeLast = vi.fn();
+    const deps = makeAutoDeps({
+      readLast: vi.fn(() => 0),
+      writeLast,
+      gather: vi.fn(async () => ({
+        projectPath: projectAbs,
+        generatedAt: Date.now(),
+        items: [],
+        truncated: false,
+      })),
+      distill: distillFn,
+    });
+
+    await maybeAutoDistill(projectAbs, deps);
+
+    expect(distillFn).not.toHaveBeenCalled();
+    // The activity gate is checked AFTER the throttle but the marker must NOT
+    // be stamped on a no-activity skip — only an actual run stamps it.
+    expect(writeLast).not.toHaveBeenCalled();
+  });
+
+  it('treats a missing marker (readLast === 0) as never-distilled and runs', async () => {
+    const distillFn = vi.fn(async () => ({
+      status: 'ok' as const,
+      created: 1,
+      inboxed: 0,
+      skippedDup: 0,
+    }));
+    const deps = makeAutoDeps({
+      now: () => 42, // tiny clock; with last=0 the `last > 0` guard skips throttle
+      readLast: vi.fn(() => 0),
+      distill: distillFn,
+    });
+
+    await maybeAutoDistill(projectAbs, deps);
+    expect(distillFn).toHaveBeenCalledTimes(1);
+  });
+
+  it('stamps the marker BEFORE awaiting distill (concurrent-exit guard)', async () => {
+    const order: string[] = [];
+    const writeLast = vi.fn(() => {
+      order.push('write');
+    });
+    const distillFn = vi.fn(async () => {
+      order.push('distill');
+      return { status: 'ok' as const, created: 0, inboxed: 0, skippedDup: 0 };
+    });
+    const deps = makeAutoDeps({ writeLast, distill: distillFn });
+
+    await maybeAutoDistill(projectAbs, deps);
+    expect(order).toEqual(['write', 'distill']);
+  });
+
+  it('never throws — a thrown gather is swallowed (best-effort background work)', async () => {
+    const distillFn = vi.fn();
+    const deps = makeAutoDeps({
+      gather: vi.fn(async () => {
+        throw new Error('digest boom');
+      }),
+      distill: distillFn,
+    });
+
+    await expect(maybeAutoDistill(projectAbs, deps)).resolves.toBeUndefined();
+    expect(distillFn).not.toHaveBeenCalled();
+  });
+
+  it('ignores an empty projectPath', async () => {
+    const distillFn = vi.fn();
+    const readLast = vi.fn();
+    const deps = makeAutoDeps({ readLast, distill: distillFn });
+
+    await maybeAutoDistill('', deps);
+    expect(readLast).not.toHaveBeenCalled();
+    expect(distillFn).not.toHaveBeenCalled();
   });
 });

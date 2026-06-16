@@ -264,6 +264,26 @@ async function doCreatePty(
     // not delete the live entry that replaced it under the same key.
     if (entries.get(key) === entry) entries.delete(key);
     logger.info(`session ${key} exited (code=${exitCode})`);
+
+    // Native learning (sub-project 3): when a claude-cli session ends, kick a
+    // throttled, fire-and-forget auto-distill of THIS project's recent activity
+    // into durable learnings. Resolve the project path from the PTY's `cwd`
+    // (the absolute project root the session ran in) — NOT the projectId hash,
+    // which DistillationService can't map back to an abspath. Lazy-import the
+    // service to avoid a circular import (DistillationService → MemoryService;
+    // PtyPool stays out of that graph at module load). Fully detached: never
+    // awaited, never throws into the exit path, .catch swallows any rejection.
+    if (opts.kind === 'claude-cli' && typeof opts.cwd === 'string' && opts.cwd) {
+      const projectPath = opts.cwd;
+      void (async () => {
+        try {
+          const { maybeAutoDistill } = await import('./DistillationService');
+          await maybeAutoDistill(projectPath);
+        } catch {
+          /* never let auto-distill disturb PTY teardown */
+        }
+      })().catch(() => {});
+    }
   });
 
   logger.info(`session ${key} spawned pid=${proc.pid} cmd=${command}`);

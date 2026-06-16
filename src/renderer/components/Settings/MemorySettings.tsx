@@ -3,9 +3,10 @@ import { MemPalaceSettings } from '@renderer/components/Settings/MemPalaceSettin
 /**
  * Memory settings panel (Settings → Memory).
  *
- * The sub-project 3 "Learn from recent work" (native learning) trigger now
- * lives in the Sidebar, above the project root (see SidebarLearnButton). This
- * tab hosts the MemPalace installer.
+ * Native learning is automatic now; the Sidebar hosts a read-only learnings
+ * viewer above the project root (see SidebarLearnings) — there's no manual
+ * "Learn from recent work" trigger anymore. This tab hosts the MemPalace
+ * installer.
  */
 export function MemorySettings() {
   return (

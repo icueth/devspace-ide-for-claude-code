@@ -32,7 +32,11 @@
 // parse tolerance + schema validation, de-dupe decision). Quality is validated
 // by a manual run + the user's ability to prune.
 
+import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
+import * as fs from 'node:fs';
+import { homedir } from 'node:os';
+import * as path from 'node:path';
 
 import { resolveClaudeBinary } from '@main/services/ClaudeCliLauncher';
 import { enrichedPath } from '@main/utils/setupPaths';
@@ -76,6 +80,14 @@ export const LEARNINGS_END = '<<<END>>>';
 // Hard ceiling for the synchronous `claude -p` run. A safety net so a hung
 // claude can't keep distill() pending forever; on timeout we kill the child.
 const POLL_TIMEOUT_MS = 5 * 60_000;
+
+// Auto-distill throttle: the minimum gap between two AUTOMATIC distill runs for
+// the same project. Session-end / Stop fires far more often than there is new
+// durable activity to learn from, so without a throttle a user who restarts
+// claude a dozen times an hour would burn a dozen `claude -p` runs. 30 minutes
+// is a deliberate floor — manual distill (the explicit user gesture) bypasses
+// this entirely; only maybeAutoDistill consults the marker.
+const AUTO_DISTILL_THROTTLE_MS = 30 * 60_000;
 
 // ─── learning schema (Claude's output contract) ─────────────────────────────
 
@@ -720,5 +732,140 @@ export async function distill(
       skippedDup: 0,
       message: (err as Error).message,
     };
+  }
+}
+
+// ─── 5. maybeAutoDistill — throttled fire-and-forget wrapper ─────────────────
+//
+// The AUTO entrypoint for native learning: called when a session ends (a dock
+// claude-cli PTY exits — Part A) so the user never has to press a "distill"
+// button. distill() itself is the explicit/manual path and is NOT throttled;
+// this wrapper is the gate that keeps the automatic path cheap and idempotent.
+//
+// The throttle marker lives at the SAME path the standalone Stop hook (Part B)
+// reuses, so the app-internal and raw-terminal paths share one throttle window
+// per project: `~/.devspace/projects/<sha1(abspath).slice(0,12)>/.last-distill`
+// holding the epoch-ms of the last auto run.
+
+// Mirror MemoryService.projectHashFor so the marker lands in the SAME per-
+// project dir the rest of native memory uses (and the Stop hook computes the
+// same way). path.resolve first so a trailing slash / relative cwd can't shift
+// the hash off the canonical project dir.
+function projectHash(projectPath: string): string {
+  return createHash('sha1').update(path.resolve(projectPath)).digest('hex').slice(0, 12);
+}
+
+function lastDistillMarkerPath(projectPath: string): string {
+  return path.join(
+    homedir(),
+    '.devspace',
+    'projects',
+    projectHash(projectPath),
+    '.last-distill',
+  );
+}
+
+// Read the marker's epoch-ms, or 0 when it's missing / unreadable / garbage.
+// Never throws — a missing marker simply means "never auto-distilled".
+function readLastDistill(projectPath: string): number {
+  try {
+    const raw = fs.readFileSync(lastDistillMarkerPath(projectPath), 'utf8').trim();
+    const n = Number.parseInt(raw, 10);
+    return Number.isFinite(n) && n > 0 ? n : 0;
+  } catch {
+    return 0;
+  }
+}
+
+// Stamp the marker with `now` (epoch ms). Creates the project dir if absent.
+// Best-effort: a write failure logs but never blocks the distill (worst case
+// the throttle is briefly ineffective, which is harmless).
+function writeLastDistill(projectPath: string, now: number): void {
+  const file = lastDistillMarkerPath(projectPath);
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, String(now), 'utf8');
+  } catch (err) {
+    logger.warn(`auto-distill marker write failed: ${(err as Error).message}`);
+  }
+}
+
+// Injectable seam for maybeAutoDistill — production wires the real clock,
+// marker IO, digest gather and distill; tests inject stubs so no real claude
+// is spawned and no real filesystem is touched.
+export interface AutoDistillDeps {
+  now: () => number;
+  readLast: (projectPath: string) => number;
+  writeLast: (projectPath: string, now: number) => void;
+  gather: typeof gatherActivityDigest;
+  distill: typeof distill;
+  throttleMs: number;
+}
+
+function defaultAutoDeps(): AutoDistillDeps {
+  return {
+    now: () => Date.now(),
+    readLast: readLastDistill,
+    writeLast: writeLastDistill,
+    gather: gatherActivityDigest,
+    distill,
+    throttleMs: AUTO_DISTILL_THROTTLE_MS,
+  };
+}
+
+/**
+ * Throttled, fire-and-forget auto-distill for one project. Intended to be
+ * called (and NOT awaited) from a session-end path — e.g. a dock claude-cli
+ * PTY exit. NEVER throws: every failure mode (throttled, no activity, distill
+ * error) resolves quietly.
+ *
+ * Gate order:
+ *   1. THROTTLE — skip if a previous auto run happened within throttleMs.
+ *   2. ACTIVITY — gather the digest; skip if there's nothing new to learn from
+ *      (digest.items.length === 0). Cheap relative to a `claude -p` run, so we
+ *      pay it to avoid spending a Claude run on an empty digest.
+ *   3. RUN — write the marker BEFORE awaiting distill() so two near-simultaneous
+ *      session exits don't both pass the throttle and double-fire. Then await
+ *      distill (which has its own internal never-throws guarantee).
+ *
+ * The marker is stamped on every RUN attempt (even if distill ultimately
+ * no-ops), which is intentional: the throttle is about run CADENCE, not success.
+ */
+export async function maybeAutoDistill(
+  projectPath: string,
+  overrides: Partial<AutoDistillDeps> = {},
+): Promise<void> {
+  const deps = { ...defaultAutoDeps(), ...overrides };
+  try {
+    if (typeof projectPath !== 'string' || !projectPath) return;
+
+    // 1. Throttle.
+    const now = deps.now();
+    const last = deps.readLast(projectPath);
+    if (last > 0 && now - last < deps.throttleMs) {
+      logger.debug(
+        `auto-distill skipped (throttled, ${Math.round((now - last) / 1000)}s < ${Math.round(deps.throttleMs / 1000)}s)`,
+      );
+      return;
+    }
+
+    // 2. Activity gate — nothing new → don't spend a Claude run.
+    const digest = await deps.gather(projectPath, {});
+    if (digest.items.length === 0) {
+      logger.debug('auto-distill skipped (no new activity)');
+      return;
+    }
+
+    // 3. Run — stamp the marker BEFORE awaiting so a concurrent exit is
+    // throttled out instead of double-firing.
+    deps.writeLast(projectPath, now);
+    const summary = await deps.distill(projectPath);
+    logger.info(
+      `auto-distill ${projectPath}: ${summary.status} (created=${summary.created} inboxed=${summary.inboxed} dup=${summary.skippedDup})`,
+    );
+  } catch (err) {
+    // Auto-distill is best-effort background work — it must NEVER throw to its
+    // (fire-and-forget) caller, which sits in a PTY exit path.
+    logger.warn(`auto-distill failed: ${(err as Error).message}`);
   }
 }
