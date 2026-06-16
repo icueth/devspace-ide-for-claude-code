@@ -34,6 +34,12 @@ function buildPrompt(missing: SetupCheck[]): string {
           '  Generate a minimal forwarder script that calls `exec rtk "$@"` and re-emit the rewritten bash command.',
           '  De-duplicate by `command` so re-runs do not multiply entries.',
         ].join('\n');
+      case 'learningHooks':
+        return [
+          '- **DevSpace learning hooks** — copy `devspace-learnings.mjs` and `devspace-distill-stop.mjs` into `~/.claude/hooks/` (these ship with DevSpace under its resources/learning-hooks/ — prefer the deterministic installer, which already has them).',
+          '  Register `devspace-learnings.mjs` as a `SessionStart` hook and `devspace-distill-stop.mjs` as a `Stop` hook in `~/.claude/settings.json`.',
+          '  Back up `~/.claude/settings.json` first. Use `jq` to edit JSON safely — do not regex-replace. De-duplicate by filename so re-runs do not multiply entries; never disturb existing SessionStart/Stop hooks.',
+        ].join('\n');
       case 'mempalace':
         return '- **MemPalace** — skip here; the user has a dedicated Settings → Memory tab for it.';
     }
@@ -147,5 +153,5 @@ export async function runClaudeSetup(
  * Claude-resolvable. MemPalace is excluded — it has its own installer.
  */
 export function claudeAddressableTools(): SetupToolId[] {
-  return ['brew', 'claude', 'tmux', 'rtk', 'jq', 'rtkHook'];
+  return ['brew', 'claude', 'tmux', 'rtk', 'jq', 'rtkHook', 'learningHooks'];
 }

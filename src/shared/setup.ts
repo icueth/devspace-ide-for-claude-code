@@ -8,6 +8,8 @@
  *   • rtk       — token-saving Bash-rewrite proxy
  *   • jq        — required by the rtk Claude Code hook
  *   • rtkHook   — ~/.claude/hooks/rtk-rewrite.sh + matching PreToolUse entry
+ *   • learningHooks — ~/.claude/hooks/devspace-learnings.mjs (SessionStart)
+ *                     + devspace-distill-stop.mjs (Stop) + matching entries
  *   • mempalace — checked via MemPalaceService.getStatus (no duplicate logic)
  */
 
@@ -18,6 +20,7 @@ export type SetupToolId =
   | 'rtk'
   | 'jq'
   | 'rtkHook'
+  | 'learningHooks'
   | 'mempalace';
 
 export type SetupCheckState =

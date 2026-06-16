@@ -28,12 +28,40 @@ export function getBundledRtkHookFile(): string {
   return path.join(getBundledSetupHooksDir(), 'rtk-rewrite.sh');
 }
 
+/**
+ * Source dir for the native-learning hook scripts. Mirrors the mempalace /
+ * setup-hooks resolution: packaged build reads from process.resourcesPath
+ * (mapped via electron-builder extraResources `to: "learning-hooks"`), dev
+ * reads from the repo's resources/learning-hooks/.
+ */
+export function getBundledLearningHooksDir(): string {
+  return path.join(resourcesRoot(), 'learning-hooks');
+}
+
+/** Bundled SessionStart hook — injects distilled learnings into each session. */
+export function getBundledLearningsHookFile(): string {
+  return path.join(getBundledLearningHooksDir(), 'devspace-learnings.mjs');
+}
+
+/** Bundled Stop hook — auto-distills learnings on terminal session end. */
+export function getBundledDistillHookFile(): string {
+  return path.join(getBundledLearningHooksDir(), 'devspace-distill-stop.mjs');
+}
+
 export function getClaudeHooksDir(): string {
   return path.join(getClaudeDir(), 'hooks');
 }
 
 export function getInstalledRtkHookFile(): string {
   return path.join(getClaudeHooksDir(), 'rtk-rewrite.sh');
+}
+
+export function getInstalledLearningsHookFile(): string {
+  return path.join(getClaudeHooksDir(), 'devspace-learnings.mjs');
+}
+
+export function getInstalledDistillHookFile(): string {
+  return path.join(getClaudeHooksDir(), 'devspace-distill-stop.mjs');
 }
 
 /**

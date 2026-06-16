@@ -8,10 +8,14 @@ import { getStatus as getMempalaceStatus } from '@main/services/MemPalaceService
 import {
   commonBinPaths,
   enrichedPath,
+  getBundledDistillHookFile,
+  getBundledLearningsHookFile,
   getBundledRtkHookFile,
   getClaudeDir,
   getClaudeHooksDir,
   getClaudeSettingsFile,
+  getInstalledDistillHookFile,
+  getInstalledLearningsHookFile,
   getInstalledRtkHookFile,
 } from '@main/utils/setupPaths';
 import { IPC } from '@shared/ipc-channels';
@@ -204,12 +208,16 @@ async function detectTool(
   return { ...base, state: 'missing' };
 }
 
+interface HookGroup {
+  matcher?: string;
+  hooks?: Array<{ type?: string; command?: string; timeout?: number }>;
+}
+
 interface SettingsShape {
   hooks?: {
-    PreToolUse?: Array<{
-      matcher?: string;
-      hooks?: Array<{ type?: string; command?: string }>;
-    }>;
+    PreToolUse?: HookGroup[];
+    SessionStart?: HookGroup[];
+    Stop?: HookGroup[];
     [k: string]: unknown;
   };
   [k: string]: unknown;
@@ -283,6 +291,53 @@ async function detectRtkHook(rtkState: SetupCheckState): Promise<SetupCheck> {
   return { ...base, state: 'missing' };
 }
 
+const LEARNINGS_HOOK_FILENAME = 'devspace-learnings.mjs';
+const DISTILL_HOOK_FILENAME = 'devspace-distill-stop.mjs';
+
+async function detectLearningHooks(
+  claudeState: SetupCheckState,
+): Promise<SetupCheck> {
+  const base: Omit<SetupCheck, 'state'> = {
+    id: 'learningHooks',
+    label: 'DevSpace learning hooks',
+    description:
+      'Auto-inject distilled learnings into Claude sessions (SessionStart) + auto-distill on session end (Stop). Scripts in ~/.claude/hooks/.',
+    installable: true,
+  };
+
+  const hookFile = getInstalledLearningsHookFile();
+  const fileExists = fs.existsSync(hookFile);
+
+  // Settings must reference the SessionStart learnings hook. We match by
+  // filename substring (not exact path) because the registered command uses
+  // the `node "$HOME/.claude/hooks/devspace-learnings.mjs"` form rather than a
+  // resolved absolute path.
+  let inSettings = false;
+  try {
+    const s = await readSettings();
+    const groups = Array.isArray(s.hooks?.SessionStart)
+      ? s.hooks.SessionStart
+      : [];
+    for (const g of groups) {
+      const hooks = Array.isArray(g.hooks) ? g.hooks : [];
+      if (hooks.some((h) => (h.command ?? '').includes(LEARNINGS_HOOK_FILENAME))) {
+        inSettings = true;
+        break;
+      }
+    }
+  } catch {
+    // ignore; treated as missing
+  }
+
+  if (fileExists && inSettings) {
+    return { ...base, state: 'ok', path: hookFile };
+  }
+  if (claudeState !== 'ok') {
+    return { ...base, state: 'blocked', blockedBy: 'claude' };
+  }
+  return { ...base, state: 'missing' };
+}
+
 async function detectMempalace(): Promise<SetupCheck> {
   const base: Omit<SetupCheck, 'state'> = {
     id: 'mempalace',
@@ -334,6 +389,7 @@ export async function getStatus(): Promise<SetupStatus> {
     brew.state,
   );
   const rtkHook = await detectRtkHook(rtk.state);
+  const learningHooks = await detectLearningHooks(claude.state);
   const mempalace = await detectMempalace();
 
   const checks: SetupCheck[] = [
@@ -343,6 +399,7 @@ export async function getStatus(): Promise<SetupStatus> {
     rtk,
     jq,
     rtkHook,
+    learningHooks,
     mempalace,
   ];
 
@@ -440,6 +497,124 @@ async function installRtkHook(): Promise<void> {
   await writeSettings(next);
 }
 
+// Command strings registered in settings.json. We use the `$HOME`-relative
+// form (not a resolved absolute path) so the same settings.json is portable
+// across machines — the hooks live in the user's home regardless.
+const LEARNINGS_HOOK_COMMAND = `node "$HOME/.claude/hooks/${LEARNINGS_HOOK_FILENAME}"`;
+const DISTILL_HOOK_COMMAND = `node "$HOME/.claude/hooks/${DISTILL_HOOK_FILENAME}"`;
+
+async function installLearningHooks(): Promise<void> {
+  const learnSrc = getBundledLearningsHookFile();
+  const distillSrc = getBundledDistillHookFile();
+  const learnDest = getInstalledLearningsHookFile();
+  const distillDest = getInstalledDistillHookFile();
+
+  step('learningHooks', 'configure', `Writing ${learnDest}…`);
+  await fsp.mkdir(getClaudeHooksDir(), { recursive: true });
+  await fsp.copyFile(learnSrc, learnDest);
+  await fsp.copyFile(distillSrc, distillDest);
+  if (process.platform !== 'win32') {
+    await fsp.chmod(learnDest, 0o755);
+    await fsp.chmod(distillDest, 0o755);
+  }
+
+  step(
+    'learningHooks',
+    'configure',
+    'Patching ~/.claude/settings.json (backup created)…',
+  );
+  const current = await readSettings();
+  const next: SettingsShape = { ...current };
+  const hooks = { ...(next.hooks ?? {}) };
+
+  // SessionStart — inject distilled learnings into each new session. Append a
+  // new group (don't reuse an existing one) so we never disturb mempalace's
+  // or anyone else's SessionStart entries. De-dupe by filename so reruns are
+  // idempotent.
+  const sessionStart = Array.isArray(hooks.SessionStart)
+    ? [...hooks.SessionStart]
+    : [];
+  const haveLearnings = sessionStart.some(
+    (g) =>
+      Array.isArray(g.hooks) &&
+      g.hooks.some((h) => (h.command ?? '').includes(LEARNINGS_HOOK_FILENAME)),
+  );
+  if (!haveLearnings) {
+    sessionStart.push({
+      hooks: [
+        { type: 'command', command: LEARNINGS_HOOK_COMMAND, timeout: 5000 },
+      ],
+    });
+  }
+  hooks.SessionStart = sessionStart;
+
+  // Stop — auto-distill on terminal session end. Same append + de-dupe rule.
+  const stop = Array.isArray(hooks.Stop) ? [...hooks.Stop] : [];
+  const haveDistill = stop.some(
+    (g) =>
+      Array.isArray(g.hooks) &&
+      g.hooks.some((h) => (h.command ?? '').includes(DISTILL_HOOK_FILENAME)),
+  );
+  if (!haveDistill) {
+    stop.push({
+      hooks: [
+        { type: 'command', command: DISTILL_HOOK_COMMAND, timeout: 5000 },
+      ],
+    });
+  }
+  hooks.Stop = stop;
+
+  next.hooks = hooks;
+  await writeSettings(next);
+}
+
+async function uninstallLearningHooks(): Promise<void> {
+  const learnDest = getInstalledLearningsHookFile();
+  const distillDest = getInstalledDistillHookFile();
+  step('learningHooks', 'configure', 'Removing learning hooks from settings.json…');
+  const current = await readSettings();
+  const next: SettingsShape = { ...current };
+
+  if (next.hooks) {
+    const hooks = { ...next.hooks };
+    const prune = (
+      groups: HookGroup[] | undefined,
+      filename: string,
+    ): HookGroup[] =>
+      (Array.isArray(groups) ? groups : [])
+        .map((g) => {
+          if (!Array.isArray(g.hooks)) return g;
+          return {
+            ...g,
+            hooks: g.hooks.filter(
+              (h) => !(h.command ?? '').includes(filename),
+            ),
+          };
+        })
+        .filter((g) => !Array.isArray(g.hooks) || g.hooks.length > 0);
+
+    const ss = prune(hooks.SessionStart, LEARNINGS_HOOK_FILENAME);
+    if (ss.length > 0) hooks.SessionStart = ss;
+    else delete hooks.SessionStart;
+
+    const st = prune(hooks.Stop, DISTILL_HOOK_FILENAME);
+    if (st.length > 0) hooks.Stop = st;
+    else delete hooks.Stop;
+
+    if (Object.keys(hooks).length === 0) delete next.hooks;
+    else next.hooks = hooks;
+    await writeSettings(next);
+  }
+
+  for (const dest of [learnDest, distillDest]) {
+    try {
+      await fsp.unlink(dest);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+    }
+  }
+}
+
 async function uninstallRtkHook(): Promise<void> {
   const dest = getInstalledRtkHookFile();
   step('rtkHook', 'configure', 'Removing rtk hook from settings.json…');
@@ -503,6 +678,9 @@ export async function installTool(toolId: SetupToolId): Promise<SetupInstallResu
       case 'rtkHook':
         await installRtkHook();
         break;
+      case 'learningHooks':
+        await installLearningHooks();
+        break;
       case 'mempalace':
         // MemPalace has its own dedicated installer in MemPalaceService;
         // Setup tab uses it as a read-only roll-up and points users at the
@@ -552,6 +730,39 @@ export async function uninstallRtkHookPublic(): Promise<SetupInstallResult> {
   }
 }
 
+export async function uninstallLearningHooksPublic(): Promise<SetupInstallResult> {
+  if (installing) {
+    return {
+      ok: false,
+      status: await getStatus(),
+      error: `Busy installing ${installing}`,
+    };
+  }
+  installing = 'learningHooks';
+  try {
+    await uninstallLearningHooks();
+    emit({
+      toolId: 'learningHooks',
+      stage: 'done',
+      message: 'Removed.',
+      done: true,
+    });
+    return { ok: true, status: await getStatus() };
+  } catch (err) {
+    const message = (err as Error).message;
+    emit({
+      toolId: 'learningHooks',
+      stage: 'error',
+      message,
+      done: true,
+      error: message,
+    });
+    return { ok: false, status: await getStatus(), error: message };
+  } finally {
+    installing = null;
+  }
+}
+
 /**
  * Install every tool that's currently 'missing' on macOS (Homebrew is the
  * external prerequisite — we surface a clear "Install Homebrew first" error
@@ -583,6 +794,7 @@ export async function installAllMissing(): Promise<SetupInstallResult> {
       'rtk',
       'claude',
       'rtkHook',
+      'learningHooks',
     ];
 
     for (const toolId of order) {
@@ -628,6 +840,9 @@ export async function installAllMissing(): Promise<SetupInstallResult> {
             break;
           case 'rtkHook':
             await installRtkHook();
+            break;
+          case 'learningHooks':
+            await installLearningHooks();
             break;
         }
       } catch (err) {
