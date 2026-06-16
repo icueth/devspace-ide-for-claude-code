@@ -210,6 +210,13 @@
         "filter": [
           "**/*"
         ]
+      },
+      {
+        "from": "resources/learning-hooks",
+        "to": "learning-hooks",
+        "filter": [
+          "**/*"
+        ]
       }
     ],
     "compression": "maximum",
