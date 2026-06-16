@@ -3,6 +3,7 @@ import { memo, useMemo } from 'react';
 
 import { cn } from '@renderer/lib/utils';
 import { useRenderTrace } from '@renderer/lib/renderTrace';
+import { SidebarLearnButton } from '@renderer/components/Sidebar/SidebarLearnButton';
 import { useGitStore } from '@renderer/state/git';
 import { useWorkspaceStore } from '@renderer/state/workspace';
 import type { Project } from '@shared/types';
@@ -102,6 +103,10 @@ export const ProjectList = memo(function ProjectList() {
 
   return (
     <div className="flex flex-col gap-[2px]">
+      {/* Native-learning trigger lives above the project root (moved here from
+          Settings → Memory). Renders null when there's no active project. */}
+      <SidebarLearnButton />
+
       {rootProject && (
         <div className="flex flex-col gap-[2px]">
           <SectionLabel label="Root" count={1} />
