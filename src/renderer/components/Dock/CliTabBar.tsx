@@ -3,9 +3,9 @@ import { Columns2, Plus, RotateCcw, Trash2, X } from 'lucide-react';
 import { useCallback, useState } from 'react';
 
 import { cn } from '@renderer/lib/utils';
+import { activate } from '@renderer/state/activation';
 import { useCliTabsStore } from '@renderer/state/cliTabs';
 import { findColumnIdPinning } from '@renderer/state/cliTabsPins';
-import { useWorkspaceStore } from '@renderer/state/workspace';
 import type { CliTab, DockedProjectMeta } from '@shared/types';
 
 // Shared with ClaudeCliDock's drop-zone overlay ("+ Split" only renders
@@ -37,15 +37,9 @@ export function CliTabBar({
   const activeColumnId = useCliTabsStore((s) => s.activeColumnId);
   const addTab = useCliTabsStore((s) => s.addTab);
   const removeTab = useCliTabsStore((s) => s.removeTab);
-  const setActiveTab = useCliTabsStore((s) => s.setActiveTab);
-  const setActiveColumn = useCliTabsStore((s) => s.setActiveColumn);
   const undockProject = useCliTabsStore((s) => s.undockProject);
   const reloadTab = useCliTabsStore((s) => s.reloadTab);
   const addColumn = useCliTabsStore((s) => s.addColumn);
-  // activateProject (not setActiveProject): a chip click is user intent, so
-  // it also restores the project's last-used editor tab.
-  const activateProject = useWorkspaceStore((s) => s.activateProject);
-  const projects = useWorkspaceStore((s) => s.projects);
 
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
 
@@ -72,20 +66,16 @@ export function CliTabBar({
   );
 
   const handleSelect = (projectId: string, tabId: string): void => {
-    // A chip already visible in ANOTHER column means "focus that column",
-    // not "steal the pane into this one": activate the owning column first
-    // so setActiveTab's pin write lands there as a no-op (assignPin sees
-    // target === owner, so no duplicate and no stripped column).
+    // Single imperative path (Plan C): the router focuses the owning column,
+    // selects the tab, switches workspace if the chip is cross-workspace, and
+    // moves the sidebar — no reactive dock→sidebar effect required.
     const owner = findColumnIdPinning(columns, projectId, tabId);
-    if (owner && owner !== activeColumnId) {
-      setActiveColumn(owner);
-    }
-    // setActiveTab pins the active column AND mirrors selection into the
-    // legacy single-pane state.
-    setActiveTab(projectId, tabId);
-    if (projects.some((p) => p.id === projectId)) {
-      activateProject(projectId);
-    }
+    void activate({
+      source: 'dock-chip',
+      projectId,
+      tabId,
+      columnId: owner ?? undefined,
+    });
   };
 
   const handleAdd = (): void => {

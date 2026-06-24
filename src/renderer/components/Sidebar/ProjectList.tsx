@@ -4,6 +4,7 @@ import { memo, useMemo } from 'react';
 import { cn } from '@renderer/lib/utils';
 import { useRenderTrace } from '@renderer/lib/renderTrace';
 import { SidebarLearnings } from '@renderer/components/Sidebar/SidebarLearnings';
+import { activate } from '@renderer/state/activation';
 import { useGitStore } from '@renderer/state/git';
 import { useWorkspaceStore } from '@renderer/state/workspace';
 import type { Project } from '@shared/types';
@@ -39,9 +40,6 @@ export const ProjectList = memo(function ProjectList() {
   const scanning = useWorkspaceStore((s) => s.scanning);
   const activeProjectId = useWorkspaceStore((s) => s.activeProjectId);
   const openedProjectIds = useWorkspaceStore((s) => s.openedProjectIds);
-  // activateProject (not setActiveProject): a sidebar click is user intent,
-  // so it also restores the project's last-used editor tab.
-  const activateProject = useWorkspaceStore((s) => s.activateProject);
   const closeProject = useWorkspaceStore((s) => s.closeProject);
   const allExpanded = useWorkspaceStore((s) => s.allExpanded);
   const setAllExpanded = useWorkspaceStore((s) => s.setAllExpanded);
@@ -116,7 +114,7 @@ export const ProjectList = memo(function ProjectList() {
             project={rootProject}
             isActive={rootProject.id === activeProjectId}
             isOpen={openedProjectIds.includes(rootProject.id)}
-            onClick={() => activateProject(rootProject.id)}
+            onClick={() => void activate({ source: 'sidebar', projectId: rootProject.id })}
             onClose={
               openedProjectIds.includes(rootProject.id)
                 ? () => closeProject(rootProject.id)
@@ -138,7 +136,7 @@ export const ProjectList = memo(function ProjectList() {
               project={p}
               isActive={p.id === activeProjectId}
               isOpen
-              onClick={() => activateProject(p.id)}
+              onClick={() => void activate({ source: 'sidebar', projectId: p.id })}
               onClose={() => closeProject(p.id)}
             />
           ))}
@@ -176,7 +174,7 @@ export const ProjectList = memo(function ProjectList() {
                   project={p}
                   isActive={false}
                   isOpen={false}
-                  onClick={() => activateProject(p.id)}
+                  onClick={() => void activate({ source: 'sidebar', projectId: p.id })}
                 />
               ))}
             </div>

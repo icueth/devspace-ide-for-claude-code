@@ -4,6 +4,7 @@ import { lazy, memo, Suspense, useEffect, useRef, useState } from 'react';
 import { CliTabBar, MAX_COLUMNS } from '@renderer/components/Dock/CliTabBar';
 import { cn } from '@renderer/lib/utils';
 import { useRenderTrace } from '@renderer/lib/renderTrace';
+import { activate } from '@renderer/state/activation';
 import { useCliTabsStore } from '@renderer/state/cliTabs';
 import { pickAutoPinTab } from '@renderer/state/cliTabsPins';
 import { useWorkspaceStore } from '@renderer/state/workspace';
@@ -28,8 +29,6 @@ export const ClaudeCliDock = memo(function ClaudeCliDock() {
   const projects = useWorkspaceStore((s) => s.projects);
   const openedProjectIds = useWorkspaceStore((s) => s.openedProjectIds);
   const activeProjectId = useWorkspaceStore((s) => s.activeProjectId);
-  const activateProject = useWorkspaceStore((s) => s.activateProject);
-
   const projectsById = useCliTabsStore((s) => s.projectsById);
   const dockedOrder = useCliTabsStore((s) => s.dockedOrder);
   const tabsByProject = useCliTabsStore((s) => s.tabsByProject);
@@ -38,7 +37,6 @@ export const ClaudeCliDock = memo(function ClaudeCliDock() {
   const activeColumnId = useCliTabsStore((s) => s.activeColumnId);
   const dockProject = useCliTabsStore((s) => s.dockProject);
   const setActiveDockedProject = useCliTabsStore((s) => s.setActiveDockedProject);
-  const setActiveColumn = useCliTabsStore((s) => s.setActiveColumn);
   const removeColumn = useCliTabsStore((s) => s.removeColumn);
   const setColumnPin = useCliTabsStore((s) => s.setColumnPin);
   const splitForTab = useCliTabsStore((s) => s.splitForTab);
@@ -211,7 +209,13 @@ export const ClaudeCliDock = memo(function ClaudeCliDock() {
                 <div className="pointer-events-auto absolute right-2 top-2 flex items-center gap-1">
                   <button
                     type="button"
-                    onClick={() => setActiveColumn(col.id)}
+                    onClick={() =>
+                      void activate({
+                        source: 'dock-pane',
+                        projectId: col.pin?.projectId,
+                        columnId: col.id,
+                      })
+                    }
                     title={`Focus column ${idx + 1}`}
                     className={cn(
                       'flex h-[18px] w-[18px] items-center justify-center rounded-full border text-[9px] font-bold transition',
@@ -261,13 +265,14 @@ export const ClaudeCliDock = memo(function ClaudeCliDock() {
                       tabId: string;
                     };
                     setColumnPin(col.id, pin);
-                    setActiveColumn(col.id);
-                    // Dropping a tab on a column is user intent — activate
-                    // explicitly (the follow effect deliberately ignores
-                    // none→pinned transitions to stay deaf to the auto-pin).
-                    if (projects.some((p) => p.id === pin.projectId)) {
-                      activateProject(pin.projectId);
-                    }
+                    // Dropping a tab on a column is user intent — route through
+                    // the activation router so the sidebar/workspace follow.
+                    void activate({
+                      source: 'dock-chip',
+                      projectId: pin.projectId,
+                      tabId: pin.tabId,
+                      columnId: col.id,
+                    });
                   } catch {
                     /* ignore malformed payload */
                   }
@@ -300,10 +305,13 @@ export const ClaudeCliDock = memo(function ClaudeCliDock() {
                       tabId: string;
                     };
                     splitForTab(pin);
-                    // Same user-intent rule as the column drop above.
-                    if (projects.some((p) => p.id === pin.projectId)) {
-                      activateProject(pin.projectId);
-                    }
+                    // Same user-intent rule as the column drop above; the new
+                    // split column is active, so omit columnId.
+                    void activate({
+                      source: 'dock-chip',
+                      projectId: pin.projectId,
+                      tabId: pin.tabId,
+                    });
                   } catch {
                     /* ignore */
                   }
@@ -358,8 +366,13 @@ export const ClaudeCliDock = memo(function ClaudeCliDock() {
               <div
                 key={paneKey}
                 onMouseDown={() => {
-                  if (visible && columns[colIdx])
-                    setActiveColumn(columns[colIdx]!.id);
+                  if (visible && columns[colIdx]) {
+                    void activate({
+                      source: 'dock-pane',
+                      projectId: columns[colIdx]!.pin?.projectId,
+                      columnId: columns[colIdx]!.id,
+                    });
+                  }
                 }}
                 className={baseClass}
                 style={baseStyle}
