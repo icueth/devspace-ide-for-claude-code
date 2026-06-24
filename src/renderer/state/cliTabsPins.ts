@@ -173,8 +173,9 @@ export function retargetColumnsForRemovedTab(
  * undockProject repair: columns pinned to the removed project re-target to
  * `fallbackPin` (the surviving selection's active tab) — exactly one, and
  * only when no surviving column already pins that pair; the rest go null.
- * App.tsx's isUndockRetargetTransition guard exists specifically so this
- * background repair never moves the sidebar.
+ * This is a pure column repair: since the dock→sidebar mirror effect was
+ * removed (selection now flows through state/activation.ts), this background
+ * re-target can never move the sidebar on its own.
  */
 export function retargetColumnsForRemovedProject(
   columns: DockColumn[],
@@ -299,8 +300,9 @@ export function pinForActiveSelection(
  * while the nulled columns were later repaired by the defensive auto-pin
  * to a DIFFERENT convention (first docked / tabs[0]), so the chip
  * highlight and the visible pane diverged. The caller must NOT touch the
- * workspace store: App.tsx's isUndockRetargetTransition guard treats this
- * re-target as a background repair that never moves the sidebar.
+ * workspace store: this is a background pane repair, and with the dock→sidebar
+ * mirror effect gone (state/activation.ts owns selection) it never moves the
+ * sidebar.
  */
 export function undockProjectState(
   prev: DockStateSnapshot,

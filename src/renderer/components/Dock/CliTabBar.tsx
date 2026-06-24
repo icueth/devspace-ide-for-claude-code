@@ -198,7 +198,20 @@ export function CliTabBar({
         <div className="flex-1" />
         <button
           type="button"
-          onClick={addColumn}
+          onClick={() => {
+            addColumn();
+            // Keep the sidebar in lock-step with the new active column — there
+            // is no reactive dock→sidebar effect any more (activation router).
+            const s = useCliTabsStore.getState();
+            const col = s.columns.find((c) => c.id === s.activeColumnId);
+            if (col?.pin) {
+              void activate({
+                source: 'dock-pane',
+                projectId: col.pin.projectId,
+                columnId: col.id,
+              });
+            }
+          }}
           title={
             canSplit
               ? `Split column (${columns.length} → ${columns.length + 1} of ${MAX_COLUMNS})`

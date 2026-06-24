@@ -50,21 +50,14 @@ import { useGitStore } from '@renderer/state/git';
 import { useLayoutStore } from '@renderer/state/layout';
 import { usePromptStore } from '@renderer/state/prompt';
 import { useSidebarStore } from '@renderer/state/sidebar';
-import {
-  deriveProjectIdFromDockColumn,
-  isDefensiveAutoPinTransition,
-  isUndockRetargetTransition,
-  markTreeOpen,
-  useWorkspaceStore,
-} from '@renderer/state/workspace';
+import { markTreeOpen, useWorkspaceStore } from '@renderer/state/workspace';
 
-// Edge-detection keys for the two auto-follow effects below. Module-level
+// Edge-detection key for the editor→sidebar follow effect below. Module-level
 // (not useRef) on purpose: an AppInner remount after a RouteErrorBoundary
-// retry must not reset them — a fresh ref would make the tab-follow effect
+// retry must not reset it — a fresh ref would make the tab-follow effect
 // re-fire against the already-populated stores and snap the sidebar to the
 // focused tab's project, the exact revert class v0.38 fixed.
 let lastFollowedTabPath: string | null = null;
-let lastFollowedDockKey: string | null = null;
 
 export default function App() {
   return (
@@ -135,65 +128,13 @@ function AppInner() {
     if (!activeTabPathRaw) return;
     useWorkspaceStore.getState().followTab(activeTabPathRaw);
   }, [activeTabPathRaw]);
-  // v0.30.6 / v0.38 — parallel rule for the chat dock. Clicking the chat tab
-  // chip already calls activateProject explicitly (ClaudeCliDock.handleSelect),
-  // but other paths that change the active column don't:
-  //   • Pane mousedown — only sets activeColumnId
-  //   • addColumn / removeColumn / persisted-state restore
-  // Same edge-trigger discipline, keyed on (active column, its pin): the ref
-  // is primed on mount with the PERSISTED dock state, so the post-scan boot
-  // commit no longer overrides the persisted sidebar selection with a stale
-  // column pin (boot race), and projects/activeProjectId changes alone never
-  // re-fire it. Reads projects/activeProjectId fresh from the store — the
-  // decision must use current values, not render-time closures.
-  //
-  // Perf: ONE derived-string subscription instead of the whole columns array
-  // + activeColumnId. Subscribing to `columns` re-rendered the entire
-  // AppInner shell on every pin change anywhere in the dock; computing the
-  // edge key inside the selector means zustand's string equality suppresses
-  // re-renders for column changes that don't move (active column, its pin).
-  // Same key format the guards were written against:
-  // `${columnId}|${projectId}:${tabId}` (pin part empty when unpinned).
-  const dockFollowKey = useCliTabsStore((s) => {
-    const c = s.columns.find((x) => x.id === s.activeColumnId);
-    return `${s.activeColumnId ?? ''}|${
-      c?.pin ? `${c.pin.projectId}:${c.pin.tabId}` : ''
-    }`;
-  });
-  useEffect(() => {
-    if (dockFollowKey === lastFollowedDockKey) return;
-    const prevKey = lastFollowedDockKey;
-    lastFollowedDockKey = dockFollowKey;
-    // none→pinned on the same column = ClaudeCliDock's defensive auto-pin
-    // (background event, e.g. idle pty auto-close undocked the active
-    // project). Prime the key but don't follow — user gestures that pin an
-    // empty column activate the project explicitly.
-    if (isDefensiveAutoPinTransition(prevKey, dockFollowKey)) return;
-    // Same idea for pinned→pinned repairs after an undock: if the previous
-    // pin's project lost its chip, the new pin is the dock healing itself,
-    // not the user choosing a project.
-    if (
-      isUndockRetargetTransition(
-        prevKey,
-        dockFollowKey,
-        (pid) => !!useCliTabsStore.getState().projectsById[pid],
-      )
-    ) {
-      return;
-    }
-    // Columns/activeColumnId come FRESH from getState() — the effect only
-    // closes over the derived key string, never render-time column objects.
-    const { columns, activeColumnId } = useCliTabsStore.getState();
-    const ws = useWorkspaceStore.getState();
-    const derived = deriveProjectIdFromDockColumn(
-      columns,
-      activeColumnId,
-      ws.projects,
-    );
-    if (derived && derived !== ws.activeProjectId) {
-      ws.setActiveProject(derived);
-    }
-  }, [dockFollowKey]);
+  // v0.39 — the dock→sidebar mirror effect (and its isDefensiveAutoPin /
+  // isUndockRetarget gesture-origin guards) is GONE. Every dock gesture now
+  // calls the activation router (state/activation.ts) directly with an explicit
+  // source, so the sidebar/workspace follow imperatively — no reactive effect
+  // has to guess whether an active-column change came from the user or a
+  // background repair (defensive auto-pin, idle-pty undock), which is what made
+  // the old approach perpetually leaky.
   const [bottomInitialTab, setBottomInitialTab] = useState<'terminal' | 'git' | 'search'>(
     'terminal',
   );

@@ -4,10 +4,7 @@ import { useCliTabsStore } from '../cliTabs';
 import { useEditorStore } from '../editor';
 import {
   __resetProjectMruForTests,
-  deriveProjectIdFromDockColumn,
   deriveProjectIdFromTab,
-  isDefensiveAutoPinTransition,
-  isUndockRetargetTransition,
   markTreeOpen,
   pickEditorTabForProject,
   useWorkspaceStore,
@@ -116,51 +113,6 @@ describe('deriveProjectIdFromTab', () => {
   });
 });
 
-describe('deriveProjectIdFromDockColumn', () => {
-  const projects = [
-    { id: 'a' },
-    { id: 'b' },
-    { id: 'c' },
-  ];
-  const columns = [
-    { id: 'col-0', pin: { projectId: 'a' } },
-    { id: 'col-1', pin: { projectId: 'b' } },
-    { id: 'col-2', pin: null },
-  ];
-
-  it('returns null when activeColumnId is missing', () => {
-    expect(deriveProjectIdFromDockColumn(columns, null, projects)).toBeNull();
-    expect(deriveProjectIdFromDockColumn(columns, undefined, projects)).toBeNull();
-    expect(deriveProjectIdFromDockColumn(columns, '', projects)).toBeNull();
-  });
-
-  it('returns the pinned project for the active column', () => {
-    expect(deriveProjectIdFromDockColumn(columns, 'col-0', projects)).toBe('a');
-    expect(deriveProjectIdFromDockColumn(columns, 'col-1', projects)).toBe('b');
-  });
-
-  it('returns null when the active column has no pin', () => {
-    expect(deriveProjectIdFromDockColumn(columns, 'col-2', projects)).toBeNull();
-  });
-
-  it('returns null when activeColumnId points to a non-existent column', () => {
-    // Stale activeColumnId after a removeColumn — guard against firing
-    // setActiveProject with garbage.
-    expect(deriveProjectIdFromDockColumn(columns, 'col-99', projects)).toBeNull();
-  });
-
-  it('returns null when the pinned project no longer exists', () => {
-    // Project was removed from workspace but column still pins it. Don't
-    // route the sidebar to a ghost project.
-    const stale = [{ id: 'col-0', pin: { projectId: 'ghost' } }];
-    expect(deriveProjectIdFromDockColumn(stale, 'col-0', projects)).toBeNull();
-  });
-
-  it('returns null when columns list is empty', () => {
-    expect(deriveProjectIdFromDockColumn([], 'col-0', projects)).toBeNull();
-  });
-});
-
 describe('deriveProjectIdFromTab — html-preview tabs', () => {
   const projects = [
     { id: 'a', path: '/Users/x/Code/projA' },
@@ -247,69 +199,6 @@ describe('pickEditorTabForProject', () => {
     const mru = new Map<string, string>();
     const tabs = [tab('/Users/x/Code/projA/a.ts')];
     expect(pickEditorTabForProject('b', mru, tabs, projects)).toBeNull();
-  });
-});
-
-describe('isDefensiveAutoPinTransition', () => {
-  it('detects none→pinned on the same column (auto-pin signature)', () => {
-    expect(isDefensiveAutoPinTransition('col-0|', 'col-0|a:t1')).toBe(true);
-  });
-
-  it('allows pinned→pinned retargets on the same column', () => {
-    expect(isDefensiveAutoPinTransition('col-0|a:t1', 'col-0|b:t2')).toBe(false);
-  });
-
-  it('allows column switches, even onto a pinned column', () => {
-    expect(isDefensiveAutoPinTransition('col-0|', 'col-1|a:t1')).toBe(false);
-    expect(isDefensiveAutoPinTransition('col-0|a:t1', 'col-1|b:t2')).toBe(false);
-  });
-
-  it('allows the first observation (no previous key)', () => {
-    expect(isDefensiveAutoPinTransition(null, 'col-0|a:t1')).toBe(false);
-  });
-
-  it('allows pinned→none (undock clears the pin)', () => {
-    expect(isDefensiveAutoPinTransition('col-0|a:t1', 'col-0|')).toBe(false);
-  });
-});
-
-describe('isUndockRetargetTransition', () => {
-  const dockedSet = (...ids: string[]) => {
-    const set = new Set(ids);
-    return (pid: string) => set.has(pid);
-  };
-
-  it('detects a same-column repair after the previous pin project undocked', () => {
-    expect(
-      isUndockRetargetTransition('col-0|gone:t1', 'col-0|b:t2', dockedSet('b')),
-    ).toBe(true);
-  });
-
-  it('allows pinned→pinned when the previous project is still docked (user retarget)', () => {
-    expect(
-      isUndockRetargetTransition('col-0|a:t1', 'col-0|b:t2', dockedSet('a', 'b')),
-    ).toBe(false);
-  });
-
-  it('allows column switches even when the previous pin project undocked', () => {
-    expect(
-      isUndockRetargetTransition('col-0|gone:t1', 'col-1|b:t2', dockedSet('b')),
-    ).toBe(false);
-  });
-
-  it('leaves none→pinned and pinned→none to the other rules', () => {
-    expect(isUndockRetargetTransition('col-0|', 'col-0|b:t2', dockedSet('b'))).toBe(
-      false,
-    );
-    expect(
-      isUndockRetargetTransition('col-0|gone:t1', 'col-0|', dockedSet()),
-    ).toBe(false);
-  });
-
-  it('allows the first observation (no previous key)', () => {
-    expect(isUndockRetargetTransition(null, 'col-0|b:t2', dockedSet('b'))).toBe(
-      false,
-    );
   });
 });
 

@@ -126,11 +126,11 @@ export const ClaudeCliDock = memo(function ClaudeCliDock() {
     activeCol?.pin &&
     tabsByProject[activeCol.pin.projectId]?.some((t) => t.id === activeCol.pin!.tabId);
   if (!pinIsValid && dockedProjects.length > 0 && activeCol) {
-    // Prefer the workspace's ACTIVE project over dockedProjects[0]. The
-    // auto-pin fires from background events too (idle pty auto-close →
-    // undockProject nulls the pin) — pinning the first docked project would
-    // make the dock→sidebar follow effect switch the user's project with
-    // zero user action.
+    // Prefer the workspace's ACTIVE project over dockedProjects[0] so the
+    // repaired pin matches the sidebar. The auto-pin fires from background
+    // events too (idle pty auto-close → undockProject nulls the pin); it is a
+    // pure visual repair and no longer feeds any dock→sidebar effect, so it
+    // can't move the user's project on its own.
     const preferred = dockedProjects.find(
       (p) => p.id === activeProjectId && (tabsByProject[p.id]?.length ?? 0) > 0,
     );
@@ -228,7 +228,20 @@ export const ClaudeCliDock = memo(function ClaudeCliDock() {
                   </button>
                   <button
                     type="button"
-                    onClick={() => removeColumn(col.id)}
+                    onClick={() => {
+                      removeColumn(col.id);
+                      // Sync the sidebar to the surviving active column (no
+                      // reactive dock→sidebar effect any more).
+                      const s = useCliTabsStore.getState();
+                      const c = s.columns.find((x) => x.id === s.activeColumnId);
+                      if (c?.pin) {
+                        void activate({
+                          source: 'dock-pane',
+                          projectId: c.pin.projectId,
+                          columnId: c.id,
+                        });
+                      }
+                    }}
                     title="Close split"
                     className="flex h-[18px] w-[18px] items-center justify-center rounded-full border border-border bg-surface-2/85 text-text-muted transition hover:bg-surface-3 hover:text-semantic-error"
                   >

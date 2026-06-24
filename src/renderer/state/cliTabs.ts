@@ -218,8 +218,9 @@ export const useCliTabsStore = create<CliTabsState>((set, get) => {
         .catch(() => undefined);
 
       // undockProjectState picks ONE fallback for the selection AND the
-      // column re-target (see its doc) — no workspace-store calls here,
-      // App.tsx's isUndockRetargetTransition guard depends on that.
+      // column re-target (see its doc) — no workspace-store calls here, so this
+      // background repair stays a pure dock operation (the dock→sidebar mirror
+      // that used to react to it is gone; selection flows via activation.ts).
       set((prev) => {
         const next = undockProjectState(prev, projectId);
         persist(next);
