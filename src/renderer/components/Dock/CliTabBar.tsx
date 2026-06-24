@@ -6,6 +6,7 @@ import { cn } from '@renderer/lib/utils';
 import { activate } from '@renderer/state/activation';
 import { useCliTabsStore } from '@renderer/state/cliTabs';
 import { findColumnIdPinning } from '@renderer/state/cliTabsPins';
+import { useWorkspaceStore } from '@renderer/state/workspace';
 import type { CliTab, DockedProjectMeta } from '@shared/types';
 
 // Shared with ClaudeCliDock's drop-zone overlay ("+ Split" only renders
@@ -40,6 +41,15 @@ export function CliTabBar({
   const undockProject = useCliTabsStore((s) => s.undockProject);
   const reloadTab = useCliTabsStore((s) => s.reloadTab);
   const addColumn = useCliTabsStore((s) => s.addColumn);
+  // D2 — chips for projects NOT in the current workspace get a small workspace
+  // label so multiple workspaces' chats are distinguishable in one bar. Plan C:
+  // clicking such a chip switches the whole workspace (handleSelect → router).
+  const activeWsId = useWorkspaceStore((s) => s.active?.id);
+  const knownWorkspaces = useWorkspaceStore((s) => s.known);
+  const labelForWorkspace = (wsId: string): string | undefined =>
+    wsId === activeWsId
+      ? undefined
+      : (knownWorkspaces.find((w) => w.id === wsId)?.name ?? '⋯');
 
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
 
@@ -174,6 +184,7 @@ export function CliTabBar({
             tab={tab}
             isActive={isActive}
             pinnedElsewhere={pinnedElsewhere}
+            workspaceLabel={labelForWorkspace(project.workspaceId)}
             onSelect={() => handleSelect(project.id, tab.id)}
             onClose={() => handleClose(project.id, tab.id)}
             onContextMenu={(e) => handleContextMenu(e, project.id, tab.id)}
@@ -382,6 +393,9 @@ interface TabChipProps {
   tab: CliTab;
   isActive: boolean;
   pinnedElsewhere: boolean;
+  // Set only when the chip belongs to a workspace other than the active one
+  // (D2). Rendered as a small label so cross-workspace chats are recognisable.
+  workspaceLabel?: string;
   onSelect: () => void;
   onClose: () => void;
   onContextMenu: (e: React.MouseEvent) => void;
@@ -394,6 +408,7 @@ function TabChip({
   tab,
   isActive,
   pinnedElsewhere,
+  workspaceLabel,
   onSelect,
   onClose,
   onContextMenu,
@@ -435,7 +450,7 @@ function TabChip({
         type="button"
         onClick={onSelect}
         className="flex max-w-[180px] items-center gap-2 px-2.5"
-        title={`${project.name} · ${tab.label}\nRight-click for Reload / Close · Drag to split`}
+        title={`${workspaceLabel ? `[${workspaceLabel}] ` : ''}${project.name} · ${tab.label}\nRight-click for Reload / Close · Drag to split`}
       >
         <span
           className={cn(
@@ -448,6 +463,14 @@ function TabChip({
           )}
         />
         <span className="flex min-w-0 flex-col items-start leading-[1.15]">
+          {workspaceLabel && (
+            <span
+              className="max-w-full truncate text-[8.5px] font-medium uppercase tracking-wide text-accent-2/70"
+              title={`Workspace: ${workspaceLabel}`}
+            >
+              {workspaceLabel}
+            </span>
+          )}
           <span
             className={cn(
               'truncate text-[10.5px] font-semibold',
