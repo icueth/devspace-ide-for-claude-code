@@ -104,6 +104,10 @@ interface CliTabsState extends PersistedShape {
   dockProject: (project: DockedProjectMeta) => CliTab;
   undockProject: (projectId: string) => void;
   setActiveDockedProject: (projectId: string | null) => void;
+  // Collapse the dock to a single column pinned to (projectId, tabId). Used on
+  // a cross-workspace switch (activation router) so split columns don't keep
+  // showing panes from the workspace we just left.
+  focusSingleProject: (projectId: string, tabId: string) => void;
   addTab: (projectId: string) => CliTab | null;
   removeTab: (projectId: string, tabId: string) => void;
   setActiveTab: (projectId: string, tabId: string) => void;
@@ -218,6 +222,23 @@ export const useCliTabsStore = create<CliTabsState>((set, get) => {
       // App.tsx's isUndockRetargetTransition guard depends on that.
       set((prev) => {
         const next = undockProjectState(prev, projectId);
+        persist(next);
+        return next;
+      });
+    },
+
+    focusSingleProject(projectId, tabId) {
+      set((prev) => {
+        const next: PersistedShape = {
+          ...prev,
+          columns: [{ id: prev.activeColumnId, pin: { projectId, tabId } }],
+          activeColumnId: prev.activeColumnId,
+          activeDockedProjectId: projectId,
+          activeTabIdByProject: {
+            ...prev.activeTabIdByProject,
+            [projectId]: tabId,
+          },
+        };
         persist(next);
         return next;
       });

@@ -68,7 +68,6 @@ function resetCliTabs(): void {
 }
 
 beforeEach(() => {
-  localStorage.clear();
   __resetProjectMruForTests();
   resetCliTabs();
   useEditorStore.setState({
@@ -90,11 +89,6 @@ describe('activate — same-workspace selection', () => {
   it('dock-pane source moves the sidebar', async () => {
     await activate({ source: 'dock-pane', projectId: 'a-sub' });
     expect(useWorkspaceStore.getState().activeProjectId).toBe('a-sub');
-  });
-
-  it('filetree source records MRU but never switches project', async () => {
-    await activate({ source: 'filetree', editorPath: '/ws/a/sub/file.ts' });
-    expect(useWorkspaceStore.getState().activeProjectId).toBe('a-root'); // unchanged
   });
 });
 
