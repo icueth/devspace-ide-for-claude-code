@@ -136,6 +136,7 @@ export interface DevspaceApi {
     }) => Promise<Task>;
     merge: (id: string) => Promise<void>;
     discard: (id: string) => Promise<void>;
+    dismiss: (id: string) => Promise<void>;
     diffStat: (
       id: string,
     ) => Promise<{ files: number; additions: number; deletions: number }>;

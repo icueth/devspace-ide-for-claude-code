@@ -1,4 +1,4 @@
-import { CircleDot, Loader2, TriangleAlert } from 'lucide-react';
+import { CircleDot, Loader2, TriangleAlert, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
 
 import { api } from '@renderer/lib/api';
@@ -19,16 +19,16 @@ const AGENT_BADGE: Record<
 };
 
 // How each status reads in the row. `busy` shows the spinner; `ready` the green
-// dot; `error` the warning glyph.
+// dot; `done` a check tone; `error` the warning glyph.
 const STATUS_VIEW: Record<
   TaskStatus,
-  { label: string; tone: 'busy' | 'ready' | 'idle' | 'error' }
+  { label: string; tone: 'busy' | 'ready' | 'done' | 'idle' | 'error' }
 > = {
   'setting-up': { label: 'Setting up', tone: 'busy' },
   running: { label: 'Generating', tone: 'busy' },
   'awaiting-review': { label: 'Ready', tone: 'ready' },
   integrating: { label: 'Merging', tone: 'busy' },
-  done: { label: 'Done', tone: 'idle' },
+  done: { label: 'Merged', tone: 'done' },
   discarded: { label: 'Discarded', tone: 'idle' },
   error: { label: 'Error', tone: 'error' },
 };
@@ -51,9 +51,11 @@ interface TaskRowProps {
   task: Task;
   active: boolean;
   onClick: () => void;
+  /** When provided, a hover-reveal dismiss (×) clears this finished task. */
+  onDismiss?: () => void;
 }
 
-export function TaskRow({ task, active, onClick }: TaskRowProps) {
+export function TaskRow({ task, active, onClick, onDismiss }: TaskRowProps) {
   const badge = AGENT_BADGE[task.agent] ?? AGENT_BADGE.claude;
   const view = STATUS_VIEW[task.status];
   const [stat, setStat] = useState<{ additions: number; deletions: number } | null>(
@@ -62,7 +64,10 @@ export function TaskRow({ task, active, onClick }: TaskRowProps) {
 
   // Lazily pull the +/- summary per row (cheap `git --shortstat`, best-effort).
   // Refetch whenever the status flips — a generating agent's diff keeps growing.
+  // A finished task's worktree is gone, so skip the fetch (it would just error).
+  const terminal = task.status === 'done' || task.status === 'discarded';
   useEffect(() => {
+    if (terminal) return;
     let cancelled = false;
     void api.tasks.diffStat(task.id).then((s) => {
       if (!cancelled) setStat({ additions: s.additions, deletions: s.deletions });
@@ -70,17 +75,14 @@ export function TaskRow({ task, active, onClick }: TaskRowProps) {
     return () => {
       cancelled = true;
     };
-  }, [task.id, task.status]);
+  }, [task.id, task.status, terminal]);
 
   const hasDiff = !!stat && (stat.additions > 0 || stat.deletions > 0);
 
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      title={`${task.title}\n${task.sourceRepoPath} · ${task.branch}`}
+    <div
       className={cn(
-        'group relative mx-1.5 flex gap-2.5 rounded-[9px] border px-2 py-2 text-left transition',
+        'group relative mx-1.5 flex gap-2.5 rounded-[9px] border px-2 py-2 transition',
         active
           ? 'border-border-emphasis bg-surface-3'
           : 'border-transparent hover:bg-surface-2',
@@ -94,52 +96,73 @@ export function TaskRow({ task, active, onClick }: TaskRowProps) {
         />
       )}
 
-      <span
-        aria-hidden
-        className="mt-[1px] flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-[7px] text-[13px] font-bold"
-        style={{
-          background: badge.bg,
-          color: badge.fg,
-          boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.15)',
-        }}
+      <button
+        type="button"
+        onClick={onClick}
+        title={`${task.title}\n${task.sourceRepoPath} · ${task.branch}`}
+        className="flex min-w-0 flex-1 gap-2.5 text-left"
       >
-        {badge.glyph}
-      </span>
-
-      <span className="min-w-0 flex-1">
-        <span className="flex items-baseline gap-2">
-          <span
-            className={cn(
-              'flex-1 truncate text-[12.5px] font-semibold',
-              active ? 'text-text' : 'text-text-secondary group-hover:text-text',
-            )}
-          >
-            {task.title}
-          </span>
-          <span className="shrink-0 text-[10px] text-text-dim">
-            {timeAgo(task.createdAt, Date.now())}
-          </span>
+        <span
+          aria-hidden
+          className="mt-[1px] flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-[7px] text-[13px] font-bold"
+          style={{
+            background: badge.bg,
+            color: badge.fg,
+            boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.15)',
+          }}
+        >
+          {badge.glyph}
         </span>
 
-        <span className="mt-[3px] flex items-center gap-2">
-          <StatusChip label={view.label} tone={view.tone} />
-          {hasDiff && (
-            <span className="ml-auto flex shrink-0 gap-1.5 font-mono text-[10px]">
-              {stat!.additions > 0 && (
-                <span className="text-semantic-success">+{stat!.additions}</span>
+        <span className="min-w-0 flex-1">
+          <span className="flex items-baseline gap-2">
+            <span
+              className={cn(
+                'flex-1 truncate text-[12.5px] font-semibold',
+                active ? 'text-text' : 'text-text-secondary group-hover:text-text',
               )}
-              {stat!.deletions > 0 && (
-                <span className="text-semantic-error">−{stat!.deletions}</span>
-              )}
+            >
+              {task.title}
             </span>
-          )}
-        </span>
+            <span className="shrink-0 text-[10px] text-text-dim">
+              {timeAgo(task.createdAt, Date.now())}
+            </span>
+          </span>
 
-        <span className="mt-1 block truncate font-mono text-[9.5px] text-text-dim">
-          {basename(task.sourceRepoPath)} · {task.branch}
+          <span className="mt-[3px] flex items-center gap-2">
+            <StatusChip label={view.label} tone={view.tone} />
+            {hasDiff && (
+              <span className="ml-auto flex shrink-0 gap-1.5 font-mono text-[10px]">
+                {stat!.additions > 0 && (
+                  <span className="text-semantic-success">+{stat!.additions}</span>
+                )}
+                {stat!.deletions > 0 && (
+                  <span className="text-semantic-error">−{stat!.deletions}</span>
+                )}
+              </span>
+            )}
+          </span>
+
+          <span className="mt-1 block truncate font-mono text-[9.5px] text-text-dim">
+            {basename(task.sourceRepoPath)} · {task.branch}
+          </span>
         </span>
-      </span>
-    </button>
+      </button>
+
+      {onDismiss && (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onDismiss();
+          }}
+          title="Dismiss task"
+          className="absolute right-1.5 top-1.5 flex h-5 w-5 items-center justify-center rounded-[5px] text-text-muted opacity-0 transition group-hover:opacity-70 hover:bg-surface-4 hover:!opacity-100 hover:text-text"
+        >
+          <X size={11} />
+        </button>
+      )}
+    </div>
   );
 }
 
@@ -148,7 +171,7 @@ function StatusChip({
   tone,
 }: {
   label: string;
-  tone: 'busy' | 'ready' | 'idle' | 'error';
+  tone: 'busy' | 'ready' | 'done' | 'idle' | 'error';
 }) {
   return (
     <span
@@ -156,6 +179,7 @@ function StatusChip({
         'inline-flex items-center gap-1.5 text-[10.5px] font-medium',
         tone === 'busy' && 'text-accent-2',
         tone === 'ready' && 'text-semantic-success',
+        tone === 'done' && 'text-text-muted',
         tone === 'error' && 'text-semantic-error',
         tone === 'idle' && 'text-text-muted',
       )}
@@ -167,6 +191,7 @@ function StatusChip({
           style={{ boxShadow: '0 0 6px currentColor' }}
         />
       )}
+      {tone === 'done' && <CircleDot size={10} className="text-semantic-success" />}
       {tone === 'error' && <TriangleAlert size={10} />}
       {tone === 'idle' && <CircleDot size={10} />}
       {label}

@@ -30,6 +30,7 @@ export function TasksPanel() {
   const tasks = useTasksStore((s) => s.tasks);
   const activeTaskId = useTasksStore((s) => s.activeTaskId);
   const setActiveTask = useTasksStore((s) => s.setActiveTask);
+  const dismiss = useTasksStore((s) => s.dismiss);
   const refresh = useTasksStore((s) => s.refresh);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [query, setQuery] = useState('');
@@ -102,6 +103,11 @@ export function TasksPanel() {
                   task={t}
                   active={t.id === activeTaskId}
                   onClick={() => setActiveTask(t.id)}
+                  onDismiss={
+                    t.status === 'done' || t.status === 'error'
+                      ? () => void dismiss(t.id)
+                      : undefined
+                  }
                 />
               ))}
             </TaskGroup>

@@ -1,9 +1,10 @@
-import { GitMerge, RefreshCw, Trash2, Upload } from 'lucide-react';
+import { Check, GitMerge, RefreshCw, Trash2, Upload } from 'lucide-react';
 import { lazy, Suspense, useEffect, useState } from 'react';
 
 import { api } from '@renderer/lib/api';
 import { cn } from '@renderer/lib/utils';
 import { useTasksStore } from '@renderer/state/tasks';
+import type { Task } from '@shared/types';
 
 const ClaudeCliPane = lazy(() =>
   import('@renderer/components/Dock/ClaudeCliPane').then((m) => ({
@@ -19,6 +20,7 @@ export function TaskDetail() {
   const merge = useTasksStore((s) => s.merge);
   const discard = useTasksStore((s) => s.discard);
   const createPr = useTasksStore((s) => s.createPr);
+  const dismiss = useTasksStore((s) => s.dismiss);
   const task = tasks.find((t) => t.id === activeTaskId);
 
   const [tab, setTab] = useState<'terminal' | 'diff'>('terminal');
@@ -51,6 +53,12 @@ export function TaskDetail() {
         Select a task, or create one to run an agent in an isolated worktree.
       </div>
     );
+  }
+
+  // A merged task has no worktree/session anymore, so the terminal + diff would
+  // both error — show a closing summary with a dismiss instead.
+  if (task.status === 'done') {
+    return <DoneView task={task} onDismiss={() => void dismiss(task.id)} />;
   }
 
   const runPr = async (): Promise<void> => {
@@ -185,6 +193,34 @@ export function TaskDetail() {
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+function DoneView({ task, onDismiss }: { task: Task; onDismiss: () => void }) {
+  return (
+    <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
+      <div className="flex h-12 w-12 items-center justify-center rounded-full bg-semantic-success/15">
+        <Check size={22} className="text-semantic-success" />
+      </div>
+      <div className="flex flex-col gap-1">
+        <span className="text-[13px] font-semibold text-text">{task.title}</span>
+        <span className="text-[11px] text-text-secondary">
+          Merged into <span className="font-mono text-text">{task.baseBranch}</span>
+        </span>
+        <span className="font-mono text-[10px] text-text-dim">{task.branch}</span>
+        <span className="mt-1 max-w-[280px] text-[10.5px] leading-relaxed text-text-muted">
+          Worktree &amp; branch were cleaned up — the changes now live in{' '}
+          {task.baseBranch}.
+        </span>
+      </div>
+      <button
+        type="button"
+        onClick={onDismiss}
+        className="mt-1 flex items-center gap-1.5 rounded-[6px] border border-border px-3 py-1.5 text-[11px] text-text-secondary transition hover:bg-surface-3 hover:text-text"
+      >
+        <Trash2 size={12} /> Dismiss
+      </button>
     </div>
   );
 }

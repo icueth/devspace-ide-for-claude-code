@@ -92,6 +92,7 @@ export const IPC = {
   TASK_MERGE: 'task:merge',
   TASK_CREATE_PR: 'task:create-pr',
   TASK_DISCARD: 'task:discard',
+  TASK_DISMISS: 'task:dismiss', // drop a finished (done/discarded) record
   TASK_DIFF_STAT: 'task:diff-stat',
   TASK_DIFF: 'task:diff', // unified `git diff <base>` text for review
   TASK_CHANGED: 'task:changed', // main → renderer push on any list change

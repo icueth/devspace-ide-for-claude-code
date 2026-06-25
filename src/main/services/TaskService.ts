@@ -53,12 +53,19 @@ export function createTaskService(deps: TaskServiceDeps) {
     return get(id)!;
   }
 
-  async function teardown(t: Task): Promise<void> {
+  // Release the OS resources a task holds — agent session, worktree, branch,
+  // and its pathScope allowlist entry — WITHOUT touching the task record.
+  async function cleanupResources(t: Task): Promise<void> {
     await deps.killSession(t.sessionKey).catch(() => undefined);
     await removeWorktree(t.sourceRepoPath, t.worktreePath, t.branch).catch(
       () => undefined,
     );
     removeWorktreeScope(t.worktreePath);
+  }
+
+  // Free resources AND drop the record from the list (the discard path).
+  async function remove(t: Task): Promise<void> {
+    await cleanupResources(t);
     tasks = tasks.filter((x) => x.id !== t.id);
     await persist();
   }
@@ -70,6 +77,9 @@ export function createTaskService(deps: TaskServiceDeps) {
       tasks = (await loadTasks(tasksFile)).tasks;
       let dirty = false;
       tasks = tasks.map((t) => {
+        // Finished tasks (merged/discarded) intentionally have no worktree —
+        // they're kept only as a historical record, so never flag them error.
+        if (t.status === 'done' || t.status === 'discarded') return t;
         if (!fs.existsSync(t.worktreePath)) {
           dirty = true;
           return { ...t, status: 'error', error: 'worktree missing' };
@@ -122,13 +132,31 @@ export function createTaskService(deps: TaskServiceDeps) {
       if (!t) return;
       set(id, { status: 'integrating' });
       await mergeBranch(t.sourceRepoPath, t.branch);
-      await teardown(t);
+      // Merge landed: free the worktree/session/branch but KEEP the task as a
+      // 'done' record so the user can see what was integrated (cleared later
+      // via dismiss). Previously this removed the task outright, which made a
+      // successful merge look like the task had vanished.
+      await cleanupResources(t);
+      set(id, { status: 'done' });
+      // Durably flush the terminal state before returning. set() persists
+      // fire-and-forget; if the app exited right after merge the 'done' status
+      // could be lost and boot reconcile would then mis-flag it as 'error'
+      // (its worktree is intentionally gone).
+      await persist();
     },
 
     async discard(id: string): Promise<void> {
       const t = get(id);
       if (!t) return;
-      await teardown(t);
+      await remove(t);
+    },
+
+    // Drop a finished (done/discarded/error) task from the list. Resources are
+    // already released by merge/discard, so this is pure record removal.
+    async dismiss(id: string): Promise<void> {
+      if (!get(id)) return;
+      tasks = tasks.filter((x) => x.id !== id);
+      await persist();
     },
 
     // Proactive "changes ready" transition, driven by the IPC idle poller

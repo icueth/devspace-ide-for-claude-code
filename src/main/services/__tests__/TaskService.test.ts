@@ -65,7 +65,7 @@ describe('TaskService', () => {
     expect(svc.list()).toHaveLength(0);
   });
 
-  it('merge integrates the branch and removes the worktree', async () => {
+  it('merge integrates the branch, cleans the worktree, and keeps the task as done', async () => {
     const svc = makeService();
     const task = await svc.create({ title: 'Y', sourceRepoPath: repo, agent: 'claude' });
     fs.writeFileSync(path.join(task.worktreePath, 'b.txt'), 'two\n');
@@ -74,8 +74,40 @@ describe('TaskService', () => {
       stdio: 'ignore',
     });
     await svc.merge(task.id);
-    expect(fs.existsSync(path.join(repo, 'b.txt'))).toBe(true);
+    expect(fs.existsSync(path.join(repo, 'b.txt'))).toBe(true); // merged into base
+    expect(fs.existsSync(task.worktreePath)).toBe(false); // worktree cleaned
+    expect(svc.deps.killSession).toHaveBeenCalledWith(task.sessionKey);
+    const list = svc.list();
+    expect(list).toHaveLength(1);
+    expect(list[0].status).toBe('done');
+  });
+
+  it('dismiss drops a finished (merged) task from the list', async () => {
+    const svc = makeService();
+    const task = await svc.create({ title: 'Dm', sourceRepoPath: repo, agent: 'claude' });
+    fs.writeFileSync(path.join(task.worktreePath, 'b.txt'), 'two\n');
+    execSync('git add -A && git commit -qm work', {
+      cwd: task.worktreePath,
+      stdio: 'ignore',
+    });
+    await svc.merge(task.id);
+    expect(svc.list()).toHaveLength(1);
+    await svc.dismiss(task.id);
     expect(svc.list()).toHaveLength(0);
+  });
+
+  it('init keeps a merged (done) task even though its worktree is gone', async () => {
+    const svc = makeService();
+    const task = await svc.create({ title: 'M', sourceRepoPath: repo, agent: 'claude' });
+    fs.writeFileSync(path.join(task.worktreePath, 'b.txt'), 'two\n');
+    execSync('git add -A && git commit -qm work', {
+      cwd: task.worktreePath,
+      stdio: 'ignore',
+    });
+    await svc.merge(task.id); // worktree removed, status → done
+    const svc2 = makeService(); // fresh instance, same home → reloads tasks.json
+    await svc2.init();
+    expect(svc2.list().find((x) => x.id === task.id)?.status).toBe('done');
   });
 
   it('init marks tasks whose worktree vanished as error', async () => {

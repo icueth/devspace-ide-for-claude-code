@@ -63,6 +63,11 @@ export function registerTasksIpc(): void {
     push();
   });
 
+  ipcMain.handle(IPC.TASK_DISMISS, async (_e, id: string) => {
+    await svc.dismiss(id);
+    push();
+  });
+
   ipcMain.handle(IPC.TASK_DIFF_STAT, async (_e, id: string) => {
     const t = svc.list().find((x) => x.id === id);
     if (!t) return { files: 0, additions: 0, deletions: 0 };
