@@ -4,7 +4,7 @@ import { promisify } from 'node:util';
 
 import { BrowserWindow, ipcMain, Notification } from 'electron';
 
-import { getSessionStats } from '@main/services/PtyPool';
+import { getSessionStats, writeToPty } from '@main/services/PtyPool';
 import {
   createTaskService,
   type TaskService,
@@ -13,12 +13,33 @@ import {
   killWorktreeSession,
   launchClaudeInWorktree,
 } from '@main/services/TaskService.session';
-import { startTaskControlSocket } from '@main/services/taskControl';
+import {
+  startTaskControlSocket,
+  type TaskControlDeps,
+} from '@main/services/taskControl';
 import { assertInWorkspace } from '@main/utils/pathScope';
 import { IPC } from '@shared/ipc-channels';
 import type { Task } from '@shared/types';
 
 const pexec = promisify(execFile);
+
+// Worktree diff vs base branch, capped so a huge diff can't blow the IPC
+// payload / MCP tool reply. Shared by the TASK_DIFF handler and the chat→task
+// `task_changes` op.
+async function computeTaskDiff(t: Task): Promise<string> {
+  try {
+    const { stdout } = await pexec(
+      'git',
+      ['-C', t.worktreePath, 'diff', t.baseBranch],
+      { maxBuffer: 4 * 1024 * 1024 },
+    );
+    return stdout.length > 200_000
+      ? `${stdout.slice(0, 200_000)}\n… (diff truncated)`
+      : stdout;
+  } catch (e) {
+    return `# failed to compute diff: ${(e as Error).message}`;
+  }
+}
 
 export function registerTasksIpc(): void {
   const svc = createTaskService({
@@ -97,21 +118,7 @@ export function registerTasksIpc(): void {
 
   ipcMain.handle(IPC.TASK_DIFF, async (_e, id: string) => {
     const t = svc.list().find((x) => x.id === id);
-    if (!t) return '';
-    try {
-      // Working tree (committed + uncommitted) vs the base branch. Cap output
-      // so a huge diff can't blow the IPC payload / renderer.
-      const { stdout } = await pexec(
-        'git',
-        ['-C', t.worktreePath, 'diff', t.baseBranch],
-        { maxBuffer: 4 * 1024 * 1024 },
-      );
-      return stdout.length > 200_000
-        ? stdout.slice(0, 200_000) + '\n… (diff truncated)'
-        : stdout;
-    } catch (e) {
-      return `# failed to compute diff: ${(e as Error).message}`;
-    }
+    return t ? computeTaskDiff(t) : '';
   });
 
   ipcMain.handle(IPC.TASK_CREATE_PR, async (_e, id: string) => {
@@ -142,8 +149,14 @@ export function registerTasksIpc(): void {
   startReviewPoller(svc, push);
 
   // chat→task bridge: a unix socket the bundled stdio MCP server relays through
-  // so the main-chat agent can fork tasks by tool call (see taskControl).
-  startTaskControlSocket(svc, push);
+  // so the main-chat agent can create / monitor / drive / merge tasks by tool
+  // call (see taskControl). Side-effects (PTY write, git diff) injected here.
+  const taskControlDeps: TaskControlDeps = {
+    sendToSession: (key, text) =>
+      writeToPty(key, /[\r\n]$/.test(text) ? text : `${text}\r`),
+    diffOf: (t) => computeTaskDiff(t),
+  };
+  startTaskControlSocket(svc, push, taskControlDeps);
 }
 
 // ── awaiting-review auto-detection ───────────────────────────────────────────

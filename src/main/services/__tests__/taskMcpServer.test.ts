@@ -13,7 +13,7 @@ const SCRIPT = path.resolve(process.cwd(), 'resources/task-mcp/server.mjs');
 
 let sockPath: string;
 let socketServer: net.Server;
-let received: Array<{ op?: string; title?: string; repo?: string }>;
+let received: Array<Record<string, unknown>>;
 
 beforeEach(async () => {
   received = [];
@@ -29,18 +29,19 @@ beforeEach(async () => {
       if (nl < 0) return;
       const req = JSON.parse(buf.slice(0, nl));
       received.push(req);
-      const reply =
-        req.op === 'create'
-          ? {
-              ok: true,
-              task: {
-                id: 't1',
-                title: req.title,
-                status: 'running',
-                branch: 'devspace/task/x',
-              },
-            }
-          : { ok: true, tasks: [{ id: 't1', title: 'X', status: 'running', branch: 'b' }] };
+      let reply: Record<string, unknown>;
+      if (req.op === 'create') {
+        reply = {
+          ok: true,
+          task: { id: 't1', title: req.title, status: 'running', branch: 'devspace/task/x' },
+        };
+      } else if (req.op === 'list') {
+        reply = { ok: true, tasks: [{ id: 't1', title: 'X', status: 'running', branch: 'b' }] };
+      } else if (req.op === 'changes') {
+        reply = { ok: true, diff: '--- a\n+++ b\n+line' };
+      } else {
+        reply = { ok: true }; // merge / discard / send / get
+      }
       conn.write(`${JSON.stringify(reply)}\n`);
     });
   });
@@ -99,7 +100,11 @@ describe('task MCP server (stdio)', () => {
     };
     expect(tools.result.tools.map((t) => t.name).sort()).toEqual([
       'create_task',
+      'discard_task',
       'list_tasks',
+      'merge_task',
+      'send_task',
+      'task_changes',
     ]);
   });
 
@@ -121,6 +126,23 @@ describe('task MCP server (stdio)', () => {
     const call = out.find((m) => m.id === 3) as {
       result: { content: Array<{ text: string }> };
     };
-    expect(call.result.content[0].text).toMatch(/Created task t1/);
+    expect(call.result.content[0].text).toMatch(/Task t1 — running/);
+  });
+
+  it('merge_task relays an op:merge for the given id', async () => {
+    const out = await rpc([
+      { jsonrpc: '2.0', id: 1, method: 'initialize', params: {} },
+      {
+        jsonrpc: '2.0',
+        id: 4,
+        method: 'tools/call',
+        params: { name: 'merge_task', arguments: { id: 't1' } },
+      },
+    ]);
+    expect(received.find((r) => r.op === 'merge')).toMatchObject({ op: 'merge', id: 't1' });
+    const call = out.find((m) => m.id === 4) as {
+      result: { content: Array<{ text: string }> };
+    };
+    expect(call.result.content[0].text).toMatch(/Merged/);
   });
 });
