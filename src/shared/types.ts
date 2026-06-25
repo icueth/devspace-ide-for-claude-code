@@ -1247,3 +1247,32 @@ export interface ForgeEvent {
   ts: number;
 }
 
+// --- v2 worktree-isolated agent tasks ---
+// A Task runs an agent in its own git worktree + branch. Flat, top-level,
+// cross-workspace (keyed only by sourceRepoPath, not a project id).
+export type TaskStatus =
+  | 'setting-up' // worktree being created
+  | 'running' // agent session live
+  | 'awaiting-review' // session idle and a diff exists
+  | 'integrating' // merge/PR in flight
+  | 'done' // merged or PR'd, worktree removed
+  | 'discarded'
+  | 'error';
+
+export interface Task {
+  id: string;
+  title: string;
+  sourceRepoPath: string; // repo the worktree forks from
+  baseBranch: string; // HEAD of sourceRepo at creation time
+  branch: string; // devspace/task/<slug>-<id>
+  worktreePath: string; // ~/.devspace/worktrees/<id>
+  agent: string; // cli/registry adapter id (default 'claude')
+  status: TaskStatus;
+  // MUST equal what ClaudeCliPane composes for (projectId=id, tabId='agent'),
+  // i.e. `<id>:claude-cli:agent`, so the detail pane ATTACHES to the session
+  // TaskService pre-launched (tmux new-session -A) instead of spawning a 2nd.
+  sessionKey: string;
+  createdAt: number;
+  error?: string;
+}
+
