@@ -131,6 +131,11 @@ export function createTaskService(deps: TaskServiceDeps) {
       await teardown(t);
     },
 
+    // DEFERRED (v2.1): the proactive "changes ready" transition. The method is
+    // here and persists correctly, but nothing calls it yet — auto-detecting an
+    // idle agent needs a PtyPool idle signal whose wiring risks the dock's
+    // reaper, so it's left for a follow-up. Today monitoring is the live status
+    // badges (TASK_CHANGED) + the diff tab; this is a no-op until wired.
     markAwaitingReview(id: string): Task | undefined {
       if (!get(id)) return undefined;
       return set(id, { status: 'awaiting-review' });

@@ -983,6 +983,12 @@ git commit -m "feat(tasks): awaiting-review status + changes-ready notification"
 
 ---
 
+## Status at completion (2026-06-25)
+
+Phases 1–4 fully implemented + committed on `feat/v2-worktree-tasks`; boot-reconcile (Task 11) folded into `TaskService.init`. **24 new tests, full suite green (866), build clean.** Shipped in `0.38.0-beta.18` for packaged smoke.
+
+**Deferred to a follow-up (v2.1):** Task 12's *proactive* awaiting-review OS notification. `TaskService.markAwaitingReview` exists and persists, but auto-firing it needs a PtyPool idle signal whose wiring risks the dock's idle reaper — out of scope for this pass. Monitoring today = live status badges (TASK_CHANGED push) + the per-task diff tab, which cover the review loop. A `task:diff`/`task:diff-stat` channel was added beyond the original plan to power the diff review without per-file `DiffView` plumbing.
+
 ## Self-Review
 
 **Spec coverage:** data model → Task 1; worktree location + pathScope → Task 2; worktree git lifecycle → Tasks 3,5; persistence → Task 4; reconcile → Task 11; session reuse (cwd=worktree) → Tasks 5,6,10; flat Tasks UI + detail + integrate(merge/PR/discard) → Tasks 6,10; coexistence via sidebar mode → Task 9; monitoring/notify → Task 12; testing + packaged boot → Task 13; B/C hook points (create exposes post-worktree step; rows index-addressable) → noted, not built. ✅
