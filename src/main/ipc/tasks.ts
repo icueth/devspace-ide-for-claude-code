@@ -2,15 +2,20 @@ import { execFile } from 'node:child_process';
 import * as os from 'node:os';
 import { promisify } from 'node:util';
 
-import { BrowserWindow, ipcMain } from 'electron';
+import { BrowserWindow, ipcMain, Notification } from 'electron';
 
-import { createTaskService } from '@main/services/TaskService';
+import { getSessionStats } from '@main/services/PtyPool';
+import {
+  createTaskService,
+  type TaskService,
+} from '@main/services/TaskService';
 import {
   killWorktreeSession,
   launchClaudeInWorktree,
 } from '@main/services/TaskService.session';
 import { assertInWorkspace } from '@main/utils/pathScope';
 import { IPC } from '@shared/ipc-channels';
+import type { Task } from '@shared/types';
 
 const pexec = promisify(execFile);
 
@@ -60,8 +65,12 @@ export function registerTasksIpc(): void {
 
   ipcMain.handle(IPC.TASK_DIFF_STAT, async (_e, id: string) => {
     const t = svc.list().find((x) => x.id === id);
-    if (!t) return { files: 0 };
+    if (!t) return { files: 0, additions: 0, deletions: 0 };
     try {
+      // Working tree (committed + uncommitted) vs base, summarized. --shortstat
+      // prints "N files changed, A insertions(+), D deletions(-)" — any clause
+      // may be absent (a pure-additions diff has no deletions line), so parse
+      // each independently rather than with one combined regex.
       const { stdout } = await pexec('git', [
         '-C',
         t.worktreePath,
@@ -69,10 +78,14 @@ export function registerTasksIpc(): void {
         '--shortstat',
         t.baseBranch,
       ]);
-      const files = /(\d+) files? changed/.exec(stdout)?.[1];
-      return { files: files ? Number(files) : 0 };
+      const num = (re: RegExp): number => Number(re.exec(stdout)?.[1] ?? 0);
+      return {
+        files: num(/(\d+) files? changed/),
+        additions: num(/(\d+) insertions?\(\+\)/),
+        deletions: num(/(\d+) deletions?\(-\)/),
+      };
     } catch {
-      return { files: 0 };
+      return { files: 0, additions: 0, deletions: 0 };
     }
   });
 
@@ -118,4 +131,88 @@ export function registerTasksIpc(): void {
       return { ok: false, error: (e as Error).message };
     }
   });
+
+  // Kick off the background "changes ready" watcher (see startReviewPoller).
+  startReviewPoller(svc, push);
+}
+
+// ── awaiting-review auto-detection ───────────────────────────────────────────
+// A `running` task flips to `awaiting-review` when its agent session has gone
+// quiet (no PTY output) for REVIEW_IDLE_MS AND its worktree shows a non-empty,
+// *stable* diff. We poll PtyPool's read-only activity snapshot (getSessionStats)
+// on a timer — deliberately NOT subscribing to the PTY stream — so this can
+// never disturb the idle-tab reaper. A spinner tick / prompt redraw refreshes
+// lastActivityAt, so "quiet" reliably means the agent is parked at a prompt;
+// requiring the diff to be unchanged across two idle ticks guards the one
+// remaining case (a long, silent tool run mid-turn).
+const REVIEW_IDLE_MS = 20_000;
+const REVIEW_POLL_MS = 6_000;
+
+function startReviewPoller(svc: TaskService, push: () => void): void {
+  const lastSig = new Map<string, string>();
+
+  const shortstat = async (t: Task): Promise<string> => {
+    try {
+      const { stdout } = await pexec('git', [
+        '-C',
+        t.worktreePath,
+        'diff',
+        '--shortstat',
+        t.baseBranch,
+      ]);
+      return stdout.trim();
+    } catch {
+      return '';
+    }
+  };
+
+  const timer = setInterval(() => {
+    void (async () => {
+      const stats = getSessionStats();
+      const now = Date.now();
+      const activityOf = (key: string): number | undefined =>
+        stats.find((s) => s.id === key)?.lastActivityAt;
+
+      for (const t of svc.list()) {
+        const act = activityOf(t.sessionKey);
+
+        if (t.status === 'awaiting-review') {
+          // Agent produced output again → back to running.
+          if (act !== undefined && now - act < REVIEW_IDLE_MS) {
+            if (svc.markRunning(t.id)) push();
+          }
+          continue;
+        }
+        if (t.status !== 'running') continue;
+        // Still generating (or no live session yet) — leave it alone.
+        if (act === undefined || now - act < REVIEW_IDLE_MS) continue;
+
+        const sig = await shortstat(t);
+        const prev = lastSig.get(t.id);
+        lastSig.set(t.id, sig);
+        const hasDiff = /\d+ files? changed/.test(sig);
+        // Two consecutive idle ticks with an unchanged diff before we call it
+        // "ready" — a single quiet sample could be a silent mid-turn tool run.
+        if (hasDiff && prev === sig) {
+          const moved = svc.markAwaitingReview(t.id);
+          if (moved) {
+            push();
+            notifyReviewReady(moved.title);
+          }
+        }
+      }
+    })();
+  }, REVIEW_POLL_MS);
+  // Never let the watcher keep the process alive at shutdown.
+  timer.unref?.();
+}
+
+function notifyReviewReady(title: string): void {
+  try {
+    if (Notification.isSupported()) {
+      new Notification({ title: 'Task ready for review', body: title }).show();
+    }
+  } catch {
+    /* notifications unavailable (headless / no perms) — best-effort */
+  }
 }

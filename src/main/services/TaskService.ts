@@ -131,14 +131,25 @@ export function createTaskService(deps: TaskServiceDeps) {
       await teardown(t);
     },
 
-    // DEFERRED (v2.1): the proactive "changes ready" transition. The method is
-    // here and persists correctly, but nothing calls it yet — auto-detecting an
-    // idle agent needs a PtyPool idle signal whose wiring risks the dock's
-    // reaper, so it's left for a follow-up. Today monitoring is the live status
-    // badges (TASK_CHANGED) + the diff tab; this is a no-op until wired.
+    // Proactive "changes ready" transition, driven by the IPC idle poller
+    // (registerTasksIpc → startReviewPoller). That poller reads PtyPool's
+    // read-only activity snapshot — never the PTY stream — so it can't disturb
+    // the idle-tab reaper. Guarded to the real running → awaiting-review edge:
+    // an undefined return means "no change", which is how the poller knows not
+    // to re-fire its one-shot notification.
     markAwaitingReview(id: string): Task | undefined {
-      if (!get(id)) return undefined;
+      const t = get(id);
+      if (!t || t.status !== 'running') return undefined;
       return set(id, { status: 'awaiting-review' });
+    },
+
+    // Reverse edge: the agent emitted output again (e.g. a follow-up prompt),
+    // so the task is no longer parked for review. Keeps the sidebar bucket
+    // honest. Only acts on the awaiting-review → running edge.
+    markRunning(id: string): Task | undefined {
+      const t = get(id);
+      if (!t || t.status !== 'awaiting-review') return undefined;
+      return set(id, { status: 'running' });
     },
   };
 }

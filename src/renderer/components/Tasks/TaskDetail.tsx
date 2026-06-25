@@ -115,9 +115,7 @@ export function TaskDetail() {
             >
               <RefreshCw size={10} /> refresh
             </button>
-            <pre className="min-h-0 flex-1 overflow-auto px-3 pb-3 font-mono text-[11px] leading-[1.5] text-text-secondary">
-              {diff}
-            </pre>
+            <DiffText text={diff} />
           </div>
         )}
       </div>
@@ -187,6 +185,50 @@ export function TaskDetail() {
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+const DIFF_LINE: Record<string, string> = {
+  meta: 'text-text-dim',
+  hunk: 'text-accent-2 bg-[rgba(76,141,255,0.07)]',
+  add: 'text-semantic-success bg-[rgba(62,207,142,0.08)]',
+  del: 'text-semantic-error bg-[rgba(240,113,120,0.08)]',
+  ctx: 'text-text-secondary',
+};
+
+function classifyDiffLine(ln: string): keyof typeof DIFF_LINE {
+  if (
+    ln.startsWith('diff --git') ||
+    ln.startsWith('index ') ||
+    ln.startsWith('--- ') ||
+    ln.startsWith('+++ ') ||
+    ln.startsWith('new file') ||
+    ln.startsWith('deleted file') ||
+    ln.startsWith('rename ')
+  )
+    return 'meta';
+  if (ln.startsWith('@@')) return 'hunk';
+  if (ln.startsWith('+')) return 'add';
+  if (ln.startsWith('-')) return 'del';
+  return 'ctx';
+}
+
+// Colorized unified diff (read-only). A task's diff spans many files, so a
+// scrollable unified view reads better here than the per-file side-by-side
+// DiffView; editing happens by opening the worktree file in the editor.
+function DiffText({ text }: { text: string }) {
+  const lines = text.split('\n');
+  return (
+    <div className="min-h-0 flex-1 overflow-auto px-2 pb-3 font-mono text-[11px] leading-[1.5]">
+      {lines.map((ln, i) => (
+        <div
+          key={i}
+          className={cn('whitespace-pre px-1', DIFF_LINE[classifyDiffLine(ln)])}
+        >
+          {ln || ' '}
+        </div>
+      ))}
     </div>
   );
 }
