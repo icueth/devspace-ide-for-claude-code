@@ -13,6 +13,7 @@ import {
   killWorktreeSession,
   launchClaudeInWorktree,
 } from '@main/services/TaskService.session';
+import { startTaskControlSocket } from '@main/services/taskControl';
 import { assertInWorkspace } from '@main/utils/pathScope';
 import { IPC } from '@shared/ipc-channels';
 import type { Task } from '@shared/types';
@@ -139,6 +140,10 @@ export function registerTasksIpc(): void {
 
   // Kick off the background "changes ready" watcher (see startReviewPoller).
   startReviewPoller(svc, push);
+
+  // chat→task bridge: a unix socket the bundled stdio MCP server relays through
+  // so the main-chat agent can fork tasks by tool call (see taskControl).
+  startTaskControlSocket(svc, push);
 }
 
 // ── awaiting-review auto-detection ───────────────────────────────────────────
