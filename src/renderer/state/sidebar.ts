@@ -11,6 +11,21 @@ const LS_KEY_RIGHT = 'devspace.sidebar.right.collapsed';
 // once this session. Persisted so user intent survives reloads.
 const LS_KEY_LEFT_TOUCHED = 'devspace.sidebar.left.userTouched';
 
+// v2 — left sidebar mode: the project tree ('projects') or the flat
+// worktree-isolated task list ('tasks'). Persisted so the chosen surface
+// survives reloads.
+const LS_KEY_MODE = 'devspace.sidebar.mode';
+
+type SidebarMode = 'projects' | 'tasks';
+
+function readMode(): SidebarMode {
+  try {
+    return localStorage.getItem(LS_KEY_MODE) === 'tasks' ? 'tasks' : 'projects';
+  } catch {
+    return 'projects';
+  }
+}
+
 function readBool(key: string, fallback: boolean): boolean {
   try {
     const raw = localStorage.getItem(key);
@@ -34,16 +49,19 @@ interface SidebarState {
   leftCollapsed: boolean;
   rightCollapsed: boolean;
   leftUserTouched: boolean;
+  mode: SidebarMode;
   toggleLeft: () => void;
   toggleRight: () => void;
   setLeft: (collapsed: boolean) => void;
   setRight: (collapsed: boolean) => void;
+  setMode: (mode: SidebarMode) => void;
 }
 
 export const useSidebarStore = create<SidebarState>((set, get) => ({
   leftCollapsed: readBool(LS_KEY_LEFT, false),
   rightCollapsed: readBool(LS_KEY_RIGHT, false),
   leftUserTouched: readBool(LS_KEY_LEFT_TOUCHED, false),
+  mode: readMode(),
 
   toggleLeft() {
     set((s) => {
@@ -68,5 +86,13 @@ export const useSidebarStore = create<SidebarState>((set, get) => ({
   setRight(collapsed) {
     writeBool(LS_KEY_RIGHT, collapsed);
     set({ rightCollapsed: collapsed });
+  },
+  setMode(mode) {
+    try {
+      localStorage.setItem(LS_KEY_MODE, mode);
+    } catch {
+      /* ignore */
+    }
+    set({ mode });
   },
 }));

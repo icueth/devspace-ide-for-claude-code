@@ -32,6 +32,7 @@ const api = {
     merge: (id: string) => ipcRenderer.invoke(IPC.TASK_MERGE, id),
     discard: (id: string) => ipcRenderer.invoke(IPC.TASK_DISCARD, id),
     diffStat: (id: string) => ipcRenderer.invoke(IPC.TASK_DIFF_STAT, id),
+    diff: (id: string) => ipcRenderer.invoke(IPC.TASK_DIFF, id),
     createPr: (id: string) => ipcRenderer.invoke(IPC.TASK_CREATE_PR, id),
     onChanged: (cb: (tasks: Task[]) => void) => {
       const h = (_e: unknown, tasks: Task[]): void => cb(tasks);

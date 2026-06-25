@@ -93,6 +93,7 @@ export const IPC = {
   TASK_CREATE_PR: 'task:create-pr',
   TASK_DISCARD: 'task:discard',
   TASK_DIFF_STAT: 'task:diff-stat',
+  TASK_DIFF: 'task:diff', // unified `git diff <base>` text for review
   TASK_CHANGED: 'task:changed', // main → renderer push on any list change
   // Phase 4a: main → renderer broadcast that the per-session
   // ApprovalDetector matched a fresh tool-approval prompt in the PTY's

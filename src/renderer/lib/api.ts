@@ -137,6 +137,7 @@ export interface DevspaceApi {
     merge: (id: string) => Promise<void>;
     discard: (id: string) => Promise<void>;
     diffStat: (id: string) => Promise<{ files: number }>;
+    diff: (id: string) => Promise<string>;
     createPr: (
       id: string,
     ) => Promise<{ ok: boolean; url?: string; error?: string }>;
@@ -669,6 +670,7 @@ function makeStubApi(): DevspaceApi {
       merge: notWired('tasks.merge'),
       discard: notWired('tasks.discard'),
       diffStat: () => Promise.resolve({ files: 0 }),
+      diff: () => Promise.resolve(''),
       createPr: notWired('tasks.createPr'),
       onChanged: () => () => undefined,
     },

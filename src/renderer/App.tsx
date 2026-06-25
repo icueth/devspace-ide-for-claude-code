@@ -34,6 +34,8 @@ import { FileTree } from '@renderer/components/Sidebar/FileTree';
 import { ProjectList } from '@renderer/components/Sidebar/ProjectList';
 import { SidebarFooter } from '@renderer/components/Sidebar/SidebarFooter';
 import { WorkspacePicker } from '@renderer/components/Sidebar/WorkspacePicker';
+import { TasksPanel } from '@renderer/components/Tasks/TasksPanel';
+import { TaskDetail } from '@renderer/components/Tasks/TaskDetail';
 import { ResourceToastHost } from '@renderer/components/Toast/ResourceToast';
 import { UpdateBadge } from '@renderer/components/UpdateBadge';
 import { Welcome } from '@renderer/components/Welcome/Welcome';
@@ -110,6 +112,9 @@ function AppInner() {
   const rightCollapsed = useSidebarStore((s) => s.rightCollapsed);
   const toggleLeftSidebar = useSidebarStore((s) => s.toggleLeft);
   const toggleRightSidebar = useSidebarStore((s) => s.toggleRight);
+  // v2 — left sidebar surface: project tree vs flat worktree-isolated task list.
+  const sidebarMode = useSidebarStore((s) => s.mode);
+  const setSidebarMode = useSidebarStore((s) => s.setMode);
   // v0.30.5 / v0.38 — switching to a tab anchored to a different project
   // moves the sidebar (FileTree + ProjectList highlight + git store + chat
   // dock) to that project, via workspace.followTab (which also records the
@@ -811,6 +816,28 @@ function AppInner() {
             </button>
           </div>
 
+          <div className="relative z-[1] flex shrink-0 items-center gap-1 border-b border-border-subtle px-2 py-1.5">
+            {(['projects', 'tasks'] as const).map((m) => (
+              <button
+                key={m}
+                type="button"
+                onClick={() => setSidebarMode(m)}
+                className={cn(
+                  'flex-1 rounded-[5px] px-2 py-1 text-[11px] capitalize transition',
+                  sidebarMode === m
+                    ? 'bg-surface-3 text-text'
+                    : 'text-text-muted hover:bg-surface-2 hover:text-text',
+                )}
+              >
+                {m}
+              </button>
+            ))}
+          </div>
+
+          {sidebarMode === 'tasks' ? (
+            <TasksPanel />
+          ) : (
+            <>
           <div
             className="relative z-[1] flex shrink-0 flex-col border-b border-border-subtle py-2"
             style={{ maxHeight: '40vh' }}
@@ -852,6 +879,8 @@ function AppInner() {
               onOpenSettings={() => setSettingsOpen(true)}
             />
           )}
+            </>
+          )}
         </SidebarSection>
         )}
 
@@ -871,7 +900,9 @@ function AppInner() {
         ) : (
           !dockFull && teamMode !== 'focus' && (
           <section className="flex min-w-0 flex-1 flex-col">
-            {activeProject ? (
+            {sidebarMode === 'tasks' ? (
+              <TaskDetail />
+            ) : activeProject ? (
               <>
                 <section className="flex min-h-0 flex-1 flex-col">
                   <EditorArea />

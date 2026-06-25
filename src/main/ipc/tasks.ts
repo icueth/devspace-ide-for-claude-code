@@ -76,6 +76,25 @@ export function registerTasksIpc(): void {
     }
   });
 
+  ipcMain.handle(IPC.TASK_DIFF, async (_e, id: string) => {
+    const t = svc.list().find((x) => x.id === id);
+    if (!t) return '';
+    try {
+      // Working tree (committed + uncommitted) vs the base branch. Cap output
+      // so a huge diff can't blow the IPC payload / renderer.
+      const { stdout } = await pexec(
+        'git',
+        ['-C', t.worktreePath, 'diff', t.baseBranch],
+        { maxBuffer: 4 * 1024 * 1024 },
+      );
+      return stdout.length > 200_000
+        ? stdout.slice(0, 200_000) + '\n… (diff truncated)'
+        : stdout;
+    } catch (e) {
+      return `# failed to compute diff: ${(e as Error).message}`;
+    }
+  });
+
   ipcMain.handle(IPC.TASK_CREATE_PR, async (_e, id: string) => {
     const t = svc.list().find((x) => x.id === id);
     if (!t) return { ok: false, error: 'task not found' };
