@@ -3,6 +3,7 @@ import {
   getTmuxConfigSync,
   loadTmuxConfig,
 } from '@main/services/TmuxConfigService';
+import { ensureFolderTrusted } from '@main/utils/claudeTrust';
 import { resolveInteractiveShellEnv } from '@main/utils/shellEnv';
 import { createLogger } from '@shared/logger';
 import type { PtySession, TmuxConfig } from '@shared/types';
@@ -97,6 +98,11 @@ export async function launchClaudeCli(
   const tabId = opts.tabId ?? 'default';
   const existing = getSession(opts.projectId, 'claude-cli', tabId);
   if (existing) return existing;
+
+  // Pre-accept Claude Code's "trust this folder" dialog for this cwd so a fresh
+  // launch (especially a brand-new task worktree) doesn't block the agent on
+  // it. Best-effort; never throws (see ensureFolderTrusted).
+  await ensureFolderTrusted(opts.cwd);
 
   const claudeBin = await findClaudeBinary();
   const cfg = await loadTmuxConfig();
