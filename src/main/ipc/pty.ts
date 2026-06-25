@@ -13,6 +13,7 @@ import {
   subscribeAndReplay,
   writeToPty,
 } from '@main/services/PtyPool';
+import { ensureTaskMcpRegistered } from '@main/services/taskMcpRegister';
 import { assertInWorkspace } from '@main/utils/pathScope';
 import { IPC } from '@shared/ipc-channels';
 import { createLogger } from '@shared/logger';
@@ -41,6 +42,11 @@ export function registerPtyIpc(): void {
           cols: opts.cols,
           rows: opts.rows,
         });
+        // Expose the task-creation MCP tool to this project's chat so the agent
+        // can fork tasks by tool call. No-op for task worktrees (recursion
+        // guard lives in ensureTaskMcpRegistered). Fire-and-forget — a config
+        // write must never delay the pane.
+        void ensureTaskMcpRegistered(opts.cwd);
       } else if (opts.kind === 'shell') {
         session = await launchShell({
           projectId: opts.projectId,

@@ -217,6 +217,13 @@
         "filter": [
           "**/*"
         ]
+      },
+      {
+        "from": "resources/task-mcp",
+        "to": "task-mcp",
+        "filter": [
+          "**/*"
+        ]
       }
     ],
     "compression": "maximum",

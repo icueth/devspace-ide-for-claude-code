@@ -16,6 +16,10 @@ export function taskControlSocketPath(): string {
   return path.join(os.homedir(), '.devspace', 'task-control.sock');
 }
 
+// Upper bound on live tasks an agent may create through the bridge — a backstop
+// against a runaway loop spawning worktrees without limit.
+const MAX_ACTIVE_TASKS = 20;
+
 type ControlReq = { op?: string; title?: unknown; repo?: unknown };
 type ControlRes = {
   ok: boolean;
@@ -45,6 +49,12 @@ export async function routeTaskControl(
     const repo = typeof req.repo === 'string' ? req.repo : '';
     if (!title) return { ok: false, error: 'title required' };
     if (!repo) return { ok: false, error: 'repo required' };
+    const active = svc
+      .list()
+      .filter((t) => t.status !== 'done' && t.status !== 'discarded').length;
+    if (active >= MAX_ACTIVE_TASKS) {
+      return { ok: false, error: `task limit reached (${MAX_ACTIVE_TASKS} active)` };
+    }
     // Defense-in-depth: only ever fork from a repo inside an open workspace —
     // the relay must not let the agent worktree an arbitrary path.
     await assertInWorkspace(repo);
