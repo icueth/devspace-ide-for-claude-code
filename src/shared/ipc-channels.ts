@@ -86,6 +86,14 @@ export const IPC = {
   // change to useCliTabsStore.columns so the dual-tier reaper knows which
   // tabs the user is actually looking at vs. which are off-screen chips.
   PTY_SET_PINNED: 'pty:set-pinned',
+  // v2 worktree-isolated agent tasks
+  TASK_LIST: 'task:list',
+  TASK_CREATE: 'task:create',
+  TASK_MERGE: 'task:merge',
+  TASK_CREATE_PR: 'task:create-pr',
+  TASK_DISCARD: 'task:discard',
+  TASK_DIFF_STAT: 'task:diff-stat',
+  TASK_CHANGED: 'task:changed', // main → renderer push on any list change
   // Phase 4a: main → renderer broadcast that the per-session
   // ApprovalDetector matched a fresh tool-approval prompt in the PTY's
   // stdout. Payload: { sessionId, request: ApprovalRequest }. Renderer

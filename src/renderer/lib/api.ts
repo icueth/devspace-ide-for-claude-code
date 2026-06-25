@@ -35,6 +35,7 @@ import type {
   SearchResult,
   SettingsCategory,
   SkillDef,
+  Task,
   TmuxConfig,
   TmuxPane,
   TmuxSession,
@@ -125,6 +126,21 @@ export interface DevspaceApi {
     // graphify, codeflow-live) but keeps claude/shell PTYs (dock chips
     // persist cross-workspace) and fs watchers (FileTree's lifecycle) alive.
     suspend: (id: string, path: string) => Promise<void>;
+  };
+  tasks: {
+    list: () => Promise<Task[]>;
+    create: (opts: {
+      title: string;
+      sourceRepoPath: string;
+      agent: string;
+    }) => Promise<Task>;
+    merge: (id: string) => Promise<void>;
+    discard: (id: string) => Promise<void>;
+    diffStat: (id: string) => Promise<{ files: number }>;
+    createPr: (
+      id: string,
+    ) => Promise<{ ok: boolean; url?: string; error?: string }>;
+    onChanged: (cb: (tasks: Task[]) => void) => () => void;
   };
   fs: {
     readDir: (path: string) => Promise<DirEntry[]>;
@@ -646,6 +662,15 @@ function makeStubApi(): DevspaceApi {
       setActive: notWired('workspace.setActive'),
       close: notWired('workspace.close'),
       suspend: notWired('workspace.suspend'),
+    },
+    tasks: {
+      list: () => Promise.resolve([]),
+      create: notWired('tasks.create'),
+      merge: notWired('tasks.merge'),
+      discard: notWired('tasks.discard'),
+      diffStat: () => Promise.resolve({ files: 0 }),
+      createPr: notWired('tasks.createPr'),
+      onChanged: () => () => undefined,
     },
     fs: {
       readDir: notWired('fs.readDir'),

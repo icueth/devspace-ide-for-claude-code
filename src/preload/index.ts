@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer, webFrame, webUtils } from 'electron';
 
 import { IPC } from '@shared/ipc-channels';
+import type { Task } from '@shared/types';
 
 console.log('[preload] running, contextIsolated=', process.contextIsolated);
 
@@ -23,6 +24,20 @@ const api = {
     // keeps claude/shell PTYs and fs watchers alive (workspace switch).
     suspend: (id: string, path: string) =>
       ipcRenderer.invoke(IPC.WORKSPACE_SUSPEND, id, path),
+  },
+  tasks: {
+    list: () => ipcRenderer.invoke(IPC.TASK_LIST),
+    create: (opts: { title: string; sourceRepoPath: string; agent: string }) =>
+      ipcRenderer.invoke(IPC.TASK_CREATE, opts),
+    merge: (id: string) => ipcRenderer.invoke(IPC.TASK_MERGE, id),
+    discard: (id: string) => ipcRenderer.invoke(IPC.TASK_DISCARD, id),
+    diffStat: (id: string) => ipcRenderer.invoke(IPC.TASK_DIFF_STAT, id),
+    createPr: (id: string) => ipcRenderer.invoke(IPC.TASK_CREATE_PR, id),
+    onChanged: (cb: (tasks: Task[]) => void) => {
+      const h = (_e: unknown, tasks: Task[]): void => cb(tasks);
+      ipcRenderer.on(IPC.TASK_CHANGED, h);
+      return () => ipcRenderer.removeListener(IPC.TASK_CHANGED, h);
+    },
   },
   // Electron 32+ removed the non-standard `File.path` property from
   // renderer-side File objects when contextIsolation is on. The
