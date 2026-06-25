@@ -1,5 +1,5 @@
 import { ChevronDown, ChevronRight, Loader2, X } from 'lucide-react';
-import { memo, useMemo } from 'react';
+import { memo, useMemo, type ReactNode } from 'react';
 
 import { cn } from '@renderer/lib/utils';
 import { useRenderTrace } from '@renderer/lib/renderTrace';
@@ -197,6 +197,23 @@ function SectionLabel({ label, count }: { label: string; count: number }) {
   );
 }
 
+// Compact status chip: tints its own background from the text color (currentColor)
+// so a single component covers warning/success/accent/muted variants — same
+// pattern the file-tree git badges use.
+function Pill({ children, className }: { children: ReactNode; className?: string }) {
+  return (
+    <span
+      className={cn(
+        'inline-flex items-center gap-1 rounded-[4px] px-[5px] py-[1px] font-mono text-[9px] font-semibold',
+        className,
+      )}
+      style={{ background: 'color-mix(in srgb, currentColor 14%, transparent)' }}
+    >
+      {children}
+    </span>
+  );
+}
+
 interface ProjectRowProps {
   project: Project;
   isActive: boolean;
@@ -213,22 +230,19 @@ function ProjectRow({ project, isActive, isOpen, onClick, onClose }: ProjectRowP
   return (
     <div
       className={cn(
-        'group relative mx-1 flex items-center gap-2.5 rounded-[9px] px-2.5 py-1.5 transition-all duration-150',
+        'group relative mx-1 flex items-center gap-2.5 rounded-[9px] border px-2.5 py-1.5 transition-all duration-150',
         isActive
-          ? 'text-text'
-          : 'text-text-secondary hover:bg-surface-3 hover:text-text',
+          ? 'border-border-emphasis bg-surface-3 text-text'
+          : 'border-transparent text-text-secondary hover:bg-surface-2 hover:text-text',
       )}
-      style={
-        isActive
-          ? {
-              background:
-                'linear-gradient(135deg, rgba(76,141,255,0.18), rgba(168,85,247,0.1) 60%, transparent)',
-              boxShadow:
-                'inset 0 0 0 1px rgba(76,141,255,0.25), 0 2px 8px rgba(76,141,255,0.12)',
-            }
-          : undefined
-      }
     >
+      {isActive && (
+        <span
+          aria-hidden
+          className="pointer-events-none absolute left-0 top-1.5 bottom-1.5 w-[2.5px] rounded-[3px] bg-accent"
+          style={{ boxShadow: '0 0 8px var(--color-accent-glow)' }}
+        />
+      )}
       <button
         onClick={onClick}
         className="flex min-w-0 flex-1 items-center gap-2.5 text-left"
@@ -252,15 +266,17 @@ function ProjectRow({ project, isActive, isOpen, onClick, onClose }: ProjectRowP
           >
             {project.name}
           </div>
-          <div className="mt-[1px] flex items-center gap-2 font-mono text-[9.5px] text-text-muted">
+          <div className="mt-[3px] flex items-center gap-1.5">
             {dirtyCount > 0 ? (
-              <span className="text-semantic-warning">●{dirtyCount}M</span>
+              <Pill className="text-semantic-warning">●{dirtyCount}M</Pill>
             ) : project.vcs === 'git' ? (
-              <span className="text-semantic-success">✓ clean</span>
+              <Pill className="text-semantic-success">✓ clean</Pill>
             ) : (
-              <span className="text-text-dim">{project.detectedRuntime[0] ?? 'project'}</span>
+              <Pill className="text-text-muted">
+                {project.detectedRuntime[0] ?? 'project'}
+              </Pill>
             )}
-            {ahead > 0 && <span className="text-accent-2">↑{ahead}</span>}
+            {ahead > 0 && <Pill className="text-accent-2">↑{ahead}</Pill>}
           </div>
         </div>
       </button>
