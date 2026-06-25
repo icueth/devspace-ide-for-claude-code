@@ -25,6 +25,21 @@ export function invalidateWorkspaceRootsCache(): void {
   cacheExpiry = 0;
 }
 
+// v2 — active task worktrees live outside workspace roots
+// (~/.devspace/worktrees). TaskService registers each live worktree here so the
+// FileTree/diff/watcher can read inside it; unregistered on teardown.
+// Module-level Set (not the TTL cache) because it changes on explicit lifecycle
+// events, not on a timer.
+const worktreeScopes = new Set<string>();
+
+export function addWorktreeScope(p: string): void {
+  worktreeScopes.add(path.resolve(p));
+}
+
+export function removeWorktreeScope(p: string): void {
+  worktreeScopes.delete(path.resolve(p));
+}
+
 function rejectIfTraversal(p: string): void {
   if (typeof p !== 'string' || p.length === 0) {
     throw new Error('path must be a non-empty string');
@@ -48,6 +63,9 @@ export async function assertInWorkspace(p: unknown): Promise<string> {
   const roots = await getWorkspaceRoots();
   for (const root of roots) {
     if (isUnder(resolved, root)) return resolved;
+  }
+  for (const wt of worktreeScopes) {
+    if (isUnder(resolved, wt)) return resolved;
   }
   throw new Error(`path outside any open workspace: ${p}`);
 }
