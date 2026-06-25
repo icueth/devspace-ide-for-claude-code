@@ -28,11 +28,16 @@ const TOOLS = [
   {
     name: 'create_task',
     description:
-      'Create a DevSpace worktree-isolated task: forks a git worktree + branch and launches a background agent in it. Use to delegate a self-contained unit of work.',
+      'Create a DevSpace worktree-isolated task: forks a git worktree + branch and launches a background agent in it. Pass `prompt` with the full brief/context so the agent starts working immediately. Use to delegate a self-contained unit of work.',
     inputSchema: {
       type: 'object',
       properties: {
         title: { type: 'string', description: 'Short task title (also names the branch).' },
+        prompt: {
+          type: 'string',
+          description:
+            "The agent's initial brief — what to do, plus any context/spec/file pointers it needs. Without it the agent starts idle.",
+        },
         repo: {
           type: 'string',
           description: 'Absolute path of the source git repo. Defaults to the current project.',
@@ -81,7 +86,12 @@ const TOOLS = [
 
 // tool name → control-socket request payload.
 const TOOL_OP = {
-  create_task: (a) => ({ op: 'create', title: a.title, repo: a.repo || DEFAULT_REPO }),
+  create_task: (a) => ({
+    op: 'create',
+    title: a.title,
+    repo: a.repo || DEFAULT_REPO,
+    prompt: a.prompt,
+  }),
   list_tasks: () => ({ op: 'list' }),
   task_changes: (a) => ({ op: 'changes', id: a.id }),
   send_task: (a) => ({ op: 'send', id: a.id, text: a.text }),

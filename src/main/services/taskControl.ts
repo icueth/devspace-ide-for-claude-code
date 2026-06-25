@@ -39,6 +39,7 @@ type ControlReq = {
   title?: unknown;
   repo?: unknown;
   text?: unknown;
+  prompt?: unknown;
 };
 type ControlRes = {
   ok: boolean;
@@ -84,9 +85,15 @@ export async function routeTaskControl(
       if (active >= MAX_ACTIVE_TASKS) {
         return { ok: false, error: `task limit reached (${MAX_ACTIVE_TASKS} active)` };
       }
+      const prompt = typeof req.prompt === 'string' ? req.prompt : undefined;
       // Defense-in-depth: only ever fork from a repo inside an open workspace.
       await assertInWorkspace(repo);
-      const t = await svc.create({ title, sourceRepoPath: repo, agent: 'claude' });
+      const t = await svc.create({
+        title,
+        sourceRepoPath: repo,
+        agent: 'claude',
+        prompt,
+      });
       return { ok: true, task: slim(t) };
     }
 

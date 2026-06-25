@@ -46,7 +46,8 @@ export function registerTasksIpc(): void {
     homeDir: os.homedir(),
     now: () => Date.now(),
     idgen: () => Math.random().toString(36).slice(2, 8),
-    launchSession: (key, cwd) => launchClaudeInWorktree(key, cwd),
+    launchSession: (key, cwd, _agent, prompt) =>
+      launchClaudeInWorktree(key, cwd, prompt),
     killSession: (key) => killWorktreeSession(key),
   });
   void svc.init();

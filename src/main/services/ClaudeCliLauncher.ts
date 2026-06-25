@@ -85,6 +85,8 @@ export interface ClaudeLaunchOptions {
   cwd: string;
   cols?: number;
   rows?: number;
+  /** Initial brief, delivered as claude's first message (task agents). */
+  initialPrompt?: string;
 }
 
 /**
@@ -116,7 +118,15 @@ export async function launchClaudeCli(
   // commands themselves) so a global skip matches the workflow expectation.
   // NOTE: only applied here — claude -p sites (Design generation) still pass
   // --disallowed-tools to keep the sandbox tight.
-  const claudeArgs = ['--dangerously-skip-permissions'];
+  // An initialPrompt (a task brief) rides as claude's positional arg so the
+  // agent starts on the work immediately instead of sitting idle. tmux execs
+  // via execvp (no shell) so a multi-word prompt needs no quoting; and on a
+  // `new-session -A` reattach the trailing command is ignored, so the brief is
+  // delivered exactly once — on first launch.
+  const claudeArgs = [
+    '--dangerously-skip-permissions',
+    ...(opts.initialPrompt ? [opts.initialPrompt] : []),
+  ];
 
   // Prefer tmux so the CLI session survives app restarts / pane remounts.
   // `new-session -A` attaches to an existing session with the same name or

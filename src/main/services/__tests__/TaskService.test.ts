@@ -53,6 +53,23 @@ describe('TaskService', () => {
       task.sessionKey,
       task.worktreePath,
       'claude',
+      undefined,
+    );
+  });
+
+  it('forwards an initial prompt (brief) to the launched session', async () => {
+    const svc = makeService();
+    await svc.create({
+      title: 'P',
+      sourceRepoPath: repo,
+      agent: 'claude',
+      prompt: 'review the diff vs main',
+    });
+    expect(svc.deps.launchSession).toHaveBeenLastCalledWith(
+      expect.any(String),
+      expect.any(String),
+      'claude',
+      'review the diff vs main',
     );
   });
 

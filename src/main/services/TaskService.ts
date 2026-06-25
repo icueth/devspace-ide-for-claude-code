@@ -19,7 +19,12 @@ export interface TaskServiceDeps {
   // Reuse the existing PTY/tmux launch path with cwd = worktree. The session
   // key MUST be the one ClaudeCliPane(projectId=id, tabId='agent') composes so
   // the detail pane attaches rather than spawning a second session.
-  launchSession: (sessionKey: string, cwd: string, agent: string) => Promise<void>;
+  launchSession: (
+    sessionKey: string,
+    cwd: string,
+    agent: string,
+    initialPrompt?: string,
+  ) => Promise<void>;
   killSession: (sessionKey: string) => Promise<void>;
 }
 
@@ -98,6 +103,8 @@ export function createTaskService(deps: TaskServiceDeps) {
       title: string;
       sourceRepoPath: string;
       agent: string;
+      /** Optional brief sent to the agent as its first message. */
+      prompt?: string;
     }): Promise<Task> {
       const id = deps.idgen();
       const branch = `devspace/task/${slug(opts.title)}-${id}`;
@@ -120,7 +127,12 @@ export function createTaskService(deps: TaskServiceDeps) {
       try {
         await addWorktree(opts.sourceRepoPath, worktreePath, branch);
         addWorktreeScope(worktreePath);
-        await deps.launchSession(task.sessionKey, worktreePath, opts.agent);
+        await deps.launchSession(
+          task.sessionKey,
+          worktreePath,
+          opts.agent,
+          opts.prompt,
+        );
         return set(id, { status: 'running' });
       } catch (e) {
         return set(id, { status: 'error', error: (e as Error).message });

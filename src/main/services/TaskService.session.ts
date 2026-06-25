@@ -25,9 +25,10 @@ function parseSessionKey(sessionKey: string): {
 export async function launchClaudeInWorktree(
   sessionKey: string,
   cwd: string,
+  initialPrompt?: string,
 ): Promise<void> {
   const { projectId, tabId } = parseSessionKey(sessionKey);
-  await launchClaudeCli({ projectId, tabId, cwd });
+  await launchClaudeCli({ projectId, tabId, cwd, initialPrompt });
 }
 
 export async function killWorktreeSession(sessionKey: string): Promise<void> {
