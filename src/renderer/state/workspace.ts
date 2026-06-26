@@ -348,8 +348,14 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     // keeps the boot path (load() → setActive with an empty store) and the
     // failed-scan retry path working.
     if (id === s.active?.id && (s.scanning || s.projects.length > 0)) return;
-    const ws =
-      s.known.find((w) => w.id === id) ?? (await api.workspace.setActive(id));
+    // Persist the active workspace in main (workspaces.json `activeId`) on EVERY
+    // switch. The old code called api.workspace.setActive() only as a `??`
+    // fallback (when the ws was missing from `known`), so a normal switch — ws
+    // already known — updated the UI but NEVER persisted activeId. Boot then
+    // restored the stale workspace (e.g. opened linehook after the user had
+    // switched to devspace). Always persist; fall back to the known entry only
+    // if main returns null.
+    const ws = (await api.workspace.setActive(id)) ?? s.known.find((w) => w.id === id);
     if (!ws) return;
     // Snapshot the outgoing workspace's opened projects BEFORE the wipe —
     // after the scan we suspend their main-side per-project state
