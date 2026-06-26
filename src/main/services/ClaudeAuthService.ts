@@ -54,6 +54,7 @@ function sanitize(p: ClaudeAuthProfile): ClaudeAuthProfile {
     name: p.name,
     kind: p.kind,
     baseUrl: p.baseUrl,
+    model: p.model,
     createdAt: p.createdAt,
   };
 }
@@ -73,6 +74,7 @@ export async function saveAuthProfile(input: {
   apiKey: string;
   baseUrl?: string;
   authToken?: string;
+  model?: string;
 }): Promise<ClaudeAuthProfile> {
   const stored = await loadStored();
   const id = input.id && input.id !== 'subscription' ? input.id : randomUUID();
@@ -86,6 +88,7 @@ export async function saveAuthProfile(input: {
     apiKey: apiKey.slice(0, 8192),
     baseUrl: input.baseUrl?.trim() || undefined,
     authToken: input.authToken?.trim() || existing?.authToken || undefined,
+    model: input.model?.trim() || undefined,
     createdAt: existing?.createdAt ?? Date.now(),
   };
   await saveStored(
@@ -108,5 +111,6 @@ export async function resolveAuthEnvPairs(profileId?: string): Promise<string[]>
   const pairs = [`ANTHROPIC_API_KEY=${p.apiKey}`];
   if (p.baseUrl) pairs.push(`ANTHROPIC_BASE_URL=${p.baseUrl}`);
   if (p.authToken) pairs.push(`ANTHROPIC_AUTH_TOKEN=${p.authToken}`);
+  if (p.model) pairs.push(`ANTHROPIC_MODEL=${p.model}`);
   return pairs;
 }

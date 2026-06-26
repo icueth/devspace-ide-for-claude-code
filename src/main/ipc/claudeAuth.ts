@@ -23,6 +23,7 @@ export function registerClaudeAuthIpc(): void {
         apiKey: string;
         baseUrl?: string;
         authToken?: string;
+        model?: string;
       },
     ) => saveAuthProfile(input),
   );

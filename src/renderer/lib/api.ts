@@ -552,6 +552,7 @@ export interface DevspaceApi {
       apiKey: string;
       baseUrl?: string;
       authToken?: string;
+      model?: string;
     }) => Promise<ClaudeAuthProfile>;
     delete: (id: string) => Promise<void>;
   };

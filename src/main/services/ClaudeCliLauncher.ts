@@ -136,6 +136,19 @@ export async function launchClaudeCli(
   // run on different credentials at once. Applied on first launch only (tmux
   // ignores the wrapper on -A reattach), so switching a tab's auth needs a reload.
   const authPairs = await resolveAuthEnvPairs(opts.authProfileId);
+  // Clean ANTHROPIC_* slate first so a key in the user's global shell env can't
+  // leak into every tab — each tab then gets exactly its profile's creds
+  // (subscription = none → login). `env -u` on an unset var is a harmless no-op.
+  const ANTHROPIC_UNSET = [
+    '-u',
+    'ANTHROPIC_API_KEY',
+    '-u',
+    'ANTHROPIC_BASE_URL',
+    '-u',
+    'ANTHROPIC_AUTH_TOKEN',
+    '-u',
+    'ANTHROPIC_MODEL',
+  ];
 
   // Prefer tmux so the CLI session survives app restarts / pane remounts.
   // `new-session -A` attaches to an existing session with the same name or
@@ -180,6 +193,7 @@ export async function launchClaudeCli(
         // and when -A attaches to an existing session the trailing command
         // (wrapper included) is ignored entirely.
         'env',
+        ...ANTHROPIC_UNSET,
         `DEVSPACE_PROJECT_ID=${opts.projectId}`,
         `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=${teams}`,
         `CLAUDE_CODE_SPAWN_BACKEND=${backend}`,
@@ -201,13 +215,10 @@ export async function launchClaudeCli(
       kind: 'claude-cli',
       tabId,
       cwd: opts.cwd,
-      // Wrap with `env` so the auth profile's ANTHROPIC_* vars apply to this
-      // non-tmux session too (there's no tmux env wrapper to ride on).
-      command: authPairs.length > 0 ? '/usr/bin/env' : claudeBin,
-      args:
-        authPairs.length > 0
-          ? [...authPairs, claudeBin, ...claudeArgs]
-          : claudeArgs,
+      // Always `env`-wrap (even subscription) to clear inherited ANTHROPIC_*
+      // first, then apply the profile's vars — no tmux wrapper to ride on here.
+      command: '/usr/bin/env',
+      args: [...ANTHROPIC_UNSET, ...authPairs, claudeBin, ...claudeArgs],
       cols: opts.cols,
       rows: opts.rows,
     });

@@ -169,6 +169,7 @@ export interface ClaudeAuthProfile {
   apiKey?: string; // ANTHROPIC_API_KEY — plaintext on disk (0o600), api only
   baseUrl?: string; // ANTHROPIC_BASE_URL — optional custom endpoint
   authToken?: string; // ANTHROPIC_AUTH_TOKEN — optional (some gateways)
+  model?: string; // ANTHROPIC_MODEL — optional model override (custom gateways)
   createdAt: number;
 }
 

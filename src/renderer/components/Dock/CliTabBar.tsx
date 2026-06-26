@@ -343,6 +343,7 @@ function ManageAuthDialog({
   const [name, setName] = useState('');
   const [apiKey, setApiKey] = useState('');
   const [baseUrl, setBaseUrl] = useState('');
+  const [model, setModel] = useState('');
   const [busy, setBusy] = useState(false);
 
   const reload = useCallback(() => {
@@ -360,10 +361,12 @@ function ManageAuthDialog({
         name: name.trim(),
         apiKey: apiKey.trim(),
         baseUrl: baseUrl.trim() || undefined,
+        model: model.trim() || undefined,
       });
       setName('');
       setApiKey('');
       setBaseUrl('');
+      setModel('');
       reload();
     } finally {
       setBusy(false);
@@ -409,6 +412,11 @@ function ManageAuthDialog({
                       {p.baseUrl}
                     </span>
                   )}
+                  {p.model && (
+                    <span className="truncate font-mono text-[9.5px] text-text-dim">
+                      {p.model}
+                    </span>
+                  )}
                   <span className="flex-1" />
                   {p.kind === 'api' ? (
                     <button
@@ -446,6 +454,12 @@ function ManageAuthDialog({
                 value={baseUrl}
                 onChange={(e) => setBaseUrl(e.target.value)}
                 placeholder="Base URL (optional — gateway/proxy)"
+                className="rounded-[6px] border border-border bg-surface-3 px-2 py-1.5 font-mono text-[11px] text-text outline-none focus:border-accent"
+              />
+              <input
+                value={model}
+                onChange={(e) => setModel(e.target.value)}
+                placeholder="Model (optional — e.g. claude-opus-4-8, or gateway model id)"
                 className="rounded-[6px] border border-border bg-surface-3 px-2 py-1.5 font-mono text-[11px] text-text outline-none focus:border-accent"
               />
               <button
