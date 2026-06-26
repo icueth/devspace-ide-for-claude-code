@@ -277,6 +277,10 @@ export const IPC = {
   // mounts an xterm against the returned PTY sessionId.
   SETUP_RUN_CLAUDE: 'setup:run-claude',
 
+  // Per-session claude auth profiles (subscription vs custom API, per tab).
+  CLAUDE_AUTH_LIST: 'claude-auth:list',
+  CLAUDE_AUTH_SAVE: 'claude-auth:save',
+  CLAUDE_AUTH_DELETE: 'claude-auth:delete',
 
   // Forge system (v0.24). Generate + track skills/agents per project.
   FORGE_LIST_DRAFTS: 'forge:list-drafts',

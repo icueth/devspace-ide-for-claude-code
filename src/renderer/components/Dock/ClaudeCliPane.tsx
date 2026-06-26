@@ -49,6 +49,8 @@ interface ClaudeCliPaneProps {
   // the PTY stays alive so output keeps streaming in the background).
   tabId: string;
   isActive?: boolean;
+  // Claude auth profile this tab launches with (undefined = subscription).
+  authProfileId?: string;
 }
 
 export function ClaudeCliPane({
@@ -56,6 +58,7 @@ export function ClaudeCliPane({
   projectPath,
   tabId,
   isActive,
+  authProfileId,
 }: ClaudeCliPaneProps) {
   const sessionId = claudeCliSessionId(projectId, tabId);
 
@@ -94,6 +97,7 @@ export function ClaudeCliPane({
         cwd: projectPath,
         cols: 120,
         rows: 32,
+        authProfileId,
       })
       .then((session) => {
         if (cancelled) return;

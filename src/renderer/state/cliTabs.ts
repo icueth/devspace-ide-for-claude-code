@@ -109,7 +109,7 @@ interface CliTabsState extends PersistedShape {
   // a cross-workspace switch (activation router) so split columns don't keep
   // showing panes from the workspace we just left.
   focusSingleProject: (projectId: string, tabId: string) => void;
-  addTab: (projectId: string) => CliTab | null;
+  addTab: (projectId: string, authProfileId?: string) => CliTab | null;
   removeTab: (projectId: string, tabId: string) => void;
   setActiveTab: (projectId: string, tabId: string) => void;
   renameTab: (projectId: string, tabId: string, label: string) => void;
@@ -281,7 +281,7 @@ export const useCliTabsStore = create<CliTabsState>((set, get) => {
       });
     },
 
-    addTab(projectId) {
+    addTab(projectId, authProfileId) {
       const s = get();
       if (!s.projectsById[projectId]) {
         // Refuse to add a tab to an undocked project — the dock has no chip
@@ -289,7 +289,10 @@ export const useCliTabsStore = create<CliTabsState>((set, get) => {
         return null;
       }
       const existing = s.tabsByProject[projectId] ?? [];
-      const tab = makeTab(projectId, `Claude ${existing.length + 1}`);
+      const tab: CliTab = {
+        ...makeTab(projectId, `Claude ${existing.length + 1}`),
+        authProfileId,
+      };
       set((prev) => {
         const next: PersistedShape = {
           ...prev,

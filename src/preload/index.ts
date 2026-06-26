@@ -560,6 +560,11 @@ const api = {
       return () => ipcRenderer.off(IPC.SETUP_PROGRESS, listener);
     },
   },
+  claudeAuth: {
+    list: () => ipcRenderer.invoke(IPC.CLAUDE_AUTH_LIST),
+    save: (input: unknown) => ipcRenderer.invoke(IPC.CLAUDE_AUTH_SAVE, input),
+    delete: (id: string) => ipcRenderer.invoke(IPC.CLAUDE_AUTH_DELETE, id),
+  },
   bgClaude: {
     start: (command: string) =>
       ipcRenderer.invoke(IPC.BG_CLAUDE_START, command),

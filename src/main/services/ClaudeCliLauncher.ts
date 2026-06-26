@@ -1,3 +1,4 @@
+import { resolveAuthEnvPairs } from '@main/services/ClaudeAuthService';
 import { createPty, getSession } from '@main/services/PtyPool';
 import {
   getTmuxConfigSync,
@@ -87,6 +88,8 @@ export interface ClaudeLaunchOptions {
   rows?: number;
   /** Initial brief, delivered as claude's first message (task agents). */
   initialPrompt?: string;
+  /** Claude auth profile id — selects the credentials (env) for this session. */
+  authProfileId?: string;
 }
 
 /**
@@ -127,6 +130,12 @@ export async function launchClaudeCli(
     '--dangerously-skip-permissions',
     ...(opts.initialPrompt ? [opts.initialPrompt] : []),
   ];
+
+  // Per-session auth: ANTHROPIC_* env pairs for the chosen profile (empty for
+  // subscription). Injected into the session's env wrapper so different tabs can
+  // run on different credentials at once. Applied on first launch only (tmux
+  // ignores the wrapper on -A reattach), so switching a tab's auth needs a reload.
+  const authPairs = await resolveAuthEnvPairs(opts.authProfileId);
 
   // Prefer tmux so the CLI session survives app restarts / pane remounts.
   // `new-session -A` attaches to an existing session with the same name or
@@ -174,6 +183,7 @@ export async function launchClaudeCli(
         `DEVSPACE_PROJECT_ID=${opts.projectId}`,
         `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=${teams}`,
         `CLAUDE_CODE_SPAWN_BACKEND=${backend}`,
+        ...authPairs,
         claudeBin,
         ...claudeArgs,
       ],
@@ -191,8 +201,13 @@ export async function launchClaudeCli(
       kind: 'claude-cli',
       tabId,
       cwd: opts.cwd,
-      command: claudeBin,
-      args: claudeArgs,
+      // Wrap with `env` so the auth profile's ANTHROPIC_* vars apply to this
+      // non-tmux session too (there's no tmux env wrapper to ride on).
+      command: authPairs.length > 0 ? '/usr/bin/env' : claudeBin,
+      args:
+        authPairs.length > 0
+          ? [...authPairs, claudeBin, ...claudeArgs]
+          : claudeArgs,
       cols: opts.cols,
       rows: opts.rows,
     });

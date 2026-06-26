@@ -151,9 +151,25 @@ export interface CliProfile {
     outputLimit?: number;
   };
   // Optional per-profile system prompt prepended to every turn (after
-  // project memory/devlog preambles). Capped at 4096 chars by service.
+  // project memory preambles). Capped at 4096 chars by service.
   systemPrompt?: string;
   createdAt: number;           // ms-epoch, stable sort
+}
+
+// Per-session auth for the built-in `claude` CLI. Unlike CliProfile (which
+// configures OTHER OpenAI-compatible CLIs), this only selects which credentials
+// a claude session launches with — its subscription login, or a custom API key
+// (optionally a gateway base URL / auth token). Resolved to ANTHROPIC_* env
+// vars injected per tmux session, so different tabs can run on different auth at
+// the same time. The built-in `subscription` profile carries no env.
+export interface ClaudeAuthProfile {
+  id: string; // 'subscription' for the built-in; uuid for API profiles
+  name: string; // e.g. "Subscription", "Work API", "Gateway"
+  kind: 'subscription' | 'api';
+  apiKey?: string; // ANTHROPIC_API_KEY — plaintext on disk (0o600), api only
+  baseUrl?: string; // ANTHROPIC_BASE_URL — optional custom endpoint
+  authToken?: string; // ANTHROPIC_AUTH_TOKEN — optional (some gateways)
+  createdAt: number;
 }
 
 // Result of probing a CLI binary on PATH (+ fallback bins). Returned by
@@ -399,6 +415,8 @@ export interface PtyCreateOptions {
   args?: string[];
   cols?: number;
   rows?: number;
+  // Claude auth profile id for a 'claude-cli' session (per-tab credentials).
+  authProfileId?: string;
 }
 
 export interface PtySession {
@@ -419,6 +437,8 @@ export interface CliTab {
   // remounts and re-spawns its PTY (the previous PTY is killed by the
   // store action before the bump).
   reloadGen?: number;
+  // Claude auth profile this tab launches with (undefined = subscription).
+  authProfileId?: string;
 }
 
 // Per-project shell terminal tab. The bottom-panel terminal supports many

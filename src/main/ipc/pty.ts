@@ -42,6 +42,7 @@ export function registerPtyIpc(): void {
           cwd: opts.cwd,
           cols: opts.cols,
           rows: opts.rows,
+          authProfileId: opts.authProfileId,
         });
         // Expose the task-creation MCP tool to this project's chat so the agent
         // can fork tasks by tool call. No-op for task worktrees (recursion

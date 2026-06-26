@@ -54,6 +54,7 @@ import type {
   MemoryType,
 } from '@shared/types';
 import type {
+  ClaudeAuthProfile,
   ForgeCatalogItem,
   ForgeDraft,
   ForgeEvent,
@@ -543,6 +544,17 @@ export interface DevspaceApi {
     ) => Promise<SetupClaudeRunResult>;
     onProgress: (cb: (ev: SetupProgressEvent) => void) => () => void;
   };
+  claudeAuth: {
+    list: () => Promise<ClaudeAuthProfile[]>;
+    save: (input: {
+      id?: string;
+      name: string;
+      apiKey: string;
+      baseUrl?: string;
+      authToken?: string;
+    }) => Promise<ClaudeAuthProfile>;
+    delete: (id: string) => Promise<void>;
+  };
   // v0.37: background `claude --bg --exec` runs.
   bgClaude: {
     start: (command: string) => Promise<BackgroundRunMeta>;
@@ -904,6 +916,11 @@ function makeStubApi(): DevspaceApi {
         'setup.runClaude',
       ) as () => Promise<SetupClaudeRunResult>,
       onProgress: () => () => undefined,
+    },
+    claudeAuth: {
+      list: () => Promise.resolve([]),
+      save: notWired('claudeAuth.save'),
+      delete: notWired('claudeAuth.delete'),
     },
     bgClaude: {
       start: notWired('bgClaude.start'),

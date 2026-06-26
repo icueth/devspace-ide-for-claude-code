@@ -28,6 +28,7 @@ import { registerAgentsIpc } from '@main/ipc/agents';
 import { registerAppIpc } from '@main/ipc/app';
 import { registerBgClaudeIpc } from '@main/ipc/bgClaude';
 import { registerTasksIpc } from '@main/ipc/tasks';
+import { registerClaudeAuthIpc } from '@main/ipc/claudeAuth';
 import { registerCliIpc } from '@main/ipc/cli';
 import { registerCodeflowIpc } from '@main/ipc/codeflow';
 import { registerDevServerIpc } from '@main/ipc/devserver';
@@ -283,6 +284,7 @@ app.whenReady().then(async () => {
   registerDevServerIpc();
   registerPreviewIpc();
   registerMemoryIpc();
+  registerClaudeAuthIpc();
   registerForgeIpc();
   registerMempalaceIpc();
   registerSetupIpc();
