@@ -74,3 +74,77 @@ export async function ensureGeminiMcp(): Promise<void> {
     logger.warn(`ensureGeminiMcp: ${(err as Error).message}`);
   }
 }
+
+// The DevSpace guidance block written into each CLI's GLOBAL instruction file
+// (Codex ~/.codex/AGENTS.md, Gemini ~/.gemini/GEMINI.md) so the MemPalace brain
+// is used automatically + commands go through rtk — the same behavior Claude +
+// OpenCode get. Per-project learnings stay Claude/OpenCode-only (these files are
+// global; Codex/Gemini have no per-tab config that survives their auth).
+const MARK_START = '<!-- DEVSPACE:START (managed — edit outside these markers) -->';
+const MARK_END = '<!-- DEVSPACE:END -->';
+const DEVSPACE_GUIDANCE = `# DevSpace — Memory (MemPalace) + Tooling (rtk)
+
+You have a persistent memory palace via the \`mempalace\` MCP tools — your
+long-term memory across sessions. Storage ≠ memory; storage + this protocol =
+memory.
+
+1. WAKE-UP: at the start of each session, call the mempalace **status** tool first.
+2. BEFORE answering about any project, person, past event, or prior decision:
+   call the mempalace **search** tool first. Never guess from training data.
+3. AFTER meaningful work (a feature, a decision, a lesson): call mempalace **diary write**.
+4. WHEN facts change: invalidate the old fact, then add the new one.
+
+\`rtk\` is a token-optimizing CLI proxy installed here: ALWAYS prefix shell
+commands with \`rtk\` (e.g. \`rtk git status\`, \`rtk ls\`, \`rtk grep\`). It is
+always safe — it passes commands through unchanged when it has no filter.`;
+
+// Idempotently upsert the managed block into a markdown instruction file,
+// preserving everything the user wrote outside the markers.
+function upsertManagedSection(file: string): void {
+  const block = `${MARK_START}\n${DEVSPACE_GUIDANCE}\n${MARK_END}`;
+  let existing = '';
+  try {
+    existing = fs.readFileSync(file, 'utf8');
+  } catch {
+    // file doesn't exist yet — we'll create it
+  }
+  const re = new RegExp(
+    `${MARK_START.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[\\s\\S]*?${MARK_END.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`,
+  );
+  const next = re.test(existing)
+    ? existing.replace(re, block)
+    : (existing.trim() ? `${existing.trimEnd()}\n\n` : '') + `${block}\n`;
+  if (next !== existing) fs.writeFileSync(file, next, 'utf8');
+}
+
+// Codex: ~/.codex/AGENTS.md (global guidance Codex reads on every session).
+async function ensureCodexInstructions(): Promise<void> {
+  try {
+    if (!(await onPath('codex'))) return;
+    upsertManagedSection(path.join(os.homedir(), '.codex', 'AGENTS.md'));
+  } catch (err) {
+    logger.warn(`ensureCodexInstructions: ${(err as Error).message}`);
+  }
+}
+
+// Gemini: ~/.gemini/GEMINI.md (global context file Gemini loads on every session).
+async function ensureGeminiInstructions(): Promise<void> {
+  try {
+    if (!(await onPath('gemini'))) return;
+    upsertManagedSection(path.join(os.homedir(), '.gemini', 'GEMINI.md'));
+  } catch (err) {
+    logger.warn(`ensureGeminiInstructions: ${(err as Error).message}`);
+  }
+}
+
+// Full Codex / Gemini parity setup, run before each tab launch: MemPalace MCP
+// (brain) + the global guidance (auto-memory + rtk). Both idempotent + best-effort.
+export async function ensureCodexParity(): Promise<void> {
+  await ensureCodexMcp();
+  await ensureCodexInstructions();
+}
+
+export async function ensureGeminiParity(): Promise<void> {
+  await ensureGeminiMcp();
+  await ensureGeminiInstructions();
+}

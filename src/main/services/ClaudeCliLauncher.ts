@@ -1,6 +1,6 @@
 import { resolveAuthEnvPairs } from '@main/services/ClaudeAuthService';
 import { getCliProfile } from '@main/services/CliProfileService';
-import { ensureCodexMcp, ensureGeminiMcp } from '@main/services/cliMcpSetup';
+import { ensureCodexParity, ensureGeminiParity } from '@main/services/cliMcpSetup';
 import { ensureOpenCodeConfig } from '@main/services/openCodeConfig';
 import { createPty, getSession } from '@main/services/PtyPool';
 import {
@@ -429,8 +429,8 @@ async function launchPlainTuiCli(
 export async function launchCodexCli(
   opts: PlainTuiLaunchOptions,
 ): Promise<PtySession> {
-  // Register the MemPalace brain in Codex's config before it reads it (idempotent).
-  await ensureCodexMcp();
+  // MemPalace brain (config) + global guidance (auto-memory + rtk) before launch.
+  await ensureCodexParity();
   return launchPlainTuiCli(
     'codex-cli',
     'codex',
@@ -444,7 +444,7 @@ export async function launchCodexCli(
 export async function launchGeminiCli(
   opts: PlainTuiLaunchOptions,
 ): Promise<PtySession> {
-  await ensureGeminiMcp();
+  await ensureGeminiParity();
   // --skip-trust trusts this project for the session so the MemPalace MCP is
   // enabled (Gemini disables MCP in untrusted folders). Same trust boundary as
   // Claude's --dangerously-skip-permissions — the user chose to open it here.
