@@ -98,10 +98,19 @@ memory.
 commands with \`rtk\` (e.g. \`rtk git status\`, \`rtk ls\`, \`rtk grep\`). It is
 always safe — it passes commands through unchanged when it has no filter.`;
 
+// Codex variant — rtk ONLY. Codex doesn't expose third-party MCP server tools as
+// callable functions to custom-provider models (verified), so a MemPalace
+// protocol here would just make Codex burn turns chasing unreachable tools.
+const CODEX_GUIDANCE = `# DevSpace — Tooling (rtk)
+
+\`rtk\` is a token-optimizing CLI proxy installed here: ALWAYS prefix shell
+commands with \`rtk\` (e.g. \`rtk git status\`, \`rtk ls\`, \`rtk grep\`). It is
+always safe — it passes commands through unchanged when it has no filter.`;
+
 // Idempotently upsert the managed block into a markdown instruction file,
 // preserving everything the user wrote outside the markers.
-function upsertManagedSection(file: string): void {
-  const block = `${MARK_START}\n${DEVSPACE_GUIDANCE}\n${MARK_END}`;
+function upsertManagedSection(file: string, body: string): void {
+  const block = `${MARK_START}\n${body}\n${MARK_END}`;
   let existing = '';
   try {
     existing = fs.readFileSync(file, 'utf8');
@@ -121,7 +130,10 @@ function upsertManagedSection(file: string): void {
 async function ensureCodexInstructions(): Promise<void> {
   try {
     if (!(await onPath('codex'))) return;
-    upsertManagedSection(path.join(os.homedir(), '.codex', 'AGENTS.md'));
+    upsertManagedSection(
+      path.join(os.homedir(), '.codex', 'AGENTS.md'),
+      CODEX_GUIDANCE,
+    );
   } catch (err) {
     logger.warn(`ensureCodexInstructions: ${(err as Error).message}`);
   }
@@ -131,16 +143,19 @@ async function ensureCodexInstructions(): Promise<void> {
 async function ensureGeminiInstructions(): Promise<void> {
   try {
     if (!(await onPath('gemini'))) return;
-    upsertManagedSection(path.join(os.homedir(), '.gemini', 'GEMINI.md'));
+    upsertManagedSection(
+      path.join(os.homedir(), '.gemini', 'GEMINI.md'),
+      DEVSPACE_GUIDANCE,
+    );
   } catch (err) {
     logger.warn(`ensureGeminiInstructions: ${(err as Error).message}`);
   }
 }
 
-// Full Codex / Gemini parity setup, run before each tab launch: MemPalace MCP
-// (brain) + the global guidance (auto-memory + rtk). Both idempotent + best-effort.
+// Codex parity: rtk guidance ONLY. MemPalace is intentionally NOT registered for
+// Codex — it doesn't expose MCP server tools to custom-provider models (verified),
+// so it would spawn an unusable server and waste model turns. (Gemini keeps it.)
 export async function ensureCodexParity(): Promise<void> {
-  await ensureCodexMcp();
   await ensureCodexInstructions();
 }
 
