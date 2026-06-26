@@ -277,6 +277,7 @@ export async function launchOpenCodeCli(
     : null;
   const { configDir } = await ensureOpenCodeConfig(
     profile && profile.cliId === 'opencode' ? profile : null,
+    opts.cwd,
   );
   const configEnv = ['env', `OPENCODE_CONFIG_DIR=${configDir}`];
 

@@ -1,33 +1,137 @@
-import { execFile } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { promisify } from 'node:util';
 
 import { atomicWriteAsync } from '@main/utils/atomicWrite';
 import { createLogger } from '@shared/logger';
 import type { CliProfile } from '@shared/types';
 
-const execFileP = promisify(execFile);
-
-// Builds the DevSpace-managed OpenCode config that each opencode tab launches
-// with (via OPENCODE_CONFIG_DIR). OpenCode MERGES this on top of the user's own
-// ~/.config/opencode + auth.json, so we only ADD:
-//   • an `mcp` section wiring OpenCode into the same brain Claude uses — the
-//     user's MemPalace MCP server, mirrored from its Claude-plugin config so
-//     both CLIs share one memory palace.
-//   • a custom OpenAI-compatible `provider` when a CliProfile is selected.
-// Nothing here mutates the user's own opencode config.
+// Builds the DevSpace-managed OpenCode config + plugin each opencode tab launches
+// with (via OPENCODE_CONFIG_DIR). OpenCode MERGES this over the user's own
+// config/auth, so we only ADD DevSpace's Claude-parity layer:
+//   • mcp: the MemPalace MCP server (mirrored from its Claude plugin) — same brain.
+//   • instructions: the MemPalace usage protocol + this project's distilled
+//     learnings (the Claude SessionStart-inject equivalent).
+//   • plugins/devspace.js: a plugin replicating Claude's deterministic hooks —
+//     rtk command rewriting (tool.execute.before) + distill-on-session-end
+//     (session.idle). Plus a custom provider when a CliProfile is selected.
 
 const logger = createLogger('opencode-config');
 
-function devspaceConfigDir(key: string): string {
-  return path.join(os.homedir(), '.devspace', 'opencode', key);
+// Injected into opencode's `instructions` so it uses the memory brain the same
+// way Claude does (Claude gets this via a SessionStart hook). Verified: with
+// this present, opencode auto-calls mempalace search before answering project
+// questions.
+const MEMPALACE_PROTOCOL = `# Memory Protocol (MemPalace) — FOLLOW ON EVERY SESSION
+
+You have a persistent memory palace via the \`mempalace\` MCP tools — your
+long-term memory across sessions. Storage ≠ memory; storage + this protocol =
+memory.
+
+1. WAKE-UP: at the start of each session, call the mempalace **status** tool
+   FIRST to load the palace overview (wings, rooms, drawer counts).
+2. BEFORE answering about any person, project, past event, or prior decision:
+   call the mempalace **search** tool FIRST. Never guess from training data.
+3. AFTER meaningful work (finishing a feature, a decision, learning something):
+   call the mempalace **diary write** tool to record what changed and why.
+4. WHEN facts change: invalidate the old fact, then add the new one.
+`;
+
+function projectHash(projectPath: string): string {
+  return createHash('sha1').update(projectPath).digest('hex').slice(0, 12);
+}
+
+function devspaceConfigDir(projectPath: string, profileId: string): string {
+  return path.join(
+    os.homedir(),
+    '.devspace',
+    'opencode',
+    `${projectHash(projectPath)}-${profileId}`,
+  );
+}
+
+// Frontmatter parse — mirrors devspace-learnings.mjs / MemoryService serialize.
+function parseEntry(
+  raw: string,
+  fallbackName: string,
+): { type: string; desc: string; body: string } {
+  const fm: Record<string, string> = {};
+  let body = raw;
+  if (raw.startsWith('---')) {
+    const idx = raw.indexOf('\n---', 3);
+    if (idx >= 0) {
+      for (const line of raw.slice(3, idx).split('\n')) {
+        const m = /^([a-zA-Z][\w-]*):\s*(.*)$/.exec(line.trim());
+        if (m) fm[m[1]] = m[2];
+      }
+      body = raw.slice(idx + 4).replace(/^\n/, '');
+    }
+  }
+  return {
+    type: fm.type || 'memory',
+    desc: fm.description || fm.name || fallbackName,
+    body: body.trim(),
+  };
+}
+
+// Read this project's distilled learnings + memory from DevSpace native memory
+// (~/.devspace/projects/<hash>/memory) — the same source devspace-learnings.mjs
+// injects into Claude on SessionStart. Returns '' when there's nothing.
+function readProjectLearnings(projectPath: string): string {
+  try {
+    const memDir = path.join(
+      os.homedir(),
+      '.devspace',
+      'projects',
+      projectHash(projectPath),
+      'memory',
+    );
+    const files = fs
+      .readdirSync(memDir)
+      .filter((f) => f.endsWith('.md') && f !== 'MEMORY.md');
+    const LEARNING_TYPES = new Set(['lesson', 'workflow', 'preference', 'feedback']);
+    const learnings: Array<ReturnType<typeof parseEntry>> = [];
+    const memory: Array<ReturnType<typeof parseEntry>> = [];
+    for (const f of files) {
+      let raw: string;
+      try {
+        raw = fs.readFileSync(path.join(memDir, f), 'utf8');
+      } catch {
+        continue;
+      }
+      const e = parseEntry(raw, f.replace(/\.md$/, ''));
+      (LEARNING_TYPES.has(e.type) ? learnings : memory).push(e);
+    }
+    if (learnings.length === 0 && memory.length === 0) return '';
+    const fmt = (e: ReturnType<typeof parseEntry>): string => {
+      const oneLine = e.body.replace(/\s+/g, ' ').trim();
+      const detail = oneLine && oneLine !== e.desc ? ` — ${oneLine.slice(0, 360)}` : '';
+      return `- [${e.type}] ${e.desc}${detail}`;
+    };
+    const sections: string[] = [];
+    if (learnings.length) {
+      sections.push(
+        'Distilled learnings for this project (apply them; do not relearn):\n' +
+          learnings.slice(0, 25).map(fmt).join('\n'),
+      );
+    }
+    if (memory.length) {
+      sections.push(
+        'Project memory notes:\n' + memory.slice(0, 15).map(fmt).join('\n'),
+      );
+    }
+    return (
+      'DevSpace native memory for this codebase — treat as established context:\n\n' +
+      sections.join('\n\n')
+    );
+  } catch {
+    return '';
+  }
 }
 
 // Mirror the user's MemPalace MCP command from its installed Claude plugin so
-// OpenCode talks to the SAME palace (same python, same --palace path). Returns
-// the spawn argv (command + args) or null when MemPalace isn't installed.
+// OpenCode talks to the SAME palace. Returns the spawn argv or null when absent.
 export async function resolveMempalaceMcpCommand(): Promise<string[] | null> {
   try {
     const dir = path.join(
@@ -38,7 +142,6 @@ export async function resolveMempalaceMcpCommand(): Promise<string[] | null> {
       'mempalace',
       'mempalace',
     );
-    // Newest version first — plugin dirs are semver-named.
     const versions = (await fs.promises.readdir(dir)).sort().reverse();
     for (const v of versions) {
       try {
@@ -56,73 +159,55 @@ export async function resolveMempalaceMcpCommand(): Promise<string[] | null> {
       }
     }
   } catch {
-    // MemPalace plugin not installed — fine, opencode just won't get memory.
+    // MemPalace plugin not installed.
   }
   return null;
 }
 
-// Injected into opencode's `instructions` so it uses the memory brain the same
-// way Claude does — Claude gets this protocol via a SessionStart hook; OpenCode
-// has no equivalent, so we wire it through config. Verified end-to-end: with
-// this present, opencode auto-calls the mempalace search tool before answering
-// project questions (no explicit prompt needed).
-const MEMPALACE_PROTOCOL = `# Memory Protocol (MemPalace) — FOLLOW ON EVERY SESSION
-
-You have a persistent memory palace via the \`mempalace\` MCP tools — your
-long-term memory across sessions. Storage ≠ memory; storage + this protocol =
-memory.
-
-1. WAKE-UP: at the start of each session, call the mempalace **status** tool
-   FIRST to load the palace overview (wings, rooms, drawer counts).
-2. BEFORE answering about any person, project, past event, or prior decision:
-   call the mempalace **search** tool FIRST. Never guess from training data.
-3. AFTER meaningful work (finishing a feature, a decision, learning something):
-   call the mempalace **diary write** tool to record what changed and why.
-4. WHEN facts change: invalidate the old fact, then add the new one.
+// The opencode plugin source — replicates Claude's deterministic hooks:
+//   • tool.execute.before(bash): rewrite the command via `rtk rewrite` for token
+//     savings; self-gating (no-op when rtk is absent or has no equivalent).
+//   • session.idle: distill this project's recent activity into learnings via the
+//     bundled Stop-hook script (self-throttled to 30 min + anti-recursion).
+function pluginSource(distillScript: string): string {
+  return `// DevSpace OpenCode plugin — generated. Claude-hook parity (rtk + distill).
+export const DevSpacePlugin = async ({ $, directory }) => {
+  return {
+    "tool.execute.before": async (input, output) => {
+      if (input.tool === "bash" && output.args && typeof output.args.command === "string") {
+        const cmd = output.args.command;
+        try {
+          const res = await $\`rtk rewrite \${cmd}\`.quiet().nothrow();
+          if (res.exitCode === 0) {
+            const r = res.stdout.toString().trim();
+            if (r && r !== cmd) output.args.command = r;
+          }
+        } catch (e) {}
+      }
+    },
+    "session.idle": async () => {
+      try {
+        await $\`env CLAUDE_PROJECT_DIR=\${directory} node ${JSON.stringify(distillScript)}\`.quiet().nothrow();
+      } catch (e) {}
+    },
+  };
+};
 `;
-
-// Mirrors the Claude Code RTK hook for OpenCode: when the token-optimizing
-// `rtk` proxy is installed, instruct OpenCode to prefix shell commands with it.
-// rtk is always safe — it passes commands through unchanged when it has no
-// dedicated filter, and compacts verbose output (build/test/git) otherwise.
-const RTK_RULE = `# Shell tooling (RTK) — token-optimized commands
-
-\`rtk\` is a token-optimizing CLI proxy installed on this machine. ALWAYS prefix
-shell commands with \`rtk\` — it compacts verbose output (build, test, git, ls,
-grep, …) and passes through unchanged when it has no filter, so it is always
-safe. Use it even inside && chains.
-
-Examples: \`rtk git status\`, \`rtk git diff\`, \`rtk vitest run\`, \`rtk ls <path>\`,
-\`rtk grep <pattern>\`, \`rtk git add . && rtk git commit -m "msg"\`.
-`;
-
-// rtk presence gate — only instruct OpenCode to use rtk when it's actually on
-// PATH (otherwise the prefix would be a command-not-found for every command).
-async function isRtkInstalled(): Promise<boolean> {
-  try {
-    const cmd = process.platform === 'win32' ? 'where' : 'which';
-    await execFileP(cmd, ['rtk'], { timeout: 3000 });
-    return true;
-  } catch {
-    return false;
-  }
 }
 
-// Materialize the per-tab opencode.json. `profile` adds a custom provider; null
-// = the user's own providers/auth (we still inject the MCP brain + protocol).
-// Returns the dir to point OPENCODE_CONFIG_DIR at. 0o600 (holds the key).
+// Materialize the per-(project, profile) opencode config + plugin. Returns the
+// dir to point OPENCODE_CONFIG_DIR at. 0o600 (holds the provider key).
 export async function ensureOpenCodeConfig(
   profile: CliProfile | null,
+  projectPath: string = process.cwd(),
 ): Promise<{ configDir: string }> {
-  const configDir = devspaceConfigDir(profile ? profile.id : 'default');
+  const configDir = devspaceConfigDir(projectPath, profile ? profile.id : 'default');
   const config: Record<string, unknown> = {
     $schema: 'https://opencode.ai/config.json',
   };
-
-  // Same brain Claude uses: the MemPalace MCP server (mirrored from its Claude
-  // plugin) + its usage protocol as `instructions`, so OpenCode uses memory
-  // automatically rather than only having the tools available.
   const instructions: string[] = [];
+
+  // 1) MemPalace MCP brain + usage protocol.
   const mempalace = await resolveMempalaceMcpCommand();
   if (mempalace) {
     config.mcp = {
@@ -135,13 +220,34 @@ export async function ensureOpenCodeConfig(
     });
     instructions.push(protocolPath);
   }
-  if (await isRtkInstalled()) {
-    const rtkPath = path.join(configDir, 'rtk-rule.md');
-    await atomicWriteAsync(rtkPath, RTK_RULE, { mode: 0o600, dirMode: 0o700 });
-    instructions.push(rtkPath);
+
+  // 2) This project's distilled learnings (Claude SessionStart-inject parity).
+  const learnings = readProjectLearnings(projectPath);
+  if (learnings) {
+    const learningsPath = path.join(configDir, 'project-learnings.md');
+    await atomicWriteAsync(learningsPath, learnings, {
+      mode: 0o600,
+      dirMode: 0o700,
+    });
+    instructions.push(learningsPath);
   }
   if (instructions.length > 0) config.instructions = instructions;
 
+  // 3) Deterministic-hook plugin (rtk rewrite + distill-on-idle). Loaded from
+  // <configDir>/plugins/ (auto-load — the config `plugin` field npm-resolves
+  // paths and HANGS, so local plugins MUST go in the dir, not the field).
+  try {
+    const { getBundledDistillHookFile } = await import('@main/utils/setupPaths');
+    await atomicWriteAsync(
+      path.join(configDir, 'plugins', 'devspace.js'),
+      pluginSource(getBundledDistillHookFile()),
+      { mode: 0o600, dirMode: 0o700 },
+    );
+  } catch (err) {
+    logger.warn(`opencode plugin write failed: ${(err as Error).message}`);
+  }
+
+  // 4) Custom OpenAI-compatible provider when a profile is chosen.
   if (profile) {
     const providerId = 'custom';
     config.provider = {
@@ -157,13 +263,14 @@ export async function ensureOpenCodeConfig(
     };
     config.model = `${providerId}/${profile.provider.model}`;
   }
+
   await atomicWriteAsync(
     path.join(configDir, 'opencode.json'),
     JSON.stringify(config, null, 2),
     { mode: 0o600, dirMode: 0o700 },
   );
   logger.info(
-    `wrote opencode config (${profile ? `provider=${profile.name}` : 'default'}) → ${configDir}`,
+    `wrote opencode config (${profile ? `provider=${profile.name}` : 'default'}) + plugin → ${configDir}`,
   );
   return { configDir };
 }
