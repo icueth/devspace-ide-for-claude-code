@@ -1,5 +1,6 @@
 import { resolveAuthEnvPairs } from '@main/services/ClaudeAuthService';
 import { getCliProfile } from '@main/services/CliProfileService';
+import { ensureCodexMcp, ensureGeminiMcp } from '@main/services/cliMcpSetup';
 import { ensureOpenCodeConfig } from '@main/services/openCodeConfig';
 import { createPty, getSession } from '@main/services/PtyPool';
 import {
@@ -356,6 +357,7 @@ async function launchPlainTuiCli(
   binName: string,
   tmuxPrefix: string,
   installUrl: string,
+  extraArgs: string[],
   opts: PlainTuiLaunchOptions,
 ): Promise<PtySession> {
   const tabId = opts.tabId ?? 'default';
@@ -389,6 +391,7 @@ async function launchPlainTuiCli(
         '-c',
         opts.cwd,
         bin,
+        ...extraArgs,
       ],
       cols: opts.cols,
       rows: opts.rows,
@@ -403,7 +406,7 @@ async function launchPlainTuiCli(
       tabId,
       cwd: opts.cwd,
       command: bin,
-      args: [],
+      args: extraArgs,
       cols: opts.cols,
       rows: opts.rows,
     });
@@ -423,22 +426,34 @@ async function launchPlainTuiCli(
   });
 }
 
-export function launchCodexCli(opts: PlainTuiLaunchOptions): Promise<PtySession> {
+export async function launchCodexCli(
+  opts: PlainTuiLaunchOptions,
+): Promise<PtySession> {
+  // Register the MemPalace brain in Codex's config before it reads it (idempotent).
+  await ensureCodexMcp();
   return launchPlainTuiCli(
     'codex-cli',
     'codex',
     'cx',
     'https://github.com/openai/codex',
+    [],
     opts,
   );
 }
 
-export function launchGeminiCli(opts: PlainTuiLaunchOptions): Promise<PtySession> {
+export async function launchGeminiCli(
+  opts: PlainTuiLaunchOptions,
+): Promise<PtySession> {
+  await ensureGeminiMcp();
+  // --skip-trust trusts this project for the session so the MemPalace MCP is
+  // enabled (Gemini disables MCP in untrusted folders). Same trust boundary as
+  // Claude's --dangerously-skip-permissions — the user chose to open it here.
   return launchPlainTuiCli(
     'gemini-cli',
     'gemini',
     'gm',
     'https://github.com/google-gemini/gemini-cli',
+    ['--skip-trust'],
     opts,
   );
 }
