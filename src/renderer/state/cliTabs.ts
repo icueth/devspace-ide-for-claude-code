@@ -112,7 +112,7 @@ interface CliTabsState extends PersistedShape {
   focusSingleProject: (projectId: string, tabId: string) => void;
   addTab: (
     projectId: string,
-    opts?: { authProfileId?: string; cliId?: CliId },
+    opts?: { authProfileId?: string; cliId?: CliId; cliProfileId?: string },
   ) => CliTab | null;
   removeTab: (projectId: string, tabId: string) => void;
   setActiveTab: (projectId: string, tabId: string) => void;
@@ -301,6 +301,7 @@ export const useCliTabsStore = create<CliTabsState>((set, get) => {
         ...makeTab(projectId, label),
         authProfileId: opts?.authProfileId,
         cliId: opts?.cliId,
+        cliProfileId: opts?.cliProfileId,
       };
       set((prev) => {
         const next: PersistedShape = {

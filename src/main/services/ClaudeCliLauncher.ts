@@ -1,4 +1,6 @@
+import { opencodeAdapter } from '@main/cli/adapters/opencode';
 import { resolveAuthEnvPairs } from '@main/services/ClaudeAuthService';
+import { getCliProfile } from '@main/services/CliProfileService';
 import { createPty, getSession } from '@main/services/PtyPool';
 import {
   getTmuxConfigSync,
@@ -244,8 +246,8 @@ export interface OpenCodeLaunchOptions {
   cwd: string;
   cols?: number;
   rows?: number;
-  /** OPENCODE_CONFIG_DIR for a per-profile provider config (omit = user's own). */
-  configDir?: string;
+  /** CliProfile id for a custom provider config (omit = the user's own config). */
+  cliProfileId?: string;
 }
 
 /**
@@ -267,10 +269,18 @@ export async function launchOpenCodeCli(
   const env = await resolveInteractiveShellEnv();
   const shell = env.SHELL ?? process.env.SHELL ?? '/bin/zsh';
 
-  // Per-profile config dir (v2 custom providers); omit = the user's existing
-  // ~/.config/opencode + auth.json.
-  const configEnv = opts.configDir
-    ? ['env', `OPENCODE_CONFIG_DIR=${opts.configDir}`]
+  // Resolve a custom provider profile → OPENCODE_CONFIG_DIR (the adapter writes
+  // a 0o600 opencode.json there). omit = the user's own ~/.config/opencode +
+  // auth.json. Re-materialized each launch (idempotent) so edits take effect.
+  let configDir: string | undefined;
+  if (opts.cliProfileId) {
+    const profile = await getCliProfile(opts.cliProfileId);
+    if (profile && profile.cliId === 'opencode') {
+      configDir = (await opencodeAdapter.ensureConfig(profile)).configDir;
+    }
+  }
+  const configEnv = configDir
+    ? ['env', `OPENCODE_CONFIG_DIR=${configDir}`]
     : [];
 
   if (tmuxBin && ocBin) {
@@ -308,10 +318,8 @@ export async function launchOpenCodeCli(
       kind: 'opencode-cli',
       tabId,
       cwd: opts.cwd,
-      command: opts.configDir ? '/usr/bin/env' : ocBin,
-      args: opts.configDir
-        ? [`OPENCODE_CONFIG_DIR=${opts.configDir}`, ocBin]
-        : [],
+      command: configDir ? '/usr/bin/env' : ocBin,
+      args: configDir ? [`OPENCODE_CONFIG_DIR=${configDir}`, ocBin] : [],
       cols: opts.cols,
       rows: opts.rows,
     });

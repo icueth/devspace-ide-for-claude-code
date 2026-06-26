@@ -1,14 +1,23 @@
 import * as Dialog from '@radix-ui/react-dialog';
 import { Columns2, KeyRound, Plus, RotateCcw, Trash2, X } from 'lucide-react';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useState } from 'react';
 
 import { api } from '@renderer/lib/api';
 import { cn } from '@renderer/lib/utils';
+import {
+  ManageAuthDialog,
+  ManageOpenCodeDialog,
+} from '@renderer/components/Dock/CliAuthDialogs';
 import { activate } from '@renderer/state/activation';
 import { useCliTabsStore } from '@renderer/state/cliTabs';
 import { findColumnIdPinning } from '@renderer/state/cliTabsPins';
 import { useWorkspaceStore } from '@renderer/state/workspace';
-import type { ClaudeAuthProfile, CliTab, DockedProjectMeta } from '@shared/types';
+import type {
+  ClaudeAuthProfile,
+  CliProfile,
+  CliTab,
+  DockedProjectMeta,
+} from '@shared/types';
 
 // Shared with ClaudeCliDock's drop-zone overlay ("+ Split" only renders
 // while columns.length < MAX_COLUMNS) — keep the two in lockstep.
@@ -45,9 +54,15 @@ export function CliTabBar({
   // Per-tab auth: the + button opens a profile picker; "Manage…" opens a dialog.
   const [authMenu, setAuthMenu] = useState<{ x: number; y: number } | null>(null);
   const [manageAuthOpen, setManageAuthOpen] = useState(false);
+  const [manageOpenCodeOpen, setManageOpenCodeOpen] = useState(false);
   const [authProfiles, setAuthProfiles] = useState<ClaudeAuthProfile[]>([]);
+  const [cliProfiles, setCliProfiles] = useState<CliProfile[]>([]);
   const refreshAuthProfiles = useCallback(() => {
     void api.claudeAuth.list().then(setAuthProfiles).catch(() => undefined);
+    void api.cli
+      .listProfiles('opencode')
+      .then(setCliProfiles)
+      .catch(() => undefined);
   }, []);
   // D2 — chips for projects NOT in the current workspace get a small workspace
   // label so multiple workspaces' chats are distinguishable in one bar. Plan C:
@@ -306,7 +321,20 @@ export function CliTabBar({
                 )}
               </button>
             ))}
+            <button
+              type="button"
+              onClick={() => {
+                setManageAuthOpen(true);
+                setAuthMenu(null);
+              }}
+              className="flex w-full items-center gap-2 rounded-[5px] px-2 py-1.5 text-left text-[11px] text-text-muted transition hover:bg-surface-3 hover:text-text"
+            >
+              <KeyRound size={11} /> Manage Claude auth…
+            </button>
             <div className="my-1 h-px bg-border-subtle" />
+            <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-text-muted">
+              New chat — OpenCode
+            </div>
             <button
               type="button"
               onClick={() => {
@@ -320,19 +348,39 @@ export function CliTabBar({
                 className="h-[6px] w-[6px] shrink-0 rounded-full"
                 style={{ background: '#f59e0b' }}
               />
-              <span className="flex-1 truncate">OpenCode</span>
+              <span className="flex-1 truncate">Default (your config)</span>
               <span className="text-[9px] text-text-dim">TUI</span>
             </button>
-            <div className="my-1 h-px bg-border-subtle" />
+            {cliProfiles.map((p) => (
+              <button
+                key={p.id}
+                type="button"
+                onClick={() => {
+                  if (activeDockedProjectId)
+                    addTab(activeDockedProjectId, {
+                      cliId: 'opencode',
+                      cliProfileId: p.id,
+                    });
+                  setAuthMenu(null);
+                }}
+                className="flex w-full items-center gap-2 rounded-[5px] px-2 py-1.5 text-left text-[12px] text-text-secondary transition hover:bg-surface-3 hover:text-text"
+              >
+                <span className="h-[6px] w-[6px] shrink-0 rounded-full bg-semantic-success" />
+                <span className="flex-1 truncate">{p.name}</span>
+                <span className="truncate text-[9px] text-text-dim">
+                  {p.provider.model}
+                </span>
+              </button>
+            ))}
             <button
               type="button"
               onClick={() => {
-                setManageAuthOpen(true);
+                setManageOpenCodeOpen(true);
                 setAuthMenu(null);
               }}
               className="flex w-full items-center gap-2 rounded-[5px] px-2 py-1.5 text-left text-[11px] text-text-muted transition hover:bg-surface-3 hover:text-text"
             >
-              <KeyRound size={11} /> Manage auth profiles…
+              <KeyRound size={11} /> Manage OpenCode providers…
             </button>
           </div>
         </>
@@ -344,162 +392,14 @@ export function CliTabBar({
           refreshAuthProfiles();
         }}
       />
+      <ManageOpenCodeDialog
+        open={manageOpenCodeOpen}
+        onClose={() => {
+          setManageOpenCodeOpen(false);
+          refreshAuthProfiles();
+        }}
+      />
     </>
-  );
-}
-
-function ManageAuthDialog({
-  open,
-  onClose,
-}: {
-  open: boolean;
-  onClose: () => void;
-}) {
-  const [profiles, setProfiles] = useState<ClaudeAuthProfile[]>([]);
-  const [name, setName] = useState('');
-  const [apiKey, setApiKey] = useState('');
-  const [baseUrl, setBaseUrl] = useState('');
-  const [model, setModel] = useState('');
-  const [busy, setBusy] = useState(false);
-
-  const reload = useCallback(() => {
-    void api.claudeAuth.list().then(setProfiles).catch(() => undefined);
-  }, []);
-  useEffect(() => {
-    if (open) reload();
-  }, [open, reload]);
-
-  const add = async (): Promise<void> => {
-    if (!name.trim() || !apiKey.trim() || busy) return;
-    setBusy(true);
-    try {
-      await api.claudeAuth.save({
-        name: name.trim(),
-        apiKey: apiKey.trim(),
-        baseUrl: baseUrl.trim() || undefined,
-        model: model.trim() || undefined,
-      });
-      setName('');
-      setApiKey('');
-      setBaseUrl('');
-      setModel('');
-      reload();
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <Dialog.Root
-      open={open}
-      onOpenChange={(o) => {
-        if (!o) onClose();
-      }}
-    >
-      <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 z-40 bg-black/40" />
-        <Dialog.Content className="fixed left-1/2 top-24 z-50 w-[min(520px,90vw)] overflow-hidden rounded-lg border border-border-emphasis bg-surface-raised shadow-2xl">
-          <Dialog.Title className="border-b border-border-subtle bg-surface-sidebar px-4 py-2 text-[12px] font-medium text-text">
-            Claude auth profiles
-          </Dialog.Title>
-          <div className="flex flex-col gap-3 px-4 py-3">
-            <p className="text-[11px] leading-relaxed text-text-muted">
-              Each chat tab can launch on a different auth. Subscription uses your
-              claude login; an API profile injects ANTHROPIC_API_KEY (+ optional
-              base URL) for that tab only — so you can run both at once.
-            </p>
-            <div className="flex flex-col gap-1.5">
-              {profiles.map((p) => (
-                <div
-                  key={p.id}
-                  className="flex items-center gap-2 rounded-[6px] border border-border bg-surface-2 px-2.5 py-1.5 text-[12px]"
-                >
-                  <span
-                    className={cn(
-                      'h-[6px] w-[6px] shrink-0 rounded-full',
-                      p.kind === 'subscription'
-                        ? 'bg-accent'
-                        : 'bg-semantic-success',
-                    )}
-                  />
-                  <span className="truncate text-text">{p.name}</span>
-                  {p.baseUrl && (
-                    <span className="truncate font-mono text-[9.5px] text-text-dim">
-                      {p.baseUrl}
-                    </span>
-                  )}
-                  {p.model && (
-                    <span className="truncate font-mono text-[9.5px] text-text-dim">
-                      {p.model}
-                    </span>
-                  )}
-                  <span className="flex-1" />
-                  {p.kind === 'api' ? (
-                    <button
-                      type="button"
-                      onClick={() => void api.claudeAuth.delete(p.id).then(reload)}
-                      title="Delete profile"
-                      className="text-text-muted transition hover:text-semantic-error"
-                    >
-                      <Trash2 size={12} />
-                    </button>
-                  ) : (
-                    <span className="text-[9px] text-text-dim">built-in</span>
-                  )}
-                </div>
-              ))}
-            </div>
-            <div className="mt-1 flex flex-col gap-2 rounded-[7px] border border-border-subtle bg-surface-2 p-2.5">
-              <span className="text-[10px] font-semibold uppercase tracking-wider text-text-muted">
-                Add API profile
-              </span>
-              <input
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder="Name (e.g. Work API)"
-                className="rounded-[6px] border border-border bg-surface-3 px-2 py-1.5 text-[12px] text-text outline-none focus:border-accent"
-              />
-              <input
-                value={apiKey}
-                onChange={(e) => setApiKey(e.target.value)}
-                type="password"
-                placeholder="ANTHROPIC_API_KEY (sk-ant-…)"
-                className="rounded-[6px] border border-border bg-surface-3 px-2 py-1.5 font-mono text-[12px] text-text outline-none focus:border-accent"
-              />
-              <input
-                value={baseUrl}
-                onChange={(e) => setBaseUrl(e.target.value)}
-                placeholder="Base URL (optional — gateway/proxy)"
-                className="rounded-[6px] border border-border bg-surface-3 px-2 py-1.5 font-mono text-[11px] text-text outline-none focus:border-accent"
-              />
-              <input
-                value={model}
-                onChange={(e) => setModel(e.target.value)}
-                placeholder="Model (optional — e.g. claude-opus-4-8, or gateway model id)"
-                className="rounded-[6px] border border-border bg-surface-3 px-2 py-1.5 font-mono text-[11px] text-text outline-none focus:border-accent"
-              />
-              <button
-                type="button"
-                onClick={() => void add()}
-                disabled={busy || !name.trim() || !apiKey.trim()}
-                className="self-end rounded-[6px] bg-accent px-3 py-1 text-[11px] font-medium text-white transition hover:opacity-90 disabled:opacity-40"
-              >
-                {busy ? 'Saving…' : 'Add profile'}
-              </button>
-            </div>
-          </div>
-          <div className="flex justify-end border-t border-border-subtle bg-surface-sidebar px-3 py-2">
-            <button
-              type="button"
-              onClick={onClose}
-              className="rounded px-3 py-1 text-[11px] text-text-secondary transition hover:bg-surface-overlay hover:text-text"
-            >
-              Done
-            </button>
-          </div>
-        </Dialog.Content>
-      </Dialog.Portal>
-    </Dialog.Root>
   );
 }
 

@@ -5,6 +5,7 @@ import type {
   BackgroundRunStatus,
   CliCapabilities,
   CliDetectionResult,
+  CliProfile,
   CliId,
   CodeflowFunctionEdge,
   CodeflowFunctionGraph,
@@ -266,6 +267,16 @@ export interface DevspaceApi {
   // so the renderer can version-gate features on the detected CLI version.
   cli: {
     detect: () => Promise<CliDetectionResult[]>;
+    listProfiles: (cliId?: CliId) => Promise<CliProfile[]>;
+    saveProfile: (input: {
+      id?: string;
+      name: string;
+      cliId: Exclude<CliId, 'claude'>;
+      baseURL: string;
+      apiKey: string;
+      model: string;
+    }) => Promise<CliProfile>;
+    deleteProfile: (id: string) => Promise<void>;
   };
   agents: {
     list: (projectPath: string | null) => Promise<AgentDef[]>;
@@ -733,6 +744,9 @@ function makeStubApi(): DevspaceApi {
     },
     cli: {
       detect: () => Promise.resolve([]),
+      listProfiles: () => Promise.resolve([]),
+      saveProfile: notWired('cli.saveProfile'),
+      deleteProfile: notWired('cli.deleteProfile'),
     },
     agents: {
       list: () => Promise.resolve([]),

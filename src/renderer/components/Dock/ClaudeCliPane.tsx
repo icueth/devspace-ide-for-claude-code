@@ -55,6 +55,8 @@ interface ClaudeCliPaneProps {
   // Which CLI runs in this pane (undefined = 'claude'). 'opencode' launches the
   // OpenCode TUI and hides Claude-only chrome (tool-approval banner, slashes).
   cliId?: CliId;
+  // For a non-claude tab: the CliProfile (custom provider) it launches with.
+  cliProfileId?: string;
 }
 
 export function ClaudeCliPane({
@@ -64,6 +66,7 @@ export function ClaudeCliPane({
   isActive,
   authProfileId,
   cliId,
+  cliProfileId,
 }: ClaudeCliPaneProps) {
   const cli = cliId ?? 'claude';
   const isClaude = cli === 'claude';
@@ -105,6 +108,7 @@ export function ClaudeCliPane({
         cols: 120,
         rows: 32,
         authProfileId,
+        cliProfileId,
       })
       .then((session) => {
         if (cancelled) return;

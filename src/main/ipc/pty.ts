@@ -60,6 +60,7 @@ export function registerPtyIpc(): void {
           cwd: opts.cwd,
           cols: opts.cols,
           rows: opts.rows,
+          cliProfileId: opts.cliProfileId,
         });
       } else if (opts.kind === 'shell') {
         session = await launchShell({

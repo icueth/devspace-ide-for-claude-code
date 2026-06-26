@@ -419,6 +419,8 @@ export interface PtyCreateOptions {
   rows?: number;
   // Claude auth profile id for a 'claude-cli' session (per-tab credentials).
   authProfileId?: string;
+  // CliProfile id for a non-claude session (custom provider config).
+  cliProfileId?: string;
 }
 
 export interface PtySession {
@@ -444,6 +446,9 @@ export interface CliTab {
   // Which CLI this tab runs (undefined = 'claude'). 'opencode' launches the
   // OpenCode TUI instead, in its own PTY session.
   cliId?: CliId;
+  // For a non-claude tab: the CliProfile (custom provider) it launches with.
+  // undefined = the CLI's own default config/auth.
+  cliProfileId?: string;
 }
 
 // Per-project shell terminal tab. The bottom-panel terminal supports many

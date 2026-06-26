@@ -136,6 +136,10 @@ export const IPC = {
   // CLI runtime detection. Probes binaries on PATH (currently just
   // `claude`) so the UI can version-gate features on the detected CLI.
   CLI_DETECT: 'cli:detect',
+  // Per-provider CliProfiles for non-claude CLIs (OpenCode custom providers).
+  CLI_PROFILE_LIST: 'cli:profile-list',
+  CLI_PROFILE_SAVE: 'cli:profile-save',
+  CLI_PROFILE_DELETE: 'cli:profile-delete',
 
   // Agents (~/.claude/agents/*.md and <project>/.claude/agents/*.md)
   AGENTS_LIST: 'agents:list',

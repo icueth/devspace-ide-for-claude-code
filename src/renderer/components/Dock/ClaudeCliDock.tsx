@@ -398,6 +398,7 @@ export const ClaudeCliDock = memo(function ClaudeCliDock() {
                     isActive={isActiveColumn}
                     authProfileId={tab.authProfileId}
                     cliId={tab.cliId}
+                    cliProfileId={tab.cliProfileId}
                   />
                 </Suspense>
               </div>

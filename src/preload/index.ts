@@ -273,6 +273,12 @@ const api = {
   // CLI runtime detection (claude version gate).
   cli: {
     detect: () => ipcRenderer.invoke(IPC.CLI_DETECT),
+    listProfiles: (cliId?: unknown) =>
+      ipcRenderer.invoke(IPC.CLI_PROFILE_LIST, cliId),
+    saveProfile: (input: unknown) =>
+      ipcRenderer.invoke(IPC.CLI_PROFILE_SAVE, input),
+    deleteProfile: (id: string) =>
+      ipcRenderer.invoke(IPC.CLI_PROFILE_DELETE, id),
   },
   agents: {
     list: (projectPath: string | null) =>
