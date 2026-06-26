@@ -1,6 +1,10 @@
 import { BrowserWindow, ipcMain } from 'electron';
 
-import { launchClaudeCli, launchShell } from '@main/services/ClaudeCliLauncher';
+import {
+  launchClaudeCli,
+  launchOpenCodeCli,
+  launchShell,
+} from '@main/services/ClaudeCliLauncher';
 import { reconcileOrphanCliSessions } from '@main/services/sessionReconcile';
 import {
   createPty,
@@ -49,6 +53,14 @@ export function registerPtyIpc(): void {
         // guard lives in ensureTaskMcpRegistered). Fire-and-forget — a config
         // write must never delay the pane.
         void ensureTaskMcpRegistered(opts.cwd);
+      } else if (opts.kind === 'opencode-cli') {
+        session = await launchOpenCodeCli({
+          projectId: opts.projectId,
+          tabId: opts.tabId,
+          cwd: opts.cwd,
+          cols: opts.cols,
+          rows: opts.rows,
+        });
       } else if (opts.kind === 'shell') {
         session = await launchShell({
           projectId: opts.projectId,

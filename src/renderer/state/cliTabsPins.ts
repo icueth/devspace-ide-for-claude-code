@@ -1,4 +1,4 @@
-import type { CliTab, DockColumn, DockedProjectMeta } from '@shared/types';
+import type { CliId, CliTab, DockColumn, DockedProjectMeta } from '@shared/types';
 
 /**
  * Pure pin helpers for the CLI dock's column layout (extracted from
@@ -42,8 +42,18 @@ function samePin(
   return !!a && !!b && a.projectId === b.projectId && a.tabId === b.tabId;
 }
 
+// PtyPool keys every session `<projectId>:<kind>:<tabId>`; kind = `<cliId>-cli`.
+// The pane subscribes by this id, so it must match the launcher's createPty kind.
+export function cliSessionId(
+  cliId: CliId,
+  projectId: string,
+  tabId: string,
+): string {
+  return `${projectId}:${cliId}-cli:${tabId}`;
+}
+
 export function claudeCliSessionId(projectId: string, tabId: string): string {
-  return `${projectId}:claude-cli:${tabId}`;
+  return cliSessionId('claude', projectId, tabId);
 }
 
 /** The column currently showing (projectId, tabId), if any. */

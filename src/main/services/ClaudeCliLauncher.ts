@@ -238,6 +238,99 @@ export async function launchClaudeCli(
   });
 }
 
+export interface OpenCodeLaunchOptions {
+  projectId: string;
+  tabId?: string;
+  cwd: string;
+  cols?: number;
+  rows?: number;
+  /** OPENCODE_CONFIG_DIR for a per-profile provider config (omit = user's own). */
+  configDir?: string;
+}
+
+/**
+ * Start (or reuse) an OpenCode TUI PTY session for a project tab. OpenCode runs
+ * as an interactive terminal app, so this mirrors launchClaudeCli's tmux-backed
+ * approach (resume-on-reopen) but spawns the `opencode` binary. Falls back to a
+ * shell hint if opencode isn't installed.
+ */
+export async function launchOpenCodeCli(
+  opts: OpenCodeLaunchOptions,
+): Promise<PtySession> {
+  const tabId = opts.tabId ?? 'default';
+  const existing = getSession(opts.projectId, 'opencode-cli', tabId);
+  if (existing) return existing;
+
+  const ocBin = await findOnPath('opencode');
+  const cfg = await loadTmuxConfig();
+  const tmuxBin = cfg.enabled ? await resolveTmuxBinary() : null;
+  const env = await resolveInteractiveShellEnv();
+  const shell = env.SHELL ?? process.env.SHELL ?? '/bin/zsh';
+
+  // Per-profile config dir (v2 custom providers); omit = the user's existing
+  // ~/.config/opencode + auth.json.
+  const configEnv = opts.configDir
+    ? ['env', `OPENCODE_CONFIG_DIR=${opts.configDir}`]
+    : [];
+
+  if (tmuxBin && ocBin) {
+    const sessionName = tmuxSessionName(cfg, 'oc', opts.projectId, tabId);
+    logger.info(
+      `tmux-backed opencode for project=${opts.projectId} tab=${tabId} (${sessionName})`,
+    );
+    return createPty({
+      projectId: opts.projectId,
+      kind: 'opencode-cli',
+      tabId,
+      cwd: opts.cwd,
+      command: tmuxBin,
+      args: [
+        '-L',
+        cfg.socketName,
+        'new-session',
+        '-A',
+        '-s',
+        sessionName,
+        '-c',
+        opts.cwd,
+        ...configEnv,
+        ocBin,
+      ],
+      cols: opts.cols,
+      rows: opts.rows,
+    });
+  }
+
+  if (ocBin) {
+    logger.info(`spawning opencode (${ocBin}) without tmux`);
+    return createPty({
+      projectId: opts.projectId,
+      kind: 'opencode-cli',
+      tabId,
+      cwd: opts.cwd,
+      command: opts.configDir ? '/usr/bin/env' : ocBin,
+      args: opts.configDir
+        ? [`OPENCODE_CONFIG_DIR=${opts.configDir}`, ocBin]
+        : [],
+      cols: opts.cols,
+      rows: opts.rows,
+    });
+  }
+
+  logger.warn('opencode binary not found on PATH — starting shell with a hint');
+  const hintCmd = `echo "⚠️  'opencode' not found on PATH. Install OpenCode: https://opencode.ai" && exec ${shell} -l`;
+  return createPty({
+    projectId: opts.projectId,
+    kind: 'opencode-cli',
+    tabId,
+    cwd: opts.cwd,
+    command: shell,
+    args: ['-l', '-c', hintCmd],
+    cols: opts.cols,
+    rows: opts.rows,
+  });
+}
+
 export interface ShellLaunchOptions {
   projectId: string;
   cwd: string;

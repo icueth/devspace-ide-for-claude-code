@@ -2,25 +2,28 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { detectAll, getAdapter, listAdapters } from '@main/cli/registry';
 import { claudeAdapter } from '@main/cli/adapters/claude';
+import { opencodeAdapter } from '@main/cli/adapters/opencode';
 
 describe('CLI registry — getAdapter', () => {
   it('returns the claude adapter for cliId=claude', () => {
     expect(getAdapter('claude')).toBe(claudeAdapter);
   });
 
+  it('returns the opencode adapter for cliId=opencode', () => {
+    expect(getAdapter('opencode')).toBe(opencodeAdapter);
+  });
+
   it('throws for unknown cli ids', () => {
-    // OpenCode and other alternative runtimes were removed with Chat mode —
-    // claude is the only registered adapter now.
-    expect(() => getAdapter('opencode' as unknown as 'claude')).toThrow(
+    expect(() => getAdapter('codex' as unknown as 'claude')).toThrow(
       /Unknown CLI id/,
     );
   });
 });
 
 describe('CLI registry — listAdapters', () => {
-  it('lists only the claude adapter', () => {
+  it('lists the registered adapters (claude + opencode)', () => {
     const ids = listAdapters().map((a) => a.id);
-    expect(ids).toEqual(['claude']);
+    expect(ids).toEqual(['claude', 'opencode']);
   });
 
   it('returns a fresh array (mutation-safe)', () => {
@@ -28,7 +31,7 @@ describe('CLI registry — listAdapters', () => {
     const b = listAdapters();
     expect(a).not.toBe(b);
     a.pop();
-    expect(listAdapters().length).toBe(1);
+    expect(listAdapters().length).toBe(2);
   });
 });
 
@@ -37,12 +40,16 @@ describe('CLI registry — detectAll', () => {
     const claudeSpy = vi
       .spyOn(claudeAdapter, 'detect')
       .mockResolvedValue({ cliId: 'claude', installed: true, version: '4.7' });
+    const opencodeSpy = vi
+      .spyOn(opencodeAdapter, 'detect')
+      .mockResolvedValue({ cliId: 'opencode', installed: false });
 
     const results = await detectAll();
-    expect(results).toHaveLength(1);
+    expect(results).toHaveLength(2);
     expect(results.find((r) => r.cliId === 'claude')?.version).toBe('4.7');
 
     claudeSpy.mockRestore();
+    opencodeSpy.mockRestore();
   });
 
   it('survives a single adapter throwing — reports it as uninstalled', async () => {

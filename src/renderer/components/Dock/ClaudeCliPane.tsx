@@ -4,8 +4,9 @@ import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { useClaudeVersion } from '@renderer/hooks/useClaudeVersion';
 import { api } from '@renderer/lib/api';
 import { cn } from '@renderer/lib/utils';
-import { claudeCliSessionId } from '@renderer/state/cliTabs';
+import { cliSessionId } from '@renderer/state/cliTabsPins';
 import { useGitStore } from '@renderer/state/git';
+import type { CliId } from '@shared/types';
 
 // /goal needs claude-code 2.1.154+. We gate the Goal QuickAction on this.
 const MIN_CLAUDE_FOR_NEW_SLASH = { major: 2, minor: 1, patch: 154 };
@@ -51,6 +52,9 @@ interface ClaudeCliPaneProps {
   isActive?: boolean;
   // Claude auth profile this tab launches with (undefined = subscription).
   authProfileId?: string;
+  // Which CLI runs in this pane (undefined = 'claude'). 'opencode' launches the
+  // OpenCode TUI and hides Claude-only chrome (tool-approval banner, slashes).
+  cliId?: CliId;
 }
 
 export function ClaudeCliPane({
@@ -59,8 +63,11 @@ export function ClaudeCliPane({
   tabId,
   isActive,
   authProfileId,
+  cliId,
 }: ClaudeCliPaneProps) {
-  const sessionId = claudeCliSessionId(projectId, tabId);
+  const cli = cliId ?? 'claude';
+  const isClaude = cli === 'claude';
+  const sessionId = cliSessionId(cli, projectId, tabId);
 
   const [status, setStatus] = useState<'starting' | 'running' | 'exited' | 'error'>(
     'starting',
@@ -93,7 +100,7 @@ export function ClaudeCliPane({
       .create({
         projectId,
         tabId,
-        kind: 'claude-cli',
+        kind: isClaude ? 'claude-cli' : 'opencode-cli',
         cwd: projectPath,
         cols: 120,
         rows: 32,
@@ -119,7 +126,7 @@ export function ClaudeCliPane({
       disposeExit?.();
       // PTY stays in the pool — close-tab handler explicitly kills it.
     };
-  }, [projectId, projectPath, tabId]);
+  }, [projectId, projectPath, tabId, cli]);
 
   const sendSlash = (cmd: string): void => {
     void api.pty.write(sessionId, `${cmd}\r`);
@@ -137,14 +144,20 @@ export function ClaudeCliPane({
         <div
           className="flex h-6 w-6 shrink-0 items-center justify-center rounded-[7px] text-[11px] font-bold text-white"
           style={{
-            background: 'linear-gradient(135deg, #a855f7, #ec4899)',
-            boxShadow: '0 0 12px rgba(168,85,247,0.3)',
+            background: isClaude
+              ? 'linear-gradient(135deg, #a855f7, #ec4899)'
+              : 'linear-gradient(135deg, #f59e0b, #ef4444)',
+            boxShadow: isClaude
+              ? '0 0 12px rgba(168,85,247,0.3)'
+              : '0 0 12px rgba(245,158,11,0.3)',
           }}
         >
-          C
+          {isClaude ? 'C' : 'O'}
         </div>
         <div className="flex items-baseline gap-2">
-          <span className="text-[12px] font-semibold text-text">Claude Code</span>
+          <span className="text-[12px] font-semibold text-text">
+            {isClaude ? 'Claude Code' : 'OpenCode'}
+          </span>
           {status === 'running' && (
             <span
               className="flex items-center gap-1.5 rounded-full px-2 py-[2px] text-[10px] font-medium"
@@ -189,16 +202,20 @@ export function ClaudeCliPane({
             {/* Phase 4a: bottom-anchored approval banner. Subscribes when
                 the PTY is actually running so we don't fire listeners
                 against a session that's still being spawned. */}
-            <Suspense fallback={null}>
-              <ToolApprovalBanner
-                sessionId={sessionId}
-                enabled={status === 'running'}
-              />
-            </Suspense>
+            {isClaude && (
+              <Suspense fallback={null}>
+                <ToolApprovalBanner
+                  sessionId={sessionId}
+                  enabled={status === 'running'}
+                />
+              </Suspense>
+            )}
           </>
         )}
       </div>
-      <QuickActions onSend={sendSlash} disabled={status !== 'running'} />
+      {isClaude && (
+        <QuickActions onSend={sendSlash} disabled={status !== 'running'} />
+      )}
     </div>
   );
 }

@@ -3,6 +3,7 @@
 // commit-sized change (types union + adapter file + this registry).
 
 import { claudeAdapter } from '@main/cli/adapters/claude';
+import { opencodeAdapter } from '@main/cli/adapters/opencode';
 import type { CliAdapter } from '@main/cli/types';
 import { createLogger } from '@shared/logger';
 import type { CliDetectionResult, CliId } from '@shared/types';
@@ -12,7 +13,7 @@ const logger = createLogger('cli-registry');
 // Single registered runtime: claude. (OpenCode and other alternative CLI
 // runtimes were removed along with Chat mode — Terminal mode runs claude
 // directly.) Detection still runs so the UI can version-gate features.
-const ADAPTERS: CliAdapter[] = [claudeAdapter];
+const ADAPTERS: CliAdapter[] = [claudeAdapter, opencodeAdapter];
 
 /**
  * Get the adapter for one CLI id. Throws on unknown ids so callers

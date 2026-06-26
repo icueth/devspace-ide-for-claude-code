@@ -392,6 +392,7 @@ export interface DirEntry {
 
 export type PtySessionKind =
   | 'claude-cli'
+  | 'opencode-cli'
   | 'shell'
   | 'agent'
   | 'dev-server'
@@ -440,6 +441,9 @@ export interface CliTab {
   reloadGen?: number;
   // Claude auth profile this tab launches with (undefined = subscription).
   authProfileId?: string;
+  // Which CLI this tab runs (undefined = 'claude'). 'opencode' launches the
+  // OpenCode TUI instead, in its own PTY session.
+  cliId?: CliId;
 }
 
 // Per-project shell terminal tab. The bottom-panel terminal supports many

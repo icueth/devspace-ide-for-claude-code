@@ -279,7 +279,7 @@ export function CliTabBar({
             style={{ left: authMenu.x, top: authMenu.y }}
           >
             <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-text-muted">
-              New chat — auth
+              New chat — Claude
             </div>
             {authProfiles.map((p) => (
               <button
@@ -287,10 +287,9 @@ export function CliTabBar({
                 type="button"
                 onClick={() => {
                   if (activeDockedProjectId)
-                    addTab(
-                      activeDockedProjectId,
-                      p.id === 'subscription' ? undefined : p.id,
-                    );
+                    addTab(activeDockedProjectId, {
+                      authProfileId: p.id === 'subscription' ? undefined : p.id,
+                    });
                   setAuthMenu(null);
                 }}
                 className="flex w-full items-center gap-2 rounded-[5px] px-2 py-1.5 text-left text-[12px] text-text-secondary transition hover:bg-surface-3 hover:text-text"
@@ -307,6 +306,23 @@ export function CliTabBar({
                 )}
               </button>
             ))}
+            <div className="my-1 h-px bg-border-subtle" />
+            <button
+              type="button"
+              onClick={() => {
+                if (activeDockedProjectId)
+                  addTab(activeDockedProjectId, { cliId: 'opencode' });
+                setAuthMenu(null);
+              }}
+              className="flex w-full items-center gap-2 rounded-[5px] px-2 py-1.5 text-left text-[12px] text-text-secondary transition hover:bg-surface-3 hover:text-text"
+            >
+              <span
+                className="h-[6px] w-[6px] shrink-0 rounded-full"
+                style={{ background: '#f59e0b' }}
+              />
+              <span className="flex-1 truncate">OpenCode</span>
+              <span className="text-[9px] text-text-dim">TUI</span>
+            </button>
             <div className="my-1 h-px bg-border-subtle" />
             <button
               type="button"
