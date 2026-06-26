@@ -121,14 +121,13 @@ export type CliId = 'claude' | 'opencode';
 
 // Capability flags published by each adapter. Renderer reads these to
 // decide which UI affordances apply to a thread (e.g. don't render tool
-// cards / Devlog auto-capture for CLIs whose stream format doesn't emit
+// cards for CLIs whose stream format doesn't emit
 // them). `summaryLabel` is the chip text shown next to the picker.
 export interface CliCapabilities {
   toolCards: boolean;
   diffPreview: boolean;
   askUserQuestion: boolean;
   skills: boolean;
-  devlogAutoCapture: boolean;
   // e.g. "Full" (Claude) / "~90% tools" (OpenCode) / "Bash only" (Codex)
   summaryLabel: string;
 }
@@ -982,105 +981,6 @@ export interface MemoryEvent {
   targetId?: string;
   // The scope key (`global` or `project:<hash>`) the event belongs to.
   scopeKey?: string;
-  ts: number;
-}
-
-// ─── Devlog (v0.24) ─────────────────────────────────────────────────────────
-//
-// Per-project work log stored under `<project>/.devspace/devlog/`. Tracks
-// plans (user intent), agents (Task tool dispatches + outcomes), results
-// (release/feature completions), and a daily append-only log. Source of
-// truth = markdown files; we don't index in SQLite (FTS-on-disk on demand).
-//
-// All file IO goes through DevlogService — never write `.devspace/devlog/*`
-// directly. Service enforces:
-//   - filename validation (YYYY-MM-DD-<slug>.md, slug = ascii kebab ≤ 80c)
-//   - retention caps (log ≤ 90d, agents ≤ 60d, plans+results forever)
-//   - INDEX.md regen on every mutation
-//
-// Auto-capture writes 1 `agents/` entry per `Task(...)` tool_use that
-// completes, with verdict derived from `is_error` on the tool_result.
-
-export type DevlogEntryType = 'plan' | 'agent' | 'result' | 'log';
-
-export type DevlogPlanStatus = 'in_progress' | 'done' | 'abandoned';
-
-export type DevlogVerdict = 'success' | 'partial' | 'failed';
-
-export interface DevlogEntry {
-  // Stable id `<type>/<filename-without-ext>` for React keys + dedup.
-  id: string;
-  type: DevlogEntryType;
-  projectPath: string;
-  // Filename relative to the type dir, e.g. `2026-05-18-design-tier1.md`.
-  // Source of truth; everything else is derived from frontmatter.
-  filename: string;
-  // Display title (frontmatter `title:` or filename slug).
-  title: string;
-  createdAt: number;
-  updatedAt: number;
-  // Markdown body — loaded lazily by Dashboard. Index keeps `preview` only.
-  body?: string;
-  preview: string;
-  // Plan-only fields.
-  status?: DevlogPlanStatus;
-  // Agent-only fields. `subagentType` matches the `subagent_type` param of
-  // the Task tool — never trust unknown values from disk.
-  subagentType?: string;
-  durationMs?: number;
-  verdict?: DevlogVerdict;
-  // Files the agent touched (extracted from tool result, capped 50).
-  filesTouched?: string[];
-  // Cross-links — wiki-style `[[name]]` rendered as clickable in dashboard,
-  // resolved against the same project's index. Missing targets stay as
-  // dangling strings (just like memory entries).
-  links: string[];
-  // Cross-version tracking (result only). e.g. "0.24.0".
-  version?: string;
-  // For result entries — quick stats badge in timeline.
-  diffStats?: { files: number; additions: number; deletions: number };
-  testsPassing?: number;
-  // Linked entry ids (plan ↔ agents ↔ result). Populated by the service
-  // when wiki-links are resolved.
-  linkedPlanIds?: string[];
-  linkedAgentIds?: string[];
-  linkedResultIds?: string[];
-  // Source thread (when auto-captured from chat).
-  threadId?: string;
-  toolUseId?: string;
-}
-
-export interface DevlogSettings {
-  enabled: boolean;
-  // Auto-capture Task() dispatches → agent entries. ON by default.
-  autoCaptureAgents: boolean;
-  // v0.25: end-of-turn smart capture (edits >=10 lines / completion
-  // keyword / ship bash → result entry; first user turn or direction
-  // change → plan entry). ON by default. Set false to silence.
-  autoCaptureWork: boolean;
-  // Auto-capture release commits (chore(release): X.Y.Z) → result entries.
-  // Wired in v0.25; flag exists in 0.24 for forward-compat.
-  autoCaptureReleases: boolean;
-  // Inject latest N devlog entries into chat system prompt on new threads.
-  // Bounded by `maxInjectLines`.
-  injectOnNewThread: boolean;
-  maxInjectEntries: number;
-  maxInjectLines: number;
-  // Commit devlog dir to repo (default OFF — added to .gitignore).
-  commitToRepo: boolean;
-  // Retention (days). 0 = forever.
-  logRetentionDays: number;
-  agentRetentionDays: number;
-}
-
-export interface DevlogEvent {
-  kind:
-    | 'entry_created'
-    | 'entry_updated'
-    | 'entry_deleted'
-    | 'index_rebuilt';
-  projectPath: string;
-  entryId?: string;
   ts: number;
 }
 

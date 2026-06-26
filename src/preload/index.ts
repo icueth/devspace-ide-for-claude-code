@@ -560,31 +560,6 @@ const api = {
       return () => ipcRenderer.off(IPC.SETUP_PROGRESS, listener);
     },
   },
-  devlog: {
-    list: (input: unknown) => ipcRenderer.invoke(IPC.DEVLOG_LIST, input),
-    get: (input: unknown) => ipcRenderer.invoke(IPC.DEVLOG_GET, input),
-    create: (input: unknown) => ipcRenderer.invoke(IPC.DEVLOG_CREATE, input),
-    update: (input: unknown) => ipcRenderer.invoke(IPC.DEVLOG_UPDATE, input),
-    delete: (input: unknown) => ipcRenderer.invoke(IPC.DEVLOG_DELETE, input),
-    appendLog: (input: unknown) => ipcRenderer.invoke(IPC.DEVLOG_APPEND_LOG, input),
-    buildInject: (projectPath: string) =>
-      ipcRenderer.invoke(IPC.DEVLOG_BUILD_INJECT, projectPath),
-    getSettings: () => ipcRenderer.invoke(IPC.DEVLOG_GET_SETTINGS),
-    setSettings: (patch: unknown) =>
-      ipcRenderer.invoke(IPC.DEVLOG_SET_SETTINGS, patch),
-    openDir: (projectPath: string) =>
-      ipcRenderer.invoke(IPC.DEVLOG_OPEN_DIR, projectPath),
-    onEvent: (
-      cb: (event: import('@shared/types').DevlogEvent) => void,
-    ) => {
-      const listener = (
-        _e: unknown,
-        ev: import('@shared/types').DevlogEvent,
-      ) => cb(ev);
-      ipcRenderer.on(IPC.DEVLOG_EVENTS, listener);
-      return () => ipcRenderer.off(IPC.DEVLOG_EVENTS, listener);
-    },
-  },
   bgClaude: {
     start: (command: string) =>
       ipcRenderer.invoke(IPC.BG_CLAUDE_START, command),

@@ -12,7 +12,7 @@ const LS_KEY = 'devspace:workspace:v1';
 // file outside every known project root).
 //
 // Tab path conventions handled:
-//   • Synthetic `<kind>:<projectPath>` for codeflow/devlog/live-preview
+//   • Synthetic `<kind>:<projectPath>` for codeflow/live-preview
 //   • `diff:<absPath>` for git diff tabs
 //   • Plain absolute file paths for text/image/pdf tabs
 //
@@ -26,7 +26,7 @@ export function deriveProjectIdFromTab(
 ): string | null {
   if (!tabPath) return null;
   // Synthetic kinds: <kind>:<projectPath>
-  const SYNTHETIC_KINDS = ['codeflow', 'devlog', 'live-preview'];
+  const SYNTHETIC_KINDS = ['codeflow', 'live-preview'];
   for (const kind of SYNTHETIC_KINDS) {
     const prefix = `${kind}:`;
     if (tabPath.startsWith(prefix)) {

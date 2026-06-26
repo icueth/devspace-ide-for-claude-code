@@ -49,16 +49,13 @@ describe('deriveProjectIdFromTab', () => {
     ).toBe('a');
   });
 
-  it('handles synthetic kinds: codeflow / devlog / live-preview', () => {
+  it('handles synthetic kinds: codeflow / live-preview', () => {
     expect(
       deriveProjectIdFromTab('codeflow:/Users/x/Code/projA', projects),
     ).toBe('a');
     expect(
       deriveProjectIdFromTab('codeflow:/Users/x/Code/projB', projects),
     ).toBe('b');
-    expect(
-      deriveProjectIdFromTab('devlog:/Users/x/Code/projC', projects),
-    ).toBe('c');
     expect(
       deriveProjectIdFromTab(
         'live-preview:/Users/x/Code/projC/packages/projD',

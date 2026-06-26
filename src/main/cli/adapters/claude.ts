@@ -137,7 +137,6 @@ export const claudeAdapter: CliAdapter = {
     diffPreview: true,
     askUserQuestion: true,
     skills: true,
-    devlogAutoCapture: true,
     summaryLabel: 'Full',
   },
   detect,

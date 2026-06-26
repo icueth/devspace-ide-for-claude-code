@@ -31,11 +31,6 @@ const LivePreviewView = lazy(() =>
     default: m.LivePreviewView,
   })),
 );
-const DevlogView = lazy(() =>
-  import('@renderer/components/Editor/DevlogView').then((m) => ({
-    default: m.DevlogView,
-  })),
-);
 const HtmlPreviewView = lazy(() =>
   import('@renderer/components/Editor/HtmlPreviewView').then((m) => ({
     default: m.HtmlPreviewView,
@@ -251,12 +246,6 @@ function EditorBody({ tab, onChange, onSave, onNavDone, mdMode }: EditorBodyProp
         <RouteErrorBoundary label="Live Preview">
           <Suspense fallback={<LazyFallback label="Loading live preview…" />}>
             <LivePreviewView projectPath={tab.livePreviewProjectPath ?? ''} />
-          </Suspense>
-        </RouteErrorBoundary>
-      ) : tab.kind === 'devlog' ? (
-        <RouteErrorBoundary label="Devlog">
-          <Suspense fallback={<LazyFallback label="Loading devlog…" />}>
-            <DevlogView tab={tab} />
           </Suspense>
         </RouteErrorBoundary>
       ) : tab.kind === 'html-preview' ? (

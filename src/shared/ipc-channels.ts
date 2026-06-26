@@ -277,19 +277,6 @@ export const IPC = {
   // mounts an xterm against the returned PTY sessionId.
   SETUP_RUN_CLAUDE: 'setup:run-claude',
 
-  // Devlog system (v0.24). Per-project work log on disk; read/write through
-  // DevlogService — never touch `.devspace/devlog/*` from renderer directly.
-  DEVLOG_LIST: 'devlog:list',
-  DEVLOG_GET: 'devlog:get',
-  DEVLOG_CREATE: 'devlog:create',
-  DEVLOG_UPDATE: 'devlog:update',
-  DEVLOG_DELETE: 'devlog:delete',
-  DEVLOG_APPEND_LOG: 'devlog:append-log',
-  DEVLOG_BUILD_INJECT: 'devlog:build-inject',
-  DEVLOG_GET_SETTINGS: 'devlog:get-settings',
-  DEVLOG_SET_SETTINGS: 'devlog:set-settings',
-  DEVLOG_OPEN_DIR: 'devlog:open-dir',
-  DEVLOG_EVENTS: 'devlog:events',
 
   // Forge system (v0.24). Generate + track skills/agents per project.
   FORGE_LIST_DRAFTS: 'forge:list-drafts',

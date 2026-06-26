@@ -174,8 +174,7 @@ export function SpotlightDialog({
           {parsed.mode === 'notes' ? (
             <>
               <Hash size={14} className="mx-auto mb-2 opacity-50" />
-              <div>Notes &amp; devlog search coming in a follow-up release.</div>
-              <div className="mt-1 text-[11px]">For now, open Devlog from the navbar.</div>
+              <div>Notes search coming in a follow-up release.</div>
             </>
           ) : !projectPath && parsed.mode === 'mixed' ? (
             <>

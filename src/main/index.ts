@@ -31,7 +31,6 @@ import { registerTasksIpc } from '@main/ipc/tasks';
 import { registerCliIpc } from '@main/ipc/cli';
 import { registerCodeflowIpc } from '@main/ipc/codeflow';
 import { registerDevServerIpc } from '@main/ipc/devserver';
-import { registerDevlogIpc } from '@main/ipc/devlog';
 import { registerForgeIpc } from '@main/ipc/forge';
 import { registerFsIpc } from '@main/ipc/fs';
 import { registerGitIpc } from '@main/ipc/git';
@@ -284,7 +283,6 @@ app.whenReady().then(async () => {
   registerDevServerIpc();
   registerPreviewIpc();
   registerMemoryIpc();
-  registerDevlogIpc();
   registerForgeIpc();
   registerMempalaceIpc();
   registerSetupIpc();

@@ -1,5 +1,4 @@
 import {
-  BookOpen,
   Eye,
   EyeOff,
   GitBranch,
@@ -83,7 +82,6 @@ function AppInner() {
   const openFile = useEditorStore((s) => s.open);
   const openCodeflow = useEditorStore((s) => s.openCodeflow);
   const openLivePreview = useEditorStore((s) => s.openLivePreview);
-  const openDevlog = useEditorStore((s) => s.openDevlog);
   const openHtmlPreview = useEditorStore((s) => s.openHtmlPreview);
   // Stable identity so the memoized <FileTree> isn't re-rendered every shell
   // render by a fresh inline arrow. `open` is a stable store action.
@@ -482,16 +480,6 @@ function AppInner() {
         },
       },
       {
-        id: 'nav.devlog',
-        title: 'Open Devlog',
-        keywords: 'log plans results agents',
-        group: 'Navigate',
-        requiresProject: true,
-        run: () => {
-          if (activeProject) openDevlog(activeProject.path, activeProject.name);
-        },
-      },
-      {
         // v0.31 — opens the most-recently-modified HTML preview Claude wrote
         // under `.devspace/preview/`. Scoped small per the brief: a single
         // "latest" entry point rather than a full file picker. Lists + picks
@@ -613,13 +601,13 @@ function AppInner() {
       { id: 'settings.llm', title: 'Open LLM settings', keywords: 'openai anthropic profiles api', group: 'Settings', run: () => openSettings('llm') },
       { id: 'settings.agents', title: 'Open Agents settings', keywords: 'subagent task', group: 'Settings', run: () => openSettings('agents') },
       { id: 'settings.mcp', title: 'Open MCP settings', keywords: 'model context protocol server', group: 'Settings', run: () => openSettings('mcp') },
-      { id: 'settings.memory', title: 'Open Memory settings', keywords: 'remember devlog notes', group: 'Settings', run: () => openSettings('memory') },
+      { id: 'settings.memory', title: 'Open Memory settings', keywords: 'remember notes', group: 'Settings', run: () => openSettings('memory') },
       { id: 'settings.skills', title: 'Open Skills settings', keywords: 'skill catalog forge', group: 'Settings', run: () => openSettings('skills') },
       { id: 'forge.skill', title: 'Generate a skill from a brief…', keywords: 'create skill forge generate claude ai new', group: 'Settings', run: () => askForgeBrief('skill') },
       { id: 'forge.agent', title: 'Generate an agent from a brief…', keywords: 'create agent subagent forge generate claude ai new', group: 'Settings', run: () => askForgeBrief('agent') },
     ];
     return cmds;
-  }, [activeProject, openCodeflow, openLivePreview, openDevlog, openHtmlPreview, askPrompt]);
+  }, [activeProject, openCodeflow, openLivePreview, openHtmlPreview, askPrompt]);
 
   const dockVisible = openedProjectIds.length > 0;
   const showBottom = bottomOpen && activeProject;
@@ -701,22 +689,6 @@ function AppInner() {
           >
             <Globe size={11} />
             <span>Live Preview</span>
-          </button>
-          <button
-            onClick={() => {
-              if (activeProject) openDevlog(activeProject.path, activeProject.name);
-            }}
-            disabled={!activeProject}
-            className={cn(
-              'inline-flex h-[26px] items-center gap-1.5 rounded-[7px] border px-2.5 text-[11px] transition',
-              !activeProject
-                ? 'cursor-not-allowed border-border-subtle bg-surface-3 text-text-muted opacity-40'
-                : 'border-border-subtle bg-surface-3 text-text-secondary hover:border-border-hi hover:bg-surface-4 hover:text-text',
-            )}
-            title="Devlog — plans, agents, results, and daily log per project"
-          >
-            <BookOpen size={11} />
-            <span>Devlog</span>
           </button>
           {dockVisible && (
             <button

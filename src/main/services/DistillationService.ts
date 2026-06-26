@@ -1,6 +1,6 @@
 // DistillationService — sub-project 3 (native learning).
 //
-// Turns recent captured activity (diary + devlog + chat-turn inbox captures +
+// Turns recent captured activity (diary + chat-turn inbox captures +
 // recently-updated memory) into durable, retrievable LEARNINGS, distilled by
 // REAL Claude via the native BackgroundClaudeRunner (the user's own
 // subscription — not the Agent SDK pool, not a hardcoded stub).
@@ -56,7 +56,6 @@ const logger = createLogger('Distillation');
 const MAX_DIGEST_CHARS = 16_000;
 // How many of each source to consider before the char budget trims further.
 const MAX_DIARY_ENTRIES = 5;
-const MAX_DEVLOG_ENTRIES = 8;
 const MAX_INBOX_ITEMS = 10;
 const MAX_MEMORY_ENTRIES = 12;
 // Per-item body trim so one giant entry can't eat the whole budget.
@@ -109,8 +108,8 @@ export interface Learning {
 export interface DigestItem {
   // Where this snippet came from — surfaced to Claude so it can attribute and
   // ground its learnings.
-  source: 'diary' | 'devlog' | 'capture' | 'memory';
-  // Short human label (date, devlog title, signal, memory description).
+  source: 'diary' | 'capture' | 'memory';
+  // Short human label (date, signal, memory description).
   label: string;
   // Trimmed text content.
   text: string;
@@ -154,9 +153,9 @@ function trimItemText(raw: string): string {
 
 /**
  * Gather a bounded, most-recent-first activity digest for a project from:
- * recent diary entries, recent devlog (log/result), chat-turn inbox captures,
- * and recently-updated memory entries. Pulls data via MemoryService /
- * DevlogService so the heavy lifting (and embeddings) stays where it lives.
+ * recent diary entries, chat-turn inbox captures, and recently-updated memory
+ * entries. Pulls data via MemoryService so the heavy lifting (and embeddings)
+ * stays where it lives.
  *
  * Bounded by per-source counts and a global char budget; sets `truncated` when
  * the budget forced drops. Never throws — a failed source is simply skipped.
@@ -184,40 +183,6 @@ export async function gatherActivityDigest(
     }
   } catch (err) {
     logger.warn(`digest diary read failed: ${(err as Error).message}`);
-  }
-
-  // Devlog — recent log + result entries. listEntries omits the body, so we
-  // round-trip getEntry for the full text (capped by MAX_DEVLOG_ENTRIES).
-  try {
-    // Lazy import keeps DevlogService out of the module graph for tests that
-    // only exercise the pure helpers / mock this function.
-    const Devlog = await import('./DevlogService');
-    const log = await Devlog.listEntries({ projectPath, type: 'log' });
-    const result = await Devlog.listEntries({ projectPath, type: 'result' });
-    const merged = [...log, ...result]
-      .sort((a, b) => b.createdAt - a.createdAt)
-      .slice(0, MAX_DEVLOG_ENTRIES);
-    for (const e of merged) {
-      let text = e.body ?? '';
-      if (!text) {
-        try {
-          const full = await Devlog.getEntry({ projectPath, entryId: e.id });
-          text = full?.body ?? e.preview ?? '';
-        } catch {
-          text = e.preview ?? '';
-        }
-      }
-      const trimmed = trimItemText(text);
-      if (!trimmed) continue;
-      collected.push({
-        source: 'devlog',
-        label: `devlog ${e.type}: ${e.title}`,
-        text: trimmed,
-        ts: e.createdAt,
-      });
-    }
-  } catch (err) {
-    logger.warn(`digest devlog read failed: ${(err as Error).message}`);
   }
 
   // Chat-turn captures — the memory inbox (proposeFromTurn source).
@@ -306,7 +271,7 @@ export function buildDistillPrompt(digest: ActivityDigest): string {
   return [
     'You are distilling durable LEARNINGS from a developer\'s recent activity',
     'on one project. Below is a bounded, most-recent-first digest of their',
-    'diary entries, devlog, captured chat moments, and recent memory notes.',
+    'diary entries, captured chat moments, and recent memory notes.',
     '',
     'Produce a FEW (0–5) high-quality, durable learnings that will help future',
     'work on this project. Each learning is one of:',

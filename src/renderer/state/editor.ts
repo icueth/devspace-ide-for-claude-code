@@ -11,7 +11,6 @@ export type EditorTabKind =
   | 'pdf'
   | 'codeflow'
   | 'live-preview'
-  | 'devlog'
   | 'html-preview';
 
 export interface EditorTab {
@@ -41,9 +40,6 @@ export interface EditorTab {
   // the project whose dev-server should be detected/started/observed.
   // Tab `path` is the synthetic key "live-preview:<projectPath>".
   livePreviewProjectPath?: string;
-  // Populated when kind === 'devlog' — points the Devlog tab at the project
-  // whose `.devspace/devlog/` should be shown. Tab `path` = `devlog:<projectPath>`.
-  devlogProjectPath?: string;
   // Populated when kind === 'html-preview' (v0.31) — the project root and the
   // absolute path of the HTML file Claude wrote under `.devspace/preview/`.
   // Tab `path` is the synthetic key `html-preview:<htmlPreviewPath>` so each
@@ -95,8 +91,6 @@ interface EditorState {
   openDiff: (cwd: string, relPath: string, absPath: string) => Promise<void>;
   openCodeflow: (projectPath: string, projectName: string) => void;
   openLivePreview: (projectPath: string, projectName: string) => void;
-  // v0.24: per-project Devlog tab. Synthetic key `devlog:<projectPath>`.
-  openDevlog: (projectPath: string, projectName: string) => void;
   // v0.31: HTML preview tab for a file Claude wrote under .devspace/preview/.
   // Keyed by the html file path; reopening the same file refreshes (bumps
   // reloadKey) instead of duplicating the tab.
@@ -290,24 +284,6 @@ export const useEditorStore = create<
     set((s) => ({ tabs: [...s.tabs, tab], activeTabPath: tabPath }));
   },
 
-  openDevlog(projectPath, projectName) {
-    const tabPath = `devlog:${projectPath}`;
-    const existing = get().tabs.find((t) => t.path === tabPath);
-    if (existing) {
-      set({ activeTabPath: tabPath });
-      return;
-    }
-    const tab: EditorTab = {
-      path: tabPath,
-      name: `${projectName} · Devlog`,
-      kind: 'devlog',
-      content: '',
-      savedContent: '',
-      loading: false,
-      devlogProjectPath: projectPath,
-    };
-    set((s) => ({ tabs: [...s.tabs, tab], activeTabPath: tabPath }));
-  },
 
   openHtmlPreview(projectPath, htmlPath, name) {
     const tabPath = `html-preview:${htmlPath}`;

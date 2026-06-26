@@ -54,12 +54,6 @@ import type {
   MemoryType,
 } from '@shared/types';
 import type {
-  DevlogEntry,
-  DevlogEntryType,
-  DevlogEvent,
-  DevlogPlanStatus,
-  DevlogSettings,
-  DevlogVerdict,
   ForgeCatalogItem,
   ForgeDraft,
   ForgeEvent,
@@ -549,36 +543,6 @@ export interface DevspaceApi {
     ) => Promise<SetupClaudeRunResult>;
     onProgress: (cb: (ev: SetupProgressEvent) => void) => () => void;
   };
-  devlog: {
-    list: (input: { projectPath: string; type?: DevlogEntryType }) => Promise<DevlogEntry[]>;
-    get: (input: { projectPath: string; entryId: string }) => Promise<DevlogEntry | null>;
-    create: (input: {
-      projectPath: string;
-      type: DevlogEntryType;
-      title: string;
-      body: string;
-      status?: DevlogPlanStatus;
-      verdict?: DevlogVerdict;
-      subagentType?: string;
-      version?: string;
-      threadId?: string;
-      toolUseId?: string;
-    }) => Promise<DevlogEntry>;
-    update: (input: {
-      projectPath: string;
-      entryId: string;
-      title?: string;
-      body?: string;
-      status?: DevlogPlanStatus;
-    }) => Promise<DevlogEntry>;
-    delete: (input: { projectPath: string; entryId: string }) => Promise<void>;
-    appendLog: (input: { projectPath: string; text: string }) => Promise<void>;
-    buildInject: (projectPath: string) => Promise<string>;
-    getSettings: () => Promise<DevlogSettings>;
-    setSettings: (patch: Partial<DevlogSettings>) => Promise<DevlogSettings>;
-    openDir: (projectPath: string) => Promise<void>;
-    onEvent: (cb: (event: DevlogEvent) => void) => () => void;
-  };
   // v0.37: background `claude --bg --exec` runs.
   bgClaude: {
     start: (command: string) => Promise<BackgroundRunMeta>;
@@ -940,30 +904,6 @@ function makeStubApi(): DevspaceApi {
         'setup.runClaude',
       ) as () => Promise<SetupClaudeRunResult>,
       onProgress: () => () => undefined,
-    },
-    devlog: {
-      list: () => Promise.resolve([]),
-      get: () => Promise.resolve(null),
-      create: notWired('devlog.create'),
-      update: notWired('devlog.update'),
-      delete: notWired('devlog.delete'),
-      appendLog: notWired('devlog.appendLog'),
-      buildInject: () => Promise.resolve(''),
-      getSettings: () =>
-        Promise.resolve({
-          enabled: true,
-          autoCaptureAgents: true,
-          autoCaptureReleases: false,
-          injectOnNewThread: true,
-          maxInjectEntries: 10,
-          maxInjectLines: 150,
-          commitToRepo: false,
-          logRetentionDays: 90,
-          agentRetentionDays: 60,
-        } as DevlogSettings),
-      setSettings: notWired('devlog.setSettings') as () => Promise<DevlogSettings>,
-      openDir: notWired('devlog.openDir') as () => Promise<void>,
-      onEvent: () => () => undefined,
     },
     bgClaude: {
       start: notWired('bgClaude.start'),
