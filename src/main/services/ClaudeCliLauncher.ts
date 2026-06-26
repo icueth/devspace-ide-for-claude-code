@@ -1,6 +1,6 @@
-import { opencodeAdapter } from '@main/cli/adapters/opencode';
 import { resolveAuthEnvPairs } from '@main/services/ClaudeAuthService';
 import { getCliProfile } from '@main/services/CliProfileService';
+import { ensureOpenCodeConfig } from '@main/services/openCodeConfig';
 import { createPty, getSession } from '@main/services/PtyPool';
 import {
   getTmuxConfigSync,
@@ -269,19 +269,16 @@ export async function launchOpenCodeCli(
   const env = await resolveInteractiveShellEnv();
   const shell = env.SHELL ?? process.env.SHELL ?? '/bin/zsh';
 
-  // Resolve a custom provider profile → OPENCODE_CONFIG_DIR (the adapter writes
-  // a 0o600 opencode.json there). omit = the user's own ~/.config/opencode +
-  // auth.json. Re-materialized each launch (idempotent) so edits take effect.
-  let configDir: string | undefined;
-  if (opts.cliProfileId) {
-    const profile = await getCliProfile(opts.cliProfileId);
-    if (profile && profile.cliId === 'opencode') {
-      configDir = (await opencodeAdapter.ensureConfig(profile)).configDir;
-    }
-  }
-  const configEnv = configDir
-    ? ['env', `OPENCODE_CONFIG_DIR=${configDir}`]
-    : [];
+  // Always materialize a DevSpace opencode config (merged over the user's own):
+  // injects the MemPalace MCP brain, plus a custom provider when one is chosen.
+  // Re-materialized each launch (idempotent) so edits take effect.
+  const profile = opts.cliProfileId
+    ? await getCliProfile(opts.cliProfileId)
+    : null;
+  const { configDir } = await ensureOpenCodeConfig(
+    profile && profile.cliId === 'opencode' ? profile : null,
+  );
+  const configEnv = ['env', `OPENCODE_CONFIG_DIR=${configDir}`];
 
   if (tmuxBin && ocBin) {
     const sessionName = tmuxSessionName(cfg, 'oc', opts.projectId, tabId);
@@ -318,8 +315,8 @@ export async function launchOpenCodeCli(
       kind: 'opencode-cli',
       tabId,
       cwd: opts.cwd,
-      command: configDir ? '/usr/bin/env' : ocBin,
-      args: configDir ? [`OPENCODE_CONFIG_DIR=${configDir}`, ocBin] : [],
+      command: '/usr/bin/env',
+      args: [`OPENCODE_CONFIG_DIR=${configDir}`, ocBin],
       cols: opts.cols,
       rows: opts.rows,
     });

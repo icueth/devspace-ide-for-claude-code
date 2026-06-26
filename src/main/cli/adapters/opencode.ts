@@ -1,20 +1,17 @@
 // OpenCode CLI adapter.
 //
 // OpenCode is an interactive terminal TUI (`opencode [project]`), so the dock
-// launches it in a tmux-backed PTY just like Claude (see launchOpenCodeCli) —
-// the interactive path does NOT use buildSpawnArgs. detect() backs the
-// cli:detect IPC (the new-tab CLI picker). ensureConfig/buildSpawnArgs exist
-// for a future headless/per-provider path: OpenCode reads a per-profile config
-// dir via OPENCODE_CONFIG_DIR, so each CliProfile stays isolated from the
-// user's own ~/.config/opencode/.
+// launches it in a tmux-backed PTY (see launchOpenCodeCli) — the interactive
+// path doesn't use buildSpawnArgs. detect() backs the cli:detect IPC (the new-
+// tab CLI picker). ensureConfig delegates to the shared openCodeConfig builder
+// (custom provider + MemPalace MCP brain) written to a per-profile
+// OPENCODE_CONFIG_DIR that OpenCode merges over the user's own config.
 
 import { execFile } from 'node:child_process';
 import * as fs from 'node:fs';
-import * as os from 'node:os';
-import * as path from 'node:path';
 import { promisify } from 'node:util';
 
-import { atomicWriteAsync } from '@main/utils/atomicWrite';
+import { ensureOpenCodeConfig } from '@main/services/openCodeConfig';
 import { createLogger } from '@shared/logger';
 import type { CliDetectionResult, CliProfile } from '@shared/types';
 
@@ -67,51 +64,16 @@ async function detect(): Promise<CliDetectionResult> {
   return { cliId: 'opencode', installed: true, bin, version };
 }
 
-// Per-profile config dir — keeps each provider isolated and never touches the
-// user's own ~/.config/opencode/. Pointed at via OPENCODE_CONFIG_DIR.
-export function opencodeConfigDir(profileId: string): string {
-  return path.join(os.homedir(), '.devspace', 'cli-profiles', profileId);
-}
-
-// Materialize the OpenCode config for a CliProfile as `opencode.json` in the
-// per-profile dir. Maps the OpenAI-compatible provider (baseURL/apiKey/model)
-// to OpenCode's `@ai-sdk/openai-compatible` provider schema.
-async function ensureConfig(profile: CliProfile): Promise<{ configDir: string }> {
-  const configDir = opencodeConfigDir(profile.id);
-  const providerId = 'custom';
-  const config = {
-    $schema: 'https://opencode.ai/config.json',
-    provider: {
-      [providerId]: {
-        npm: '@ai-sdk/openai-compatible',
-        options: {
-          baseURL: profile.provider.baseURL,
-          apiKey: profile.provider.apiKey,
-        },
-        models: { [profile.provider.model]: {} },
-      },
-    },
-    model: `${providerId}/${profile.provider.model}`,
-  };
-  await atomicWriteAsync(
-    path.join(configDir, 'opencode.json'),
-    JSON.stringify(config, null, 2),
-    { mode: 0o600, dirMode: 0o700 },
-  );
-  return { configDir };
-}
-
+// Future headless `opencode run` path — the interactive dock pane doesn't use
+// this. Points at the per-profile config dir via OPENCODE_CONFIG_DIR.
 function buildSpawnArgs(
-  profile: CliProfile,
+  _profile: CliProfile,
   opts: BuildSpawnArgsInput,
 ): CliSpawnArgs {
   return {
     bin: 'opencode',
     args: ['run', opts.prompt],
-    env: {
-      ...process.env,
-      OPENCODE_CONFIG_DIR: opencodeConfigDir(profile.id),
-    },
+    env: { ...process.env },
   };
 }
 
@@ -125,6 +87,6 @@ export const opencodeAdapter: CliAdapter = {
     summaryLabel: '~90% tools',
   },
   detect,
-  ensureConfig,
+  ensureConfig: (profile: CliProfile) => ensureOpenCodeConfig(profile),
   buildSpawnArgs,
 };
