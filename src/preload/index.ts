@@ -196,6 +196,12 @@ const api = {
     setPinned: (ids: string[]) => {
       ipcRenderer.send(IPC.PTY_SET_PINNED, { ids });
     },
+    // beta.25: push the renderer's FULL open-tab session set (not just the
+    // column-visible/pinned ones) so main's boot reconcile can prune sessions
+    // no open tab or live task backs. Fire-and-forget.
+    setLiveSessions: (ids: string[]) => {
+      ipcRenderer.send(IPC.PTY_SET_LIVE, { ids });
+    },
     // Phase 4a: subscribe to the per-session tool-approval prompt event.
     // Channel is namespaced by sessionId so we can fan out without the
     // renderer having to filter. Returns an unsubscribe handle.

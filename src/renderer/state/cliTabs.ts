@@ -5,6 +5,7 @@ import {
   addColumnState,
   arraysEqualUnordered,
   claudeCliSessionId,
+  computeAllSessionIds,
   computePinnedSessionIds,
   pinForActiveSelection,
   removeColumnState,
@@ -487,6 +488,30 @@ if (typeof window !== 'undefined' && api?.pty?.setPinned) {
     prevIds = next;
     try {
       api.pty.setPinned(next);
+    } catch {
+      /* preload bridge unavailable — non-fatal */
+    }
+  });
+}
+
+// beta.25: push the FULL open-tab session set (every project's every tab, not
+// just the column-visible/pinned subset) so main's boot reconcile can prune
+// sessions that no open tab or live task backs — i.e. clean up what's actually
+// been closed, instead of letting sessions pile up across runs.
+if (typeof window !== 'undefined' && api?.pty?.setLiveSessions) {
+  let prevLive = computeAllSessionIds(useCliTabsStore.getState());
+  try {
+    api.pty.setLiveSessions(prevLive);
+  } catch {
+    /* preload not yet wired — non-fatal */
+  }
+  useCliTabsStore.subscribe((state, prevState) => {
+    if (state.tabsByProject === prevState.tabsByProject) return;
+    const next = computeAllSessionIds(state);
+    if (arraysEqualUnordered(prevLive, next)) return;
+    prevLive = next;
+    try {
+      api.pty.setLiveSessions(next);
     } catch {
       /* preload bridge unavailable — non-fatal */
     }

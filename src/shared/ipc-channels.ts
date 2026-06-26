@@ -86,6 +86,7 @@ export const IPC = {
   // change to useCliTabsStore.columns so the dual-tier reaper knows which
   // tabs the user is actually looking at vs. which are off-screen chips.
   PTY_SET_PINNED: 'pty:set-pinned',
+  PTY_SET_LIVE: 'pty:set-live', // renderer's full set of open-tab session keys (boot reconcile)
   // v2 worktree-isolated agent tasks
   TASK_LIST: 'task:list',
   TASK_CREATE: 'task:create',

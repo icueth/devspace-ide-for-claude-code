@@ -261,6 +261,19 @@ export function computePinnedSessionIds(
   return [...out];
 }
 
+// beta.25: every open (project, tab) session id — the FULL live set, not just
+// the column-visible/pinned ones. Main's boot reconcile keeps these (+ live
+// tasks + attached) and prunes the rest as orphans.
+export function computeAllSessionIds(
+  state: Pick<PinStateSnapshot, 'tabsByProject'>,
+): string[] {
+  const out = new Set<string>();
+  for (const [projectId, tabs] of Object.entries(state.tabsByProject)) {
+    for (const t of tabs) out.add(claudeCliSessionId(projectId, t.id));
+  }
+  return [...out];
+}
+
 export function arraysEqualUnordered(a: string[], b: string[]): boolean {
   if (a.length !== b.length) return false;
   const set = new Set(a);

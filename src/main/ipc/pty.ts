@@ -1,6 +1,7 @@
-import { ipcMain } from 'electron';
+import { BrowserWindow, ipcMain } from 'electron';
 
 import { launchClaudeCli, launchShell } from '@main/services/ClaudeCliLauncher';
+import { reconcileOrphanCliSessions } from '@main/services/sessionReconcile';
 import {
   createPty,
   killClaudeCliSessionTree,
@@ -155,4 +156,47 @@ export function registerPtyIpc(): void {
     }
     setPinnedSessions(ids.filter((x): x is string => typeof x === 'string'));
   });
+
+  // beta.25: the renderer pushes its FULL open-tab session set on boot + on tab
+  // changes. The first push (once the renderer has hydrated its tabs) triggers a
+  // one-shot boot reconcile that prunes claude-cli tmux sessions no open tab or
+  // live task backs — orphans left by past runs / crashes. Keeps RAM bounded
+  // without an auto-reaper (which the user keeps off). 4s debounce lets all tab
+  // pushes settle first.
+  ipcMain.on(IPC.PTY_SET_LIVE, (_e, payload: unknown) => {
+    const ids =
+      payload && typeof payload === 'object'
+        ? (payload as { ids?: unknown }).ids
+        : undefined;
+    liveSessionKeys = Array.isArray(ids)
+      ? new Set(ids.filter((x): x is string => typeof x === 'string'))
+      : new Set();
+    if (bootReconcileScheduled) return;
+    bootReconcileScheduled = true;
+    setTimeout(() => {
+      void runBootReconcile();
+    }, 4000);
+  });
+}
+
+// Latest full open-tab session set reported by the renderer (boot reconcile
+// keeps these + live tasks + currently-attached sessions, prunes the rest).
+let liveSessionKeys = new Set<string>();
+let bootReconcileScheduled = false;
+
+async function runBootReconcile(): Promise<void> {
+  try {
+    const killed = await reconcileOrphanCliSessions(liveSessionKeys);
+    if (killed.length === 0) return;
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (!win.isDestroyed()) {
+        win.webContents.send(IPC.PTY_AUTO_CLOSED, {
+          ids: killed,
+          thresholdMinutes: 0,
+        });
+      }
+    }
+  } catch (err) {
+    logger.warn(`boot reconcile failed: ${(err as Error).message}`);
+  }
 }
