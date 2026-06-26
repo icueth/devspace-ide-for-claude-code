@@ -14,16 +14,16 @@ describe('CLI registry — getAdapter', () => {
   });
 
   it('throws for unknown cli ids', () => {
-    expect(() => getAdapter('codex' as unknown as 'claude')).toThrow(
+    expect(() => getAdapter('cursor' as unknown as 'claude')).toThrow(
       /Unknown CLI id/,
     );
   });
 });
 
 describe('CLI registry — listAdapters', () => {
-  it('lists the registered adapters (claude + opencode)', () => {
+  it('lists the registered adapters (claude + opencode + codex + gemini)', () => {
     const ids = listAdapters().map((a) => a.id);
-    expect(ids).toEqual(['claude', 'opencode']);
+    expect(ids).toEqual(['claude', 'opencode', 'codex', 'gemini']);
   });
 
   it('returns a fresh array (mutation-safe)', () => {
@@ -31,7 +31,7 @@ describe('CLI registry — listAdapters', () => {
     const b = listAdapters();
     expect(a).not.toBe(b);
     a.pop();
-    expect(listAdapters().length).toBe(2);
+    expect(listAdapters().length).toBe(4);
   });
 });
 
@@ -45,7 +45,7 @@ describe('CLI registry — detectAll', () => {
       .mockResolvedValue({ cliId: 'opencode', installed: false });
 
     const results = await detectAll();
-    expect(results).toHaveLength(2);
+    expect(results).toHaveLength(4);
     expect(results.find((r) => r.cliId === 'claude')?.version).toBe('4.7');
 
     claudeSpy.mockRestore();

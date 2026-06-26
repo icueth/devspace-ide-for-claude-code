@@ -382,6 +382,34 @@ export function CliTabBar({
             >
               <KeyRound size={11} /> Manage OpenCode providers…
             </button>
+            <div className="my-1 h-px bg-border-subtle" />
+            <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-text-muted">
+              New chat — other CLIs
+            </div>
+            {(
+              [
+                { id: 'codex', label: 'Codex', color: '#10b981' },
+                { id: 'gemini', label: 'Gemini', color: '#3b82f6' },
+              ] as const
+            ).map((c) => (
+              <button
+                key={c.id}
+                type="button"
+                onClick={() => {
+                  if (activeDockedProjectId)
+                    addTab(activeDockedProjectId, { cliId: c.id });
+                  setAuthMenu(null);
+                }}
+                className="flex w-full items-center gap-2 rounded-[5px] px-2 py-1.5 text-left text-[12px] text-text-secondary transition hover:bg-surface-3 hover:text-text"
+              >
+                <span
+                  className="h-[6px] w-[6px] shrink-0 rounded-full"
+                  style={{ background: c.color }}
+                />
+                <span className="flex-1 truncate">{c.label}</span>
+                <span className="text-[9px] text-text-dim">TUI</span>
+              </button>
+            ))}
           </div>
         </>
       )}

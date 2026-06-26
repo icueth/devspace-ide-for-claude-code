@@ -117,7 +117,7 @@ export interface LlmEditResponse {
 // CliProfile that points at their provider config (OpenAI-compatible
 // endpoint + key + model). A runtime is locked per session for transcript
 // consistency — switching CLI starts a new session, never mutates.
-export type CliId = 'claude' | 'opencode';
+export type CliId = 'claude' | 'opencode' | 'codex' | 'gemini';
 
 // Capability flags published by each adapter. Renderer reads these to
 // decide which UI affordances apply to a thread (e.g. don't render tool
@@ -393,6 +393,8 @@ export interface DirEntry {
 export type PtySessionKind =
   | 'claude-cli'
   | 'opencode-cli'
+  | 'codex-cli'
+  | 'gemini-cli'
   | 'shell'
   | 'agent'
   | 'dev-server'

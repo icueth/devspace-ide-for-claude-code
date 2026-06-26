@@ -9,7 +9,7 @@ import {
 import { ensureFolderTrusted } from '@main/utils/claudeTrust';
 import { resolveInteractiveShellEnv } from '@main/utils/shellEnv';
 import { createLogger } from '@shared/logger';
-import type { PtySession, TmuxConfig } from '@shared/types';
+import type { PtySession, PtySessionKind, TmuxConfig } from '@shared/types';
 
 const logger = createLogger('ClaudeCliLauncher');
 
@@ -335,6 +335,112 @@ export async function launchOpenCodeCli(
     cols: opts.cols,
     rows: opts.rows,
   });
+}
+
+export interface PlainTuiLaunchOptions {
+  projectId: string;
+  tabId?: string;
+  cwd: string;
+  cols?: number;
+  rows?: number;
+}
+
+/**
+ * Start (or reuse) a plain TUI CLI (Codex, Gemini) in a tmux-backed PTY. These
+ * run interactively against their own config/auth — no DevSpace per-profile
+ * config injection (unlike OpenCode/Claude). Falls back to a shell hint when the
+ * binary isn't installed, so the pane stays usable.
+ */
+async function launchPlainTuiCli(
+  kind: PtySessionKind,
+  binName: string,
+  tmuxPrefix: string,
+  installUrl: string,
+  opts: PlainTuiLaunchOptions,
+): Promise<PtySession> {
+  const tabId = opts.tabId ?? 'default';
+  const existing = getSession(opts.projectId, kind, tabId);
+  if (existing) return existing;
+
+  const bin = await findOnPath(binName);
+  const cfg = await loadTmuxConfig();
+  const tmuxBin = cfg.enabled ? await resolveTmuxBinary() : null;
+  const env = await resolveInteractiveShellEnv();
+  const shell = env.SHELL ?? process.env.SHELL ?? '/bin/zsh';
+
+  if (tmuxBin && bin) {
+    const sessionName = tmuxSessionName(cfg, tmuxPrefix, opts.projectId, tabId);
+    logger.info(
+      `tmux-backed ${binName} for project=${opts.projectId} tab=${tabId} (${sessionName})`,
+    );
+    return createPty({
+      projectId: opts.projectId,
+      kind,
+      tabId,
+      cwd: opts.cwd,
+      command: tmuxBin,
+      args: [
+        '-L',
+        cfg.socketName,
+        'new-session',
+        '-A',
+        '-s',
+        sessionName,
+        '-c',
+        opts.cwd,
+        bin,
+      ],
+      cols: opts.cols,
+      rows: opts.rows,
+    });
+  }
+
+  if (bin) {
+    logger.info(`spawning ${binName} (${bin}) without tmux`);
+    return createPty({
+      projectId: opts.projectId,
+      kind,
+      tabId,
+      cwd: opts.cwd,
+      command: bin,
+      args: [],
+      cols: opts.cols,
+      rows: opts.rows,
+    });
+  }
+
+  logger.warn(`${binName} not found on PATH — starting shell with a hint`);
+  const hintCmd = `echo "⚠️  '${binName}' not found on PATH. Install: ${installUrl}" && exec ${shell} -l`;
+  return createPty({
+    projectId: opts.projectId,
+    kind,
+    tabId,
+    cwd: opts.cwd,
+    command: shell,
+    args: ['-l', '-c', hintCmd],
+    cols: opts.cols,
+    rows: opts.rows,
+  });
+}
+
+export function launchCodexCli(opts: PlainTuiLaunchOptions): Promise<PtySession> {
+  return launchPlainTuiCli(
+    'codex-cli',
+    'codex',
+    'cx',
+    'https://github.com/openai/codex',
+    opts,
+  );
+}
+
+export function launchGeminiCli(opts: PlainTuiLaunchOptions): Promise<PtySession> {
+  return launchPlainTuiCli(
+    'gemini-cli',
+    'gemini',
+    'gm',
+    'https://github.com/google-gemini/gemini-cli',
+    opts,
+  );
 }
 
 export interface ShellLaunchOptions {

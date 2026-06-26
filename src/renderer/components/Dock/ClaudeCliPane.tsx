@@ -6,7 +6,7 @@ import { api } from '@renderer/lib/api';
 import { cn } from '@renderer/lib/utils';
 import { cliSessionId } from '@renderer/state/cliTabsPins';
 import { useGitStore } from '@renderer/state/git';
-import type { CliId } from '@shared/types';
+import type { CliId, PtySessionKind } from '@shared/types';
 
 // /goal needs claude-code 2.1.154+. We gate the Goal QuickAction on this.
 const MIN_CLAUDE_FOR_NEW_SLASH = { major: 2, minor: 1, patch: 154 };
@@ -42,6 +42,39 @@ if (typeof window !== 'undefined') {
   else setTimeout(warmTerminalChunk, 800);
 }
 
+// Per-CLI pane chrome (header badge/title/gradient). The pane body is the same
+// raw terminal for every CLI; only Claude gets the tool-approval banner + slash
+// QuickActions (gated on isClaude).
+const CLI_PANE_META: Record<
+  CliId,
+  { label: string; badge: string; bg: string; glow: string }
+> = {
+  claude: {
+    label: 'Claude Code',
+    badge: 'C',
+    bg: 'linear-gradient(135deg, #a855f7, #ec4899)',
+    glow: '0 0 12px rgba(168,85,247,0.3)',
+  },
+  opencode: {
+    label: 'OpenCode',
+    badge: 'O',
+    bg: 'linear-gradient(135deg, #f59e0b, #ef4444)',
+    glow: '0 0 12px rgba(245,158,11,0.3)',
+  },
+  codex: {
+    label: 'Codex',
+    badge: 'X',
+    bg: 'linear-gradient(135deg, #10b981, #059669)',
+    glow: '0 0 12px rgba(16,185,129,0.3)',
+  },
+  gemini: {
+    label: 'Gemini',
+    badge: 'G',
+    bg: 'linear-gradient(135deg, #3b82f6, #8b5cf6)',
+    glow: '0 0 12px rgba(59,130,246,0.3)',
+  },
+};
+
 interface ClaudeCliPaneProps {
   projectId: string;
   projectPath: string;
@@ -70,6 +103,7 @@ export function ClaudeCliPane({
 }: ClaudeCliPaneProps) {
   const cli = cliId ?? 'claude';
   const isClaude = cli === 'claude';
+  const meta = CLI_PANE_META[cli];
   const sessionId = cliSessionId(cli, projectId, tabId);
 
   const [status, setStatus] = useState<'starting' | 'running' | 'exited' | 'error'>(
@@ -103,7 +137,7 @@ export function ClaudeCliPane({
       .create({
         projectId,
         tabId,
-        kind: isClaude ? 'claude-cli' : 'opencode-cli',
+        kind: `${cli}-cli` as PtySessionKind,
         cwd: projectPath,
         cols: 120,
         rows: 32,
@@ -147,21 +181,12 @@ export function ClaudeCliPane({
       >
         <div
           className="flex h-6 w-6 shrink-0 items-center justify-center rounded-[7px] text-[11px] font-bold text-white"
-          style={{
-            background: isClaude
-              ? 'linear-gradient(135deg, #a855f7, #ec4899)'
-              : 'linear-gradient(135deg, #f59e0b, #ef4444)',
-            boxShadow: isClaude
-              ? '0 0 12px rgba(168,85,247,0.3)'
-              : '0 0 12px rgba(245,158,11,0.3)',
-          }}
+          style={{ background: meta.bg, boxShadow: meta.glow }}
         >
-          {isClaude ? 'C' : 'O'}
+          {meta.badge}
         </div>
         <div className="flex items-baseline gap-2">
-          <span className="text-[12px] font-semibold text-text">
-            {isClaude ? 'Claude Code' : 'OpenCode'}
-          </span>
+          <span className="text-[12px] font-semibold text-text">{meta.label}</span>
           {status === 'running' && (
             <span
               className="flex items-center gap-1.5 rounded-full px-2 py-[2px] text-[10px] font-medium"

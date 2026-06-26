@@ -293,10 +293,15 @@ export const useCliTabsStore = create<CliTabsState>((set, get) => {
         return null;
       }
       const existing = s.tabsByProject[projectId] ?? [];
-      const label =
+      const cliLabel =
         opts?.cliId === 'opencode'
-          ? `OpenCode ${existing.length + 1}`
-          : `Claude ${existing.length + 1}`;
+          ? 'OpenCode'
+          : opts?.cliId === 'codex'
+            ? 'Codex'
+            : opts?.cliId === 'gemini'
+              ? 'Gemini'
+              : 'Claude';
+      const label = `${cliLabel} ${existing.length + 1}`;
       const tab: CliTab = {
         ...makeTab(projectId, label),
         authProfileId: opts?.authProfileId,

@@ -2,6 +2,8 @@ import { BrowserWindow, ipcMain } from 'electron';
 
 import {
   launchClaudeCli,
+  launchCodexCli,
+  launchGeminiCli,
   launchOpenCodeCli,
   launchShell,
 } from '@main/services/ClaudeCliLauncher';
@@ -61,6 +63,22 @@ export function registerPtyIpc(): void {
           cols: opts.cols,
           rows: opts.rows,
           cliProfileId: opts.cliProfileId,
+        });
+      } else if (opts.kind === 'codex-cli') {
+        session = await launchCodexCli({
+          projectId: opts.projectId,
+          tabId: opts.tabId,
+          cwd: opts.cwd,
+          cols: opts.cols,
+          rows: opts.rows,
+        });
+      } else if (opts.kind === 'gemini-cli') {
+        session = await launchGeminiCli({
+          projectId: opts.projectId,
+          tabId: opts.tabId,
+          cwd: opts.cwd,
+          cols: opts.cols,
+          rows: opts.rows,
         });
       } else if (opts.kind === 'shell') {
         session = await launchShell({
