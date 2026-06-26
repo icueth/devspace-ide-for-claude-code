@@ -21,15 +21,24 @@ function toml(value: string): string {
   return JSON.stringify(value);
 }
 
-// Codex doesn't expose third-party MCP server TOOLS as callable functions to
-// custom-provider models (only resource-access tools), so MemPalace is omitted
-// here — Codex would just burn turns trying to reach it. rtk works (the model
-// follows this instruction). Use OpenCode for a non-Claude CLI with memory.
-const GUIDANCE = `# DevSpace — Tooling (rtk)
+// Codex doesn't expose MemPalace's MCP TOOLS to custom-provider models, but the
+// `mempalace` CLI is on PATH and Codex has exec_command — so memory is routed
+// through the CLI. VERIFIED: the model runs `rtk mempalace status/search` and
+// grounds its answer in real palace data.
+const GUIDANCE = `# Memory (MemPalace) — your long-term brain, via the mempalace CLI
 
-\`rtk\` is a token-optimizing CLI proxy installed here: ALWAYS prefix shell
-commands with \`rtk\` (e.g. \`rtk git status\`, \`rtk ls\`, \`rtk grep\`). It is
-always safe — it passes commands through unchanged when it has no filter.
+You have a persistent memory palace. Access it through shell commands:
+
+- WAKE-UP: run \`rtk mempalace status\` once at the start to load the palace.
+- BEFORE answering about any project, person, past event, or prior decision:
+  run \`rtk mempalace search "<query>"\` FIRST and ground your answer in the
+  results. Never guess from training data.
+
+# Tooling (rtk)
+
+ALWAYS prefix shell commands with \`rtk\` (e.g. \`rtk git status\`, \`rtk ls\`).
+rtk is a token-optimizing proxy — always safe (passes through unchanged when it
+has no filter).
 `;
 
 export async function ensureCodexConfig(

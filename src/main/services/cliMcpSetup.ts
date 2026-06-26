@@ -98,14 +98,23 @@ memory.
 commands with \`rtk\` (e.g. \`rtk git status\`, \`rtk ls\`, \`rtk grep\`). It is
 always safe — it passes commands through unchanged when it has no filter.`;
 
-// Codex variant — rtk ONLY. Codex doesn't expose third-party MCP server tools as
-// callable functions to custom-provider models (verified), so a MemPalace
-// protocol here would just make Codex burn turns chasing unreachable tools.
-const CODEX_GUIDANCE = `# DevSpace — Tooling (rtk)
+// Codex variant: MemPalace's MCP tools aren't exposed to custom-provider models,
+// so route memory through the `mempalace` CLI (Codex has exec_command). VERIFIED
+// the model runs `rtk mempalace status/search` and grounds answers in the palace.
+const CODEX_GUIDANCE = `# Memory (MemPalace) — your long-term brain, via the mempalace CLI
 
-\`rtk\` is a token-optimizing CLI proxy installed here: ALWAYS prefix shell
-commands with \`rtk\` (e.g. \`rtk git status\`, \`rtk ls\`, \`rtk grep\`). It is
-always safe — it passes commands through unchanged when it has no filter.`;
+You have a persistent memory palace. Access it through shell commands:
+
+- WAKE-UP: run \`rtk mempalace status\` once at the start to load the palace.
+- BEFORE answering about any project, person, past event, or prior decision:
+  run \`rtk mempalace search "<query>"\` FIRST and ground your answer in the
+  results. Never guess from training data.
+
+# Tooling (rtk)
+
+ALWAYS prefix shell commands with \`rtk\` (e.g. \`rtk git status\`, \`rtk ls\`).
+rtk is a token-optimizing proxy — always safe (passes through unchanged when it
+has no filter).`;
 
 // Idempotently upsert the managed block into a markdown instruction file,
 // preserving everything the user wrote outside the markers.
