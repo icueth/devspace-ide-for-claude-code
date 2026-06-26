@@ -1,6 +1,7 @@
 import { resolveAuthEnvPairs } from '@main/services/ClaudeAuthService';
 import { getCliProfile } from '@main/services/CliProfileService';
 import { ensureCodexParity, ensureGeminiParity } from '@main/services/cliMcpSetup';
+import { ensureCodexConfig } from '@main/services/codexConfig';
 import { ensureOpenCodeConfig } from '@main/services/openCodeConfig';
 import { createPty, getSession } from '@main/services/PtyPool';
 import {
@@ -344,6 +345,8 @@ export interface PlainTuiLaunchOptions {
   cwd: string;
   cols?: number;
   rows?: number;
+  /** Custom-provider CliProfile (Codex) — isolated config + key, no login. */
+  cliProfileId?: string;
 }
 
 /**
@@ -358,6 +361,7 @@ async function launchPlainTuiCli(
   tmuxPrefix: string,
   installUrl: string,
   extraArgs: string[],
+  envPairs: string[],
   opts: PlainTuiLaunchOptions,
 ): Promise<PtySession> {
   const tabId = opts.tabId ?? 'default';
@@ -390,6 +394,7 @@ async function launchPlainTuiCli(
         sessionName,
         '-c',
         opts.cwd,
+        ...(envPairs.length > 0 ? ['env', ...envPairs] : []),
         bin,
         ...extraArgs,
       ],
@@ -405,8 +410,8 @@ async function launchPlainTuiCli(
       kind,
       tabId,
       cwd: opts.cwd,
-      command: bin,
-      args: extraArgs,
+      command: envPairs.length > 0 ? '/usr/bin/env' : bin,
+      args: envPairs.length > 0 ? [...envPairs, bin, ...extraArgs] : extraArgs,
       cols: opts.cols,
       rows: opts.rows,
     });
@@ -429,13 +434,34 @@ async function launchPlainTuiCli(
 export async function launchCodexCli(
   opts: PlainTuiLaunchOptions,
 ): Promise<PtySession> {
-  // MemPalace brain (config) + global guidance (auto-memory + rtk) before launch.
+  // Custom-provider tab: an isolated CODEX_HOME with the provider + MemPalace +
+  // guidance, keyed by env. Uses the provider's own key — NO ChatGPT login.
+  if (opts.cliProfileId) {
+    const profile = await getCliProfile(opts.cliProfileId);
+    if (profile && profile.cliId === 'codex') {
+      const { configDir, keyEnv, keyValue } = await ensureCodexConfig(
+        profile,
+        opts.cwd,
+      );
+      return launchPlainTuiCli(
+        'codex-cli',
+        'codex',
+        'cx',
+        'https://github.com/openai/codex',
+        [],
+        [`CODEX_HOME=${configDir}`, `${keyEnv}=${keyValue}`],
+        opts,
+      );
+    }
+  }
+  // Default tab: MemPalace brain + global guidance (needs ChatGPT login/API key).
   await ensureCodexParity();
   return launchPlainTuiCli(
     'codex-cli',
     'codex',
     'cx',
     'https://github.com/openai/codex',
+    [],
     [],
     opts,
   );
@@ -454,6 +480,7 @@ export async function launchGeminiCli(
     'gm',
     'https://github.com/google-gemini/gemini-cli',
     ['--skip-trust'],
+    [],
     opts,
   );
 }

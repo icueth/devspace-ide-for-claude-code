@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 
 import { api } from '@renderer/lib/api';
 import { cn } from '@renderer/lib/utils';
-import type { ClaudeAuthProfile, CliProfile } from '@shared/types';
+import type { ClaudeAuthProfile, CliId, CliProfile } from '@shared/types';
 
 // Per-tab credential dialogs for the CLI dock's new-tab menu:
 //   • ManageAuthDialog    — Claude auth profiles (subscription / API key)
@@ -166,12 +166,16 @@ export function ManageAuthDialog({
   );
 }
 
-export function ManageOpenCodeDialog({
+export function ManageCliProviderDialog({
   open,
   onClose,
+  cliId,
+  title,
 }: {
   open: boolean;
   onClose: () => void;
+  cliId: Exclude<CliId, 'claude'>;
+  title: string;
 }) {
   const [profiles, setProfiles] = useState<CliProfile[]>([]);
   const [name, setName] = useState('');
@@ -182,10 +186,10 @@ export function ManageOpenCodeDialog({
 
   const reload = useCallback(() => {
     void api.cli
-      .listProfiles('opencode')
+      .listProfiles(cliId)
       .then(setProfiles)
       .catch(() => undefined);
-  }, []);
+  }, [cliId]);
   useEffect(() => {
     if (open) reload();
   }, [open, reload]);
@@ -203,7 +207,7 @@ export function ManageOpenCodeDialog({
     try {
       await api.cli.saveProfile({
         name: name.trim(),
-        cliId: 'opencode',
+        cliId,
         baseURL: baseURL.trim(),
         apiKey: apiKey.trim(),
         model: model.trim(),
@@ -229,7 +233,7 @@ export function ManageOpenCodeDialog({
         <Dialog.Overlay className="fixed inset-0 z-40 bg-black/40" />
         <Dialog.Content className="fixed left-1/2 top-24 z-50 w-[min(520px,90vw)] overflow-hidden rounded-lg border border-border-emphasis bg-surface-raised shadow-2xl">
           <Dialog.Title className="border-b border-border-subtle bg-surface-sidebar px-4 py-2 text-[12px] font-medium text-text">
-            OpenCode providers
+            {title}
           </Dialog.Title>
           <div className="flex flex-col gap-3 px-4 py-3">
             <p className="text-[11px] leading-relaxed text-text-muted">

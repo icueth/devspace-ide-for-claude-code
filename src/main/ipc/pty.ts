@@ -71,6 +71,7 @@ export function registerPtyIpc(): void {
           cwd: opts.cwd,
           cols: opts.cols,
           rows: opts.rows,
+          cliProfileId: opts.cliProfileId,
         });
       } else if (opts.kind === 'gemini-cli') {
         session = await launchGeminiCli({

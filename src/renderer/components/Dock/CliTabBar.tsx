@@ -6,7 +6,7 @@ import { api } from '@renderer/lib/api';
 import { cn } from '@renderer/lib/utils';
 import {
   ManageAuthDialog,
-  ManageOpenCodeDialog,
+  ManageCliProviderDialog,
 } from '@renderer/components/Dock/CliAuthDialogs';
 import { activate } from '@renderer/state/activation';
 import { useCliTabsStore } from '@renderer/state/cliTabs';
@@ -55,13 +55,19 @@ export function CliTabBar({
   const [authMenu, setAuthMenu] = useState<{ x: number; y: number } | null>(null);
   const [manageAuthOpen, setManageAuthOpen] = useState(false);
   const [manageOpenCodeOpen, setManageOpenCodeOpen] = useState(false);
+  const [manageCodexOpen, setManageCodexOpen] = useState(false);
   const [authProfiles, setAuthProfiles] = useState<ClaudeAuthProfile[]>([]);
   const [cliProfiles, setCliProfiles] = useState<CliProfile[]>([]);
+  const [codexProfiles, setCodexProfiles] = useState<CliProfile[]>([]);
   const refreshAuthProfiles = useCallback(() => {
     void api.claudeAuth.list().then(setAuthProfiles).catch(() => undefined);
     void api.cli
       .listProfiles('opencode')
       .then(setCliProfiles)
+      .catch(() => undefined);
+    void api.cli
+      .listProfiles('codex')
+      .then(setCodexProfiles)
       .catch(() => undefined);
   }, []);
   // D2 — chips for projects NOT in the current workspace get a small workspace
@@ -384,32 +390,72 @@ export function CliTabBar({
             </button>
             <div className="my-1 h-px bg-border-subtle" />
             <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-text-muted">
-              New chat — other CLIs
+              New chat — Codex
             </div>
-            {(
-              [
-                { id: 'codex', label: 'Codex', color: '#10b981' },
-                { id: 'gemini', label: 'Gemini', color: '#3b82f6' },
-              ] as const
-            ).map((c) => (
+            <button
+              type="button"
+              onClick={() => {
+                if (activeDockedProjectId)
+                  addTab(activeDockedProjectId, { cliId: 'codex' });
+                setAuthMenu(null);
+              }}
+              className="flex w-full items-center gap-2 rounded-[5px] px-2 py-1.5 text-left text-[12px] text-text-secondary transition hover:bg-surface-3 hover:text-text"
+            >
+              <span
+                className="h-[6px] w-[6px] shrink-0 rounded-full"
+                style={{ background: '#10b981' }}
+              />
+              <span className="flex-1 truncate">Default (login)</span>
+              <span className="text-[9px] text-text-dim">TUI</span>
+            </button>
+            {codexProfiles.map((p) => (
               <button
-                key={c.id}
+                key={p.id}
                 type="button"
                 onClick={() => {
                   if (activeDockedProjectId)
-                    addTab(activeDockedProjectId, { cliId: c.id });
+                    addTab(activeDockedProjectId, {
+                      cliId: 'codex',
+                      cliProfileId: p.id,
+                    });
                   setAuthMenu(null);
                 }}
                 className="flex w-full items-center gap-2 rounded-[5px] px-2 py-1.5 text-left text-[12px] text-text-secondary transition hover:bg-surface-3 hover:text-text"
               >
-                <span
-                  className="h-[6px] w-[6px] shrink-0 rounded-full"
-                  style={{ background: c.color }}
-                />
-                <span className="flex-1 truncate">{c.label}</span>
-                <span className="text-[9px] text-text-dim">TUI</span>
+                <span className="h-[6px] w-[6px] shrink-0 rounded-full bg-semantic-success" />
+                <span className="flex-1 truncate">{p.name}</span>
+                <span className="truncate text-[9px] text-text-dim">
+                  {p.provider.model}
+                </span>
               </button>
             ))}
+            <button
+              type="button"
+              onClick={() => {
+                setManageCodexOpen(true);
+                setAuthMenu(null);
+              }}
+              className="flex w-full items-center gap-2 rounded-[5px] px-2 py-1.5 text-left text-[11px] text-text-muted transition hover:bg-surface-3 hover:text-text"
+            >
+              <KeyRound size={11} /> Manage Codex providers…
+            </button>
+            <div className="my-1 h-px bg-border-subtle" />
+            <button
+              type="button"
+              onClick={() => {
+                if (activeDockedProjectId)
+                  addTab(activeDockedProjectId, { cliId: 'gemini' });
+                setAuthMenu(null);
+              }}
+              className="flex w-full items-center gap-2 rounded-[5px] px-2 py-1.5 text-left text-[12px] text-text-secondary transition hover:bg-surface-3 hover:text-text"
+            >
+              <span
+                className="h-[6px] w-[6px] shrink-0 rounded-full"
+                style={{ background: '#3b82f6' }}
+              />
+              <span className="flex-1 truncate">Gemini</span>
+              <span className="text-[9px] text-text-dim">TUI</span>
+            </button>
           </div>
         </>
       )}
@@ -420,10 +466,21 @@ export function CliTabBar({
           refreshAuthProfiles();
         }}
       />
-      <ManageOpenCodeDialog
+      <ManageCliProviderDialog
+        cliId="opencode"
+        title="OpenCode providers"
         open={manageOpenCodeOpen}
         onClose={() => {
           setManageOpenCodeOpen(false);
+          refreshAuthProfiles();
+        }}
+      />
+      <ManageCliProviderDialog
+        cliId="codex"
+        title="Codex providers"
+        open={manageCodexOpen}
+        onClose={() => {
+          setManageCodexOpen(false);
           refreshAuthProfiles();
         }}
       />
