@@ -24,6 +24,23 @@ const ToolApprovalBanner = lazy(() =>
   })),
 );
 
+// Prefetch the heavy xterm chunk as soon as the first pane module loads, so it's
+// ready by the time a PTY reaches 'running' — overlapping the ~200KB bundle load
+// with the tmux attach instead of paying it synchronously afterward.
+if (typeof window !== 'undefined') {
+  const warmTerminalChunk = (): void => {
+    void import('@renderer/components/Dock/RawTerminalView');
+    void import('@renderer/components/Dock/ToolApprovalBanner');
+  };
+  const ric = (
+    window as unknown as {
+      requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => void;
+    }
+  ).requestIdleCallback;
+  if (ric) ric.call(window, warmTerminalChunk, { timeout: 2000 });
+  else setTimeout(warmTerminalChunk, 800);
+}
+
 interface ClaudeCliPaneProps {
   projectId: string;
   projectPath: string;
@@ -154,7 +171,13 @@ export function ClaudeCliPane({
       </div>
       <ContextChips shortCwd={shortCwd} branch={branch} ahead={ahead} dirty={dirty} />
       <div className="relative min-h-0 flex-1 overflow-hidden bg-surface">
-        {status !== 'starting' && (
+        {status === 'starting' ? (
+          // Show the terminal surface immediately with a connecting state instead
+          // of a blank pane while the PTY attaches (tmux new-session -A). The
+          // xterm itself only mounts once the session exists — it subscribes by
+          // sessionId and must not race the spawn.
+          <ConnectingPlaceholder />
+        ) : (
           <>
             <Suspense fallback={null}>
               <RawTerminalView sessionId={sessionId} isActive={isActive ?? false} />
@@ -172,6 +195,22 @@ export function ClaudeCliPane({
         )}
       </div>
       <QuickActions onSend={sendSlash} disabled={status !== 'running'} />
+    </div>
+  );
+}
+
+// Instant terminal-surface placeholder shown while the PTY attaches. Uses the
+// xterm THEME background (#0b0d12) so the swap to the real terminal is seamless.
+function ConnectingPlaceholder() {
+  return (
+    <div
+      className="flex h-full w-full items-center justify-center"
+      style={{ background: '#0b0d12' }}
+    >
+      <span className="flex items-center gap-2 text-[11px] text-text-muted">
+        <span className="h-3 w-3 animate-spin rounded-full border-[1.6px] border-border-hi border-t-accent" />
+        Connecting to session…
+      </span>
     </div>
   );
 }
