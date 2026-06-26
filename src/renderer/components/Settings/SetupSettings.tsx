@@ -260,6 +260,7 @@ function ActionsBar({
   const hasMissing = status.checks.some(
     (c) =>
       c.id !== 'mempalace' &&
+      !c.optional &&
       (c.state === 'missing' || c.state === 'blocked'),
   );
   const claudeDisabled = running || !claudeReady || !hasMissing;

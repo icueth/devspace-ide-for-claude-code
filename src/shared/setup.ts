@@ -21,7 +21,10 @@ export type SetupToolId =
   | 'jq'
   | 'rtkHook'
   | 'learningHooks'
-  | 'mempalace';
+  | 'mempalace'
+  | 'opencode'
+  | 'codex'
+  | 'gemini';
 
 export type SetupCheckState =
   /** Installed and verified. */
@@ -46,6 +49,8 @@ export interface SetupCheck {
   installable: boolean;
   /** When state is 'blocked', the id of the missing prerequisite. */
   blockedBy?: SetupToolId;
+  /** Optional extra (e.g. a non-Claude CLI) — excluded from setup 'complete'. */
+  optional?: boolean;
 }
 
 export interface SetupStatus {

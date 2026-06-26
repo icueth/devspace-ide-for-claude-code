@@ -208,6 +208,33 @@ async function detectTool(
   return { ...base, state: 'missing' };
 }
 
+// npm-installed CLIs (OpenCode, Codex, Gemini) — optional extras, detected via
+// PATH like detectTool but with no Homebrew dependency (npm is the prereq).
+async function detectNpmCli(
+  id: SetupToolId,
+  bin: string,
+  meta: { label: string; description: string },
+): Promise<SetupCheck> {
+  const found = await whichBin(bin);
+  const base: Omit<SetupCheck, 'state'> = {
+    id,
+    label: meta.label,
+    description: meta.description,
+    installable: true,
+    optional: true,
+  };
+  if (found) {
+    const v = await runCapture(found, ['--version']);
+    return {
+      ...base,
+      state: 'ok',
+      path: found,
+      version: v.stdout.split('\n')[0]?.trim() || undefined,
+    };
+  }
+  return { ...base, state: 'missing' };
+}
+
 interface HookGroup {
   matcher?: string;
   hooks?: Array<{ type?: string; command?: string; timeout?: number }>;
@@ -391,6 +418,19 @@ export async function getStatus(): Promise<SetupStatus> {
   const rtkHook = await detectRtkHook(rtk.state);
   const learningHooks = await detectLearningHooks(claude.state);
   const mempalace = await detectMempalace();
+  const opencode = await detectNpmCli('opencode', 'opencode', {
+    label: 'OpenCode',
+    description: 'Provider-agnostic agentic CLI — full MemPalace + rtk parity.',
+  });
+  const codex = await detectNpmCli('codex', 'codex', {
+    label: 'Codex CLI',
+    description:
+      'OpenAI agentic CLI — custom providers (no login) + MemPalace via CLI.',
+  });
+  const gemini = await detectNpmCli('gemini', 'gemini', {
+    label: 'Gemini CLI',
+    description: 'Google agentic CLI — MemPalace + rtk.',
+  });
 
   const checks: SetupCheck[] = [
     brew,
@@ -401,12 +441,15 @@ export async function getStatus(): Promise<SetupStatus> {
     rtkHook,
     learningHooks,
     mempalace,
+    opencode,
+    codex,
+    gemini,
   ];
 
   // "complete" treats unsupported platforms as a pass for tools that simply
   // don't apply (Homebrew on Linux), but on macOS every entry must be 'ok'.
   const complete = checks.every(
-    (c) => c.state === 'ok' || c.state === 'unsupported',
+    (c) => c.optional || c.state === 'ok' || c.state === 'unsupported',
   );
 
   return { complete, platform, checks };
@@ -447,6 +490,16 @@ async function installBrewPkg(toolId: SetupToolId, pkg: string): Promise<void> {
   step(toolId, 'install', `brew install ${pkg}…`);
   const { code } = await runStream(toolId, brewBin, ['install', pkg]);
   if (code !== 0) throw new Error(`brew install ${pkg} exited ${code}`);
+}
+
+async function installNpmCli(toolId: SetupToolId, pkg: string): Promise<void> {
+  const npmBin = await whichBin('npm');
+  if (!npmBin) {
+    throw new Error('npm (Node.js) is required — install Node.js first.');
+  }
+  step(toolId, 'install', `npm install -g ${pkg}…`);
+  const { code } = await runStream(toolId, npmBin, ['install', '-g', pkg]);
+  if (code !== 0) throw new Error(`npm install -g ${pkg} exited ${code}`);
 }
 
 async function installRtk(): Promise<void> {
@@ -688,6 +741,15 @@ export async function installTool(toolId: SetupToolId): Promise<SetupInstallResu
         throw new Error(
           'Install MemPalace from the Memory tab (it has its own dedicated wizard).',
         );
+      case 'opencode':
+        await installNpmCli('opencode', 'opencode-ai');
+        break;
+      case 'codex':
+        await installNpmCli('codex', '@openai/codex');
+        break;
+      case 'gemini':
+        await installNpmCli('gemini', '@google/gemini-cli');
+        break;
     }
     const status = await getStatus();
     emit({ toolId, stage: 'done', message: 'Done.', done: true });
