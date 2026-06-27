@@ -38,6 +38,31 @@ function fileContains(file: string, needle: string): boolean {
   }
 }
 
+// Upsert MemPalace into an MCP-server JSON config — Gemini's settings.json and
+// Antigravity's mcp_config.json share the { mcpServers: { name: {command,args}}}
+// shape. Writes when MemPalace is absent OR when the recorded command's
+// interpreter no longer exists on disk (repairs a stale/synced python path —
+// e.g. a ~/.venv/bin/python carried over from another machine). Returns true if
+// it wrote. Direct JSON (not `gemini mcp add`) so it can REPAIR a bad entry and
+// never spawns the CLI (Gemini's relaunch can hang).
+function upsertMempalaceMcpServer(file: string, cmd: string[]): boolean {
+  let cfg: {
+    mcpServers?: Record<string, { command?: string; args?: string[] }>;
+  } = {};
+  try {
+    cfg = JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch {
+    // new or unreadable — start fresh
+  }
+  cfg.mcpServers = cfg.mcpServers ?? {};
+  const existing = cfg.mcpServers.mempalace;
+  if (existing?.command && fs.existsSync(existing.command)) return false; // already valid
+  cfg.mcpServers.mempalace = { command: cmd[0], args: cmd.slice(1) };
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify(cfg, null, 2), 'utf8');
+  return true;
+}
+
 // Codex: `~/.codex/config.toml` → [mcp_servers.mempalace].
 export async function ensureCodexMcp(): Promise<void> {
   try {
@@ -59,20 +84,13 @@ export async function ensureCodexMcp(): Promise<void> {
 // Gemini: `~/.gemini/settings.json` → mcpServers.mempalace (user scope).
 export async function ensureGeminiMcp(): Promise<void> {
   try {
-    const bin = await onPath('gemini');
-    if (!bin) return;
+    if (!(await onPath('gemini'))) return;
     const cmd = await resolveMempalaceMcpCommand();
     if (!cmd) return;
     const cfg = path.join(os.homedir(), '.gemini', 'settings.json');
-    if (fileContains(cfg, 'mempalace')) return;
-    await execFileP(
-      bin,
-      ['mcp', 'add', '-s', 'user', 'mempalace', cmd[0], ...cmd.slice(1)],
-      // GEMINI_CLI_NO_RELAUNCH stops Gemini re-execing in this non-TTY call
-      // (which can loop/hang and stall the tab launch).
-      { timeout: 8000, env: { ...process.env, GEMINI_CLI_NO_RELAUNCH: '1' } },
-    );
-    logger.info('registered mempalace MCP for gemini');
+    if (upsertMempalaceMcpServer(cfg, cmd)) {
+      logger.info('registered mempalace MCP for gemini');
+    }
   } catch (err) {
     logger.warn(`ensureGeminiMcp: ${(err as Error).message}`);
   }
@@ -183,20 +201,10 @@ async function ensureAntigravityMcp(): Promise<void> {
     if (!(await onPath('agy'))) return;
     const cmd = await resolveMempalaceMcpCommand();
     if (!cmd) return;
-    const dir = path.join(os.homedir(), '.gemini', 'config');
-    const file = path.join(dir, 'mcp_config.json');
-    let cfg: { mcpServers?: Record<string, unknown> } = {};
-    try {
-      cfg = JSON.parse(fs.readFileSync(file, 'utf8'));
-    } catch {
-      // new / unreadable — start fresh
+    const cfg = path.join(os.homedir(), '.gemini', 'config', 'mcp_config.json');
+    if (upsertMempalaceMcpServer(cfg, cmd)) {
+      logger.info('registered mempalace MCP for antigravity');
     }
-    cfg.mcpServers = cfg.mcpServers ?? {};
-    if (cfg.mcpServers.mempalace) return; // already registered
-    cfg.mcpServers.mempalace = { command: cmd[0], args: cmd.slice(1) };
-    fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(file, JSON.stringify(cfg, null, 2), 'utf8');
-    logger.info('registered mempalace MCP for antigravity');
   } catch (err) {
     logger.warn(`ensureAntigravityMcp: ${(err as Error).message}`);
   }

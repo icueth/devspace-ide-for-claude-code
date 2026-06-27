@@ -133,6 +133,25 @@ function readProjectLearnings(projectPath: string): string {
 // Mirror the user's MemPalace MCP command from its installed Claude plugin so
 // OpenCode talks to the SAME palace. Returns the spawn argv or null when absent.
 export async function resolveMempalaceMcpCommand(): Promise<string[] | null> {
+  let cmd = await readPluginMempalaceCommand();
+  // The plugin's .mcp.json hardcodes an interpreter path (a venv/uv python).
+  // It can be synced from another host, or the venv can move, so command[0] may
+  // not exist on THIS machine — observed as opencode/gemini/antigravity failing
+  // with "ENOENT … posix_spawn '~/.venv/bin/python'". Repair the interpreter
+  // from the local `mempalace` binary, keeping the args (palace path) intact.
+  if (cmd && cmd.length > 0 && !fs.existsSync(cmd[0])) {
+    const py = resolveMempalacePython();
+    cmd = py ? [py, ...cmd.slice(1)] : null;
+  }
+  // No plugin .mcp.json at all — derive the whole command from the local binary.
+  if (!cmd) {
+    const py = resolveMempalacePython();
+    if (py) cmd = [py, '-m', 'mempalace.mcp_server'];
+  }
+  return cmd;
+}
+
+async function readPluginMempalaceCommand(): Promise<string[] | null> {
   try {
     const dir = path.join(
       os.homedir(),
@@ -162,6 +181,36 @@ export async function resolveMempalaceMcpCommand(): Promise<string[] | null> {
     // MemPalace plugin not installed.
   }
   return null;
+}
+
+/**
+ * Resolve the interpreter that runs MemPalace, host-portably. uv-tool / venv
+ * installs ship a `mempalace` console script whose shebang points at the real
+ * interpreter — read that, falling back to a sibling `python` in its bin dir.
+ * Returns null if no local mempalace install is found.
+ */
+export function resolveMempalacePython(): string | null {
+  const home = os.homedir();
+  const bins = [
+    path.join(home, '.local', 'bin', 'mempalace'),
+    path.join(home, '.local', 'share', 'uv', 'tools', 'mempalace', 'bin', 'mempalace'),
+    path.join(home, '.venv', 'bin', 'mempalace'),
+    '/opt/homebrew/bin/mempalace',
+    '/usr/local/bin/mempalace',
+  ];
+  const bin = bins.find((b) => fs.existsSync(b));
+  if (!bin) return null;
+  try {
+    const firstLine = fs.readFileSync(bin, 'utf8').split('\n', 1)[0] ?? '';
+    if (firstLine.startsWith('#!')) {
+      const py = firstLine.slice(2).trim().split(/\s+/)[0];
+      if (py && fs.existsSync(py)) return py;
+    }
+  } catch {
+    // not a text script (ELF launcher) — fall through to the sibling python
+  }
+  const sibling = path.join(path.dirname(bin), 'python');
+  return fs.existsSync(sibling) ? sibling : null;
 }
 
 // The opencode plugin source — replicates Claude's deterministic hooks:
