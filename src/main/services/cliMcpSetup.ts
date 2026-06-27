@@ -174,3 +174,36 @@ export async function ensureGeminiParity(): Promise<void> {
   await ensureGeminiMcp();
   await ensureGeminiInstructions();
 }
+
+// Antigravity (`agy`): MCP is configured via ~/.gemini/config/mcp_config.json
+// (shared across Antigravity tools). Merge MemPalace in idempotently.
+async function ensureAntigravityMcp(): Promise<void> {
+  try {
+    if (!(await onPath('agy'))) return;
+    const cmd = await resolveMempalaceMcpCommand();
+    if (!cmd) return;
+    const dir = path.join(os.homedir(), '.gemini', 'config');
+    const file = path.join(dir, 'mcp_config.json');
+    let cfg: { mcpServers?: Record<string, unknown> } = {};
+    try {
+      cfg = JSON.parse(fs.readFileSync(file, 'utf8'));
+    } catch {
+      // new / unreadable — start fresh
+    }
+    cfg.mcpServers = cfg.mcpServers ?? {};
+    if (cfg.mcpServers.mempalace) return; // already registered
+    cfg.mcpServers.mempalace = { command: cmd[0], args: cmd.slice(1) };
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(file, JSON.stringify(cfg, null, 2), 'utf8');
+    logger.info('registered mempalace MCP for antigravity');
+  } catch (err) {
+    logger.warn(`ensureAntigravityMcp: ${(err as Error).message}`);
+  }
+}
+
+// Antigravity shares ~/.gemini, so the GEMINI.md guidance (mempalace protocol +
+// rtk) applies; add the MemPalace MCP via Antigravity's mcp_config.json too.
+export async function ensureAntigravityParity(): Promise<void> {
+  await ensureAntigravityMcp();
+  await ensureGeminiInstructions();
+}

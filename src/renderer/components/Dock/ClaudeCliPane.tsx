@@ -73,6 +73,12 @@ const CLI_PANE_META: Record<
     bg: 'linear-gradient(135deg, #3b82f6, #8b5cf6)',
     glow: '0 0 12px rgba(59,130,246,0.3)',
   },
+  antigravity: {
+    label: 'Antigravity',
+    badge: 'A',
+    bg: 'linear-gradient(135deg, #6366f1, #06b6d4)',
+    glow: '0 0 12px rgba(99,102,241,0.3)',
+  },
 };
 
 interface ClaudeCliPaneProps {

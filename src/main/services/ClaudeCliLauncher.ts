@@ -1,6 +1,10 @@
 import { resolveAuthEnvPairs } from '@main/services/ClaudeAuthService';
 import { getCliProfile } from '@main/services/CliProfileService';
-import { ensureCodexParity, ensureGeminiParity } from '@main/services/cliMcpSetup';
+import {
+  ensureAntigravityParity,
+  ensureCodexParity,
+  ensureGeminiParity,
+} from '@main/services/cliMcpSetup';
 import { ensureCodexConfig } from '@main/services/codexConfig';
 import { ensureOpenCodeConfig } from '@main/services/openCodeConfig';
 import { createPty, getSession } from '@main/services/PtyPool';
@@ -480,6 +484,22 @@ export async function launchGeminiCli(
     'gm',
     'https://github.com/google-gemini/gemini-cli',
     ['--skip-trust', '--yolo'],
+    [],
+    opts,
+  );
+}
+
+export async function launchAntigravityCli(
+  opts: PlainTuiLaunchOptions,
+): Promise<PtySession> {
+  await ensureAntigravityParity();
+  // --dangerously-skip-permissions: auto-approve tool calls (parity with Claude).
+  return launchPlainTuiCli(
+    'antigravity-cli',
+    'agy',
+    'ag',
+    'https://antigravity.google',
+    ['--dangerously-skip-permissions'],
     [],
     opts,
   );

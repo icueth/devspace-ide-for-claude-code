@@ -1,6 +1,7 @@
 import { BrowserWindow, ipcMain } from 'electron';
 
 import {
+  launchAntigravityCli,
   launchClaudeCli,
   launchCodexCli,
   launchGeminiCli,
@@ -75,6 +76,14 @@ export function registerPtyIpc(): void {
         });
       } else if (opts.kind === 'gemini-cli') {
         session = await launchGeminiCli({
+          projectId: opts.projectId,
+          tabId: opts.tabId,
+          cwd: opts.cwd,
+          cols: opts.cols,
+          rows: opts.rows,
+        });
+      } else if (opts.kind === 'antigravity-cli') {
+        session = await launchAntigravityCli({
           projectId: opts.projectId,
           tabId: opts.tabId,
           cwd: opts.cwd,

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { detectAll, getAdapter, listAdapters } from '@main/cli/registry';
+import { antigravityAdapter } from '@main/cli/adapters/antigravity';
 import { claudeAdapter } from '@main/cli/adapters/claude';
 import { codexAdapter } from '@main/cli/adapters/codex';
 import { geminiAdapter } from '@main/cli/adapters/gemini';
@@ -23,9 +24,9 @@ describe('CLI registry — getAdapter', () => {
 });
 
 describe('CLI registry — listAdapters', () => {
-  it('lists the registered adapters (claude + opencode + codex + gemini)', () => {
+  it('lists the registered adapters (claude + opencode + codex + gemini + antigravity)', () => {
     const ids = listAdapters().map((a) => a.id);
-    expect(ids).toEqual(['claude', 'opencode', 'codex', 'gemini']);
+    expect(ids).toEqual(['claude', 'opencode', 'codex', 'gemini', 'antigravity']);
   });
 
   it('returns a fresh array (mutation-safe)', () => {
@@ -33,7 +34,7 @@ describe('CLI registry — listAdapters', () => {
     const b = listAdapters();
     expect(a).not.toBe(b);
     a.pop();
-    expect(listAdapters().length).toBe(4);
+    expect(listAdapters().length).toBe(5);
   });
 });
 
@@ -53,15 +54,19 @@ describe('CLI registry — detectAll', () => {
     const geminiSpy = vi
       .spyOn(geminiAdapter, 'detect')
       .mockResolvedValue({ cliId: 'gemini', installed: false });
+    const antigravitySpy = vi
+      .spyOn(antigravityAdapter, 'detect')
+      .mockResolvedValue({ cliId: 'antigravity', installed: false });
 
     const results = await detectAll();
-    expect(results).toHaveLength(4);
+    expect(results).toHaveLength(5);
     expect(results.find((r) => r.cliId === 'claude')?.version).toBe('4.7');
 
     claudeSpy.mockRestore();
     opencodeSpy.mockRestore();
     codexSpy.mockRestore();
     geminiSpy.mockRestore();
+    antigravitySpy.mockRestore();
   });
 
   it('survives a single adapter throwing — reports it as uninstalled', async () => {
@@ -78,6 +83,9 @@ describe('CLI registry — detectAll', () => {
     const geminiSpy = vi
       .spyOn(geminiAdapter, 'detect')
       .mockResolvedValue({ cliId: 'gemini', installed: false });
+    const antigravitySpy = vi
+      .spyOn(antigravityAdapter, 'detect')
+      .mockResolvedValue({ cliId: 'antigravity', installed: false });
 
     const results = await detectAll();
     const claudeResult = results.find((r) => r.cliId === 'claude');
@@ -87,5 +95,6 @@ describe('CLI registry — detectAll', () => {
     opencodeSpy.mockRestore();
     codexSpy.mockRestore();
     geminiSpy.mockRestore();
+    antigravitySpy.mockRestore();
   });
 });

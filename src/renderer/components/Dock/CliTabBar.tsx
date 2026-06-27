@@ -456,6 +456,22 @@ export function CliTabBar({
               <span className="flex-1 truncate">Gemini</span>
               <span className="text-[9px] text-text-dim">TUI</span>
             </button>
+            <button
+              type="button"
+              onClick={() => {
+                if (activeDockedProjectId)
+                  addTab(activeDockedProjectId, { cliId: 'antigravity' });
+                setAuthMenu(null);
+              }}
+              className="flex w-full items-center gap-2 rounded-[5px] px-2 py-1.5 text-left text-[12px] text-text-secondary transition hover:bg-surface-3 hover:text-text"
+            >
+              <span
+                className="h-[6px] w-[6px] shrink-0 rounded-full"
+                style={{ background: '#6366f1' }}
+              />
+              <span className="flex-1 truncate">Antigravity</span>
+              <span className="text-[9px] text-text-dim">TUI</span>
+            </button>
           </div>
         </>
       )}

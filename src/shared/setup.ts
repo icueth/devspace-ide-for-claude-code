@@ -24,7 +24,8 @@ export type SetupToolId =
   | 'mempalace'
   | 'opencode'
   | 'codex'
-  | 'gemini';
+  | 'gemini'
+  | 'antigravity';
 
 export type SetupCheckState =
   /** Installed and verified. */

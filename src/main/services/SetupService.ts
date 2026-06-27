@@ -429,6 +429,11 @@ export async function getStatus(): Promise<SetupStatus> {
     label: 'Gemini CLI',
     description: 'Google agentic CLI — MemPalace + rtk.',
   });
+  const antigravity = await detectNpmCli('antigravity', 'agy', {
+    label: 'Antigravity CLI',
+    description:
+      "Google's agentic CLI — where Gemini's free tier moved. MemPalace + rtk.",
+  });
 
   const checks: SetupCheck[] = [
     brew,
@@ -442,6 +447,7 @@ export async function getStatus(): Promise<SetupStatus> {
     opencode,
     codex,
     gemini,
+    antigravity,
   ];
 
   // "complete" treats unsupported platforms as a pass for tools that simply
@@ -488,6 +494,19 @@ async function installBrewPkg(toolId: SetupToolId, pkg: string): Promise<void> {
   step(toolId, 'install', `brew install ${pkg}…`);
   const { code } = await runStream(toolId, brewBin, ['install', pkg]);
   if (code !== 0) throw new Error(`brew install ${pkg} exited ${code}`);
+}
+
+async function installAntigravity(): Promise<void> {
+  // Official Antigravity installer (curl | bash) — non-interactive, exits clean.
+  step('antigravity', 'install', 'Running official Antigravity CLI installer…');
+  const { code } = await runStream(
+    'antigravity',
+    'curl -fsSL https://antigravity.google/cli/install.sh | bash',
+    [],
+    { useBashC: true },
+  );
+  if (code !== 0) throw new Error(`Antigravity installer exited ${code}`);
+  step('antigravity', 'verify', 'Antigravity installed. Run `agy` once to sign in.');
 }
 
 async function installNpmCli(toolId: SetupToolId, pkg: string): Promise<void> {
@@ -747,6 +766,9 @@ export async function installTool(toolId: SetupToolId): Promise<SetupInstallResu
         break;
       case 'gemini':
         await installNpmCli('gemini', '@google/gemini-cli');
+        break;
+      case 'antigravity':
+        await installAntigravity();
         break;
     }
     const status = await getStatus();

@@ -2,6 +2,7 @@
 // DevSpace knows about. Keep this list narrow — adding a new CLI is a
 // commit-sized change (types union + adapter file + this registry).
 
+import { antigravityAdapter } from '@main/cli/adapters/antigravity';
 import { claudeAdapter } from '@main/cli/adapters/claude';
 import { codexAdapter } from '@main/cli/adapters/codex';
 import { geminiAdapter } from '@main/cli/adapters/gemini';
@@ -20,6 +21,7 @@ const ADAPTERS: CliAdapter[] = [
   opencodeAdapter,
   codexAdapter,
   geminiAdapter,
+  antigravityAdapter,
 ];
 
 /**
