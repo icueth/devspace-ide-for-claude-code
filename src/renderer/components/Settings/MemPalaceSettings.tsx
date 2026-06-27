@@ -7,6 +7,7 @@ import {
   ExternalLink,
   Folder,
   Loader2,
+  RefreshCw,
   Trash2,
 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -14,6 +15,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '@renderer/lib/api';
 import { cn } from '@renderer/lib/utils';
 import type {
+  CliMempalaceWiring,
   MemPalaceCheck,
   MemPalaceCheckState,
   MemPalaceProgressEvent,
@@ -127,6 +129,8 @@ export function MemPalaceSettings() {
 
         <ChecklistCard status={status} />
 
+        <CliWiringCard />
+
         <ActionsCard
           status={status}
           running={running}
@@ -141,6 +145,96 @@ export function MemPalaceSettings() {
 
         <PathsCard status={status} />
       </div>
+    </div>
+  );
+}
+
+// MemPalace wiring across the non-Claude CLIs (OpenCode / Codex / Gemini /
+// Antigravity). Each is wired automatically when its tab is first opened;
+// "Connect all" pre-wires the global-config ones now.
+function CliWiringCard() {
+  const [wiring, setWiring] = useState<CliMempalaceWiring[] | null>(null);
+  const [syncing, setSyncing] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    void api.mempalace
+      .getCliWiring()
+      .then((w) => {
+        if (!cancelled) setWiring(w);
+      })
+      .catch(() => {
+        if (!cancelled) setWiring([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const handleSync = async () => {
+    setSyncing(true);
+    try {
+      setWiring(await api.mempalace.syncCli());
+    } catch {
+      // best-effort — leave the last-known wiring on screen
+    } finally {
+      setSyncing(false);
+    }
+  };
+
+  if (!wiring || wiring.length === 0) return null;
+
+  return (
+    <div className="rounded-[10px] border border-border bg-surface-2/60 p-3">
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <div className="text-[10.5px] font-semibold uppercase tracking-wide text-text-muted">
+          MemPalace across your CLIs
+        </div>
+        <button
+          type="button"
+          onClick={() => void handleSync()}
+          disabled={syncing}
+          className="inline-flex items-center gap-1.5 rounded-[6px] border border-border bg-surface-3 px-2.5 py-1 text-[11px] font-medium text-text transition hover:bg-surface-4 disabled:opacity-50"
+        >
+          {syncing ? (
+            <Loader2 size={12} className="animate-spin" />
+          ) : (
+            <RefreshCw size={12} />
+          )}
+          {syncing ? 'Connecting…' : 'Connect all'}
+        </button>
+      </div>
+      <ul className="flex flex-col gap-1">
+        {wiring.map((w) => (
+          <li
+            key={w.cliId}
+            className="flex flex-col gap-0.5 rounded-[6px] px-2 py-1 text-[11.5px]"
+          >
+            <div className="flex items-center gap-2">
+              {!w.installed ? (
+                <Circle size={13} className="shrink-0 text-text-dim" />
+              ) : w.wired ? (
+                <CheckCircle2 size={13} className="shrink-0 text-semantic-success" />
+              ) : (
+                <Circle size={13} className="shrink-0 text-[#fcd34d]" />
+              )}
+              <span className="text-text">{w.label}</span>
+              <span className="ml-auto text-[10px] text-text-muted">
+                {!w.installed
+                  ? 'not installed'
+                  : w.wired
+                    ? 'connected'
+                    : 'connects on launch'}
+              </span>
+            </div>
+            <span className="pl-[21px] text-[10px] text-text-dim">{w.detail}</span>
+          </li>
+        ))}
+      </ul>
+      <p className="mt-2 text-[10px] leading-relaxed text-text-dim">
+        Each CLI is wired to the MemPalace brain automatically when you open its
+        tab. "Connect all" pre-wires them now. (Claude uses the plugin above.)
+      </p>
     </div>
   );
 }

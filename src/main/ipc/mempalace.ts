@@ -1,6 +1,10 @@
 import { ipcMain } from 'electron';
 
 import {
+  getCliMempalaceWiring,
+  syncAllCliMempalace,
+} from '@main/services/cliMcpSetup';
+import {
   getStatus,
   install,
   openVault,
@@ -24,6 +28,11 @@ export function registerMempalaceIpc(): void {
     subscribeMempalace(event.sender);
     return getStatus();
   });
+
+  // Per-CLI MemPalace wiring roll-up + one-click "connect all" (pre-wires the
+  // global-config CLIs without needing to open each tab).
+  ipcMain.handle(IPC.MEMPALACE_CLI_WIRING, async () => getCliMempalaceWiring());
+  ipcMain.handle(IPC.MEMPALACE_CLI_SYNC, async () => syncAllCliMempalace());
 
   ipcMain.handle(
     IPC.MEMPALACE_INSTALL,

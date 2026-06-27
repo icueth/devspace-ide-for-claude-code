@@ -6,6 +6,7 @@ import { promisify } from 'node:util';
 
 import { resolveMempalaceMcpCommand } from '@main/services/openCodeConfig';
 import { createLogger } from '@shared/logger';
+import type { CliMempalaceWiring } from '@shared/mempalace';
 
 // Registers the MemPalace MCP server in Codex's / Gemini's own global config so
 // those CLIs share the same memory brain Claude + OpenCode use. Uses each CLI's
@@ -206,4 +207,62 @@ async function ensureAntigravityMcp(): Promise<void> {
 export async function ensureAntigravityParity(): Promise<void> {
   await ensureAntigravityMcp();
   await ensureGeminiInstructions();
+}
+
+// Read-only roll-up of MemPalace wiring across the non-Claude CLIs, for the
+// Settings → Memory panel. (Claude's own MemPalace is the main status there.)
+export async function getCliMempalaceWiring(): Promise<CliMempalaceWiring[]> {
+  const home = os.homedir();
+  const [oc, cx, gm, ag] = await Promise.all([
+    onPath('opencode'),
+    onPath('codex'),
+    onPath('gemini'),
+    onPath('agy'),
+  ]);
+  return [
+    {
+      cliId: 'opencode',
+      label: 'OpenCode',
+      installed: !!oc,
+      // Per-project config, written on every launch — no global file to read.
+      wired: !!oc,
+      detail: 'Auto-injected per project on launch (MCP server).',
+    },
+    {
+      cliId: 'codex',
+      label: 'Codex',
+      installed: !!cx,
+      wired: fileContains(path.join(home, '.codex', 'AGENTS.md'), 'mempalace'),
+      detail: 'Via the mempalace CLI — ~/.codex/AGENTS.md.',
+    },
+    {
+      cliId: 'gemini',
+      label: 'Gemini',
+      installed: !!gm,
+      wired: fileContains(
+        path.join(home, '.gemini', 'settings.json'),
+        'mempalace',
+      ),
+      detail: 'MCP server — ~/.gemini/settings.json.',
+    },
+    {
+      cliId: 'antigravity',
+      label: 'Antigravity',
+      installed: !!ag,
+      wired: fileContains(
+        path.join(home, '.gemini', 'config', 'mcp_config.json'),
+        'mempalace',
+      ),
+      detail: 'MCP server — ~/.gemini/config/mcp_config.json.',
+    },
+  ];
+}
+
+// Pre-wire the global-config CLIs now (normally done lazily on first launch).
+// OpenCode is per-project, so there's nothing global to write here.
+export async function syncAllCliMempalace(): Promise<CliMempalaceWiring[]> {
+  await ensureCodexParity();
+  await ensureGeminiParity();
+  await ensureAntigravityParity();
+  return getCliMempalaceWiring();
 }

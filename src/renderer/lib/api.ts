@@ -68,6 +68,7 @@ import type {
   ForgeUseEvent,
 } from '@shared/types';
 import type {
+  CliMempalaceWiring,
   MemPalaceInstallInput,
   MemPalaceInstallResult,
   MemPalaceProgressEvent,
@@ -542,6 +543,8 @@ export interface DevspaceApi {
       input?: MemPalaceUninstallInput,
     ) => Promise<MemPalaceInstallResult>;
     openVault: () => Promise<void>;
+    getCliWiring: () => Promise<CliMempalaceWiring[]>;
+    syncCli: () => Promise<CliMempalaceWiring[]>;
     onProgress: (cb: (ev: MemPalaceProgressEvent) => void) => () => void;
   };
   setup: {
@@ -912,6 +915,8 @@ function makeStubApi(): DevspaceApi {
         'mempalace.uninstall',
       ) as () => Promise<MemPalaceInstallResult>,
       openVault: notWired('mempalace.openVault') as () => Promise<void>,
+      getCliWiring: () => Promise.resolve([]),
+      syncCli: () => Promise.resolve([]),
       onProgress: () => () => undefined,
     },
     setup: {

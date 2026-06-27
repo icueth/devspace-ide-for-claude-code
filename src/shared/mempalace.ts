@@ -63,3 +63,15 @@ export interface MemPalaceInstallResult {
   status: MemPalaceStatus;
   error?: string;
 }
+
+export type CliMempalaceCliId = 'opencode' | 'codex' | 'gemini' | 'antigravity';
+
+/** Per-CLI MemPalace wiring status, shown in Settings → Memory. */
+export interface CliMempalaceWiring {
+  cliId: CliMempalaceCliId;
+  label: string;
+  installed: boolean;
+  /** MemPalace present in this CLI's config (OpenCode is auto on launch). */
+  wired: boolean;
+  detail: string;
+}

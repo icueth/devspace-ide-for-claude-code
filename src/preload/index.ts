@@ -533,6 +533,8 @@ const api = {
     uninstall: (input?: import('@shared/mempalace').MemPalaceUninstallInput) =>
       ipcRenderer.invoke(IPC.MEMPALACE_UNINSTALL, input ?? {}),
     openVault: () => ipcRenderer.invoke(IPC.MEMPALACE_OPEN_VAULT),
+    getCliWiring: () => ipcRenderer.invoke(IPC.MEMPALACE_CLI_WIRING),
+    syncCli: () => ipcRenderer.invoke(IPC.MEMPALACE_CLI_SYNC),
     onProgress: (
       cb: (ev: import('@shared/mempalace').MemPalaceProgressEvent) => void,
     ) => {

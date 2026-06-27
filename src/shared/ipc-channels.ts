@@ -265,6 +265,8 @@ export const IPC = {
   MEMPALACE_UNINSTALL: 'mempalace:uninstall',
   MEMPALACE_OPEN_VAULT: 'mempalace:open-vault',
   MEMPALACE_PROGRESS: 'mempalace:progress',
+  MEMPALACE_CLI_WIRING: 'mempalace:cli-wiring',
+  MEMPALACE_CLI_SYNC: 'mempalace:cli-sync',
 
   // Environment Setup wizard (Settings → Setup tab). Detects + installs
   // Homebrew / Claude / tmux / rtk / jq / rtk hook / MemPalace so a fresh
