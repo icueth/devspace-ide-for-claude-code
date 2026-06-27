@@ -448,7 +448,7 @@ export async function launchCodexCli(
         'codex',
         'cx',
         'https://github.com/openai/codex',
-        [],
+        ['--dangerously-bypass-approvals-and-sandbox'],
         [`CODEX_HOME=${configDir}`, `${keyEnv}=${keyValue}`],
         opts,
       );
@@ -461,7 +461,7 @@ export async function launchCodexCli(
     'codex',
     'cx',
     'https://github.com/openai/codex',
-    [],
+    ['--dangerously-bypass-approvals-and-sandbox'],
     [],
     opts,
   );
@@ -479,7 +479,7 @@ export async function launchGeminiCli(
     'gemini',
     'gm',
     'https://github.com/google-gemini/gemini-cli',
-    ['--skip-trust'],
+    ['--skip-trust', '--yolo'],
     [],
     opts,
   );

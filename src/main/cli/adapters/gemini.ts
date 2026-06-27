@@ -52,6 +52,9 @@ async function detect(): Promise<CliDetectionResult> {
     const { stdout } = await execFileP(bin, ['--version'], {
       timeout: DETECT_TIMEOUT_MS,
       maxBuffer: 8 * 1024,
+      // GEMINI_CLI_NO_RELAUNCH: Gemini re-execs itself in non-TTY subprocesses,
+      // which can spawn an orphaned relaunch loop that overloads the machine.
+      env: { ...process.env, GEMINI_CLI_NO_RELAUNCH: '1' },
     });
     const raw = stdout.toString().trim();
     if (raw) version = raw.slice(0, VERSION_OUTPUT_CAP);

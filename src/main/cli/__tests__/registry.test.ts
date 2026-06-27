@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { detectAll, getAdapter, listAdapters } from '@main/cli/registry';
 import { claudeAdapter } from '@main/cli/adapters/claude';
+import { codexAdapter } from '@main/cli/adapters/codex';
+import { geminiAdapter } from '@main/cli/adapters/gemini';
 import { opencodeAdapter } from '@main/cli/adapters/opencode';
 
 describe('CLI registry — getAdapter', () => {
@@ -43,6 +45,14 @@ describe('CLI registry — detectAll', () => {
     const opencodeSpy = vi
       .spyOn(opencodeAdapter, 'detect')
       .mockResolvedValue({ cliId: 'opencode', installed: false });
+    // Mock codex + gemini too so the test never spawns the real CLIs (Gemini
+    // re-execs in non-TTY subprocesses and can leave orphaned processes).
+    const codexSpy = vi
+      .spyOn(codexAdapter, 'detect')
+      .mockResolvedValue({ cliId: 'codex', installed: false });
+    const geminiSpy = vi
+      .spyOn(geminiAdapter, 'detect')
+      .mockResolvedValue({ cliId: 'gemini', installed: false });
 
     const results = await detectAll();
     expect(results).toHaveLength(4);
@@ -50,17 +60,32 @@ describe('CLI registry — detectAll', () => {
 
     claudeSpy.mockRestore();
     opencodeSpy.mockRestore();
+    codexSpy.mockRestore();
+    geminiSpy.mockRestore();
   });
 
   it('survives a single adapter throwing — reports it as uninstalled', async () => {
     const claudeSpy = vi
       .spyOn(claudeAdapter, 'detect')
       .mockRejectedValue(new Error('boom'));
+    // Mock the rest so only claude throws — and so no real CLI is spawned.
+    const opencodeSpy = vi
+      .spyOn(opencodeAdapter, 'detect')
+      .mockResolvedValue({ cliId: 'opencode', installed: false });
+    const codexSpy = vi
+      .spyOn(codexAdapter, 'detect')
+      .mockResolvedValue({ cliId: 'codex', installed: false });
+    const geminiSpy = vi
+      .spyOn(geminiAdapter, 'detect')
+      .mockResolvedValue({ cliId: 'gemini', installed: false });
 
     const results = await detectAll();
     const claudeResult = results.find((r) => r.cliId === 'claude');
     expect(claudeResult?.installed).toBe(false);
 
     claudeSpy.mockRestore();
+    opencodeSpy.mockRestore();
+    codexSpy.mockRestore();
+    geminiSpy.mockRestore();
   });
 });

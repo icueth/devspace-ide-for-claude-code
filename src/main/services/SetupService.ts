@@ -223,14 +223,12 @@ async function detectNpmCli(
     installable: true,
     optional: true,
   };
+  // Do NOT run `<bin> --version` here. For Gemini it relaunches itself in the
+  // non-TTY Electron subprocess env, which can loop/spawn endlessly and freeze
+  // the Setup "Detecting environment…" check. Presence on PATH is enough to
+  // report installed vs missing.
   if (found) {
-    const v = await runCapture(found, ['--version']);
-    return {
-      ...base,
-      state: 'ok',
-      path: found,
-      version: v.stdout.split('\n')[0]?.trim() || undefined,
-    };
+    return { ...base, state: 'ok', path: found };
   }
   return { ...base, state: 'missing' };
 }

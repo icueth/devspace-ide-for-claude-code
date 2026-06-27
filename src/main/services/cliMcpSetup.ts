@@ -67,7 +67,9 @@ export async function ensureGeminiMcp(): Promise<void> {
     await execFileP(
       bin,
       ['mcp', 'add', '-s', 'user', 'mempalace', cmd[0], ...cmd.slice(1)],
-      { timeout: 8000 },
+      // GEMINI_CLI_NO_RELAUNCH stops Gemini re-execing in this non-TTY call
+      // (which can loop/hang and stall the tab launch).
+      { timeout: 8000, env: { ...process.env, GEMINI_CLI_NO_RELAUNCH: '1' } },
     );
     logger.info('registered mempalace MCP for gemini');
   } catch (err) {
