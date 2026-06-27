@@ -385,6 +385,11 @@ async function detectMempalaceBinary(): Promise<string | null> {
   return null;
 }
 
+// Hard cap on the login-shell probe. Without this, a fresh machine whose
+// ~/.zshrc is slow or interactive (nvm, prompts) makes the spawn never exit —
+// which froze Setup's "Detecting environment…" forever (getStatus awaits this).
+const LOGIN_SHELL_PROBE_TIMEOUT_MS = 6000;
+
 function resolveFromLoginShell(exe: string): Promise<string | null> {
   if (process.platform === 'win32') return Promise.resolve(null);
   const shellBin = process.env.SHELL || '/bin/zsh';
@@ -392,27 +397,45 @@ function resolveFromLoginShell(exe: string): Promise<string | null> {
   // for a function, or `alias mempalace='/full/path'` style for aliases on
   // bash. zsh's `command -v` returns the alias target directly on -i.
   return new Promise((resolve) => {
+    let settled = false;
+    let timer: NodeJS.Timeout | null = null;
+    const done = (val: string | null) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      resolve(val);
+    };
+    // stdin ignored so an interactive rc file can't block on a read; the hard
+    // timeout + SIGKILL guarantees this never hangs detection.
     const child = spawn(
       shellBin,
       ['-ilc', `command -v ${exe} 2>/dev/null; alias ${exe} 2>/dev/null`],
-      { env: process.env },
+      { env: process.env, stdio: ['ignore', 'pipe', 'ignore'] },
     );
+    timer = setTimeout(() => {
+      try {
+        child.kill('SIGKILL');
+      } catch {
+        /* already dead */
+      }
+      done(null);
+    }, LOGIN_SHELL_PROBE_TIMEOUT_MS);
     const out: string[] = [];
-    child.stdout.on('data', (d) => out.push(String(d)));
-    child.on('error', () => resolve(null));
+    child.stdout?.on('data', (d) => out.push(String(d)));
+    child.on('error', () => done(null));
     child.on('exit', () => {
       const text = out.join('').trim();
-      if (!text) return resolve(null);
+      if (!text) return done(null);
       // Pull the first absolute path we see — works for `command -v` output
       // ("/Users/x/.venv/bin/mempalace") and `alias` output
       // ("alias mempalace=/Users/x/.venv/bin/mempalace").
       const match = text.match(/(\/[^\s'"]+)/);
-      if (!match) return resolve(null);
+      if (!match) return done(null);
       const found = match[1];
       // Sanity-check: only trust paths that actually exist.
       fsp.access(found, fs.constants.F_OK).then(
-        () => resolve(found),
-        () => resolve(null),
+        () => done(found),
+        () => done(null),
       );
     });
   });

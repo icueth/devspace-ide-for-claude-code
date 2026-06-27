@@ -77,7 +77,8 @@ export function commonBinPaths(): string[] {
     '/opt/homebrew/sbin',
     '/usr/local/bin', // Intel Homebrew + curl/install.sh default
     '/usr/local/sbin',
-    path.join(home, '.local', 'bin'), // Claude installer, uv tool entry points
+    path.join(home, '.local', 'bin'), // Claude installer, uv tool entry points, agy
+    path.join(home, '.opencode', 'bin'), // OpenCode curl installer
     path.join(home, '.cargo', 'bin'),
     '/usr/bin',
     '/bin',

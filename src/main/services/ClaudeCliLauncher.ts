@@ -13,6 +13,7 @@ import {
   loadTmuxConfig,
 } from '@main/services/TmuxConfigService';
 import { ensureFolderTrusted } from '@main/utils/claudeTrust';
+import { commonBinPaths } from '@main/utils/setupPaths';
 import { resolveInteractiveShellEnv } from '@main/utils/shellEnv';
 import { createLogger } from '@shared/logger';
 import type { PtySession, PtySessionKind, TmuxConfig } from '@shared/types';
@@ -20,22 +21,32 @@ import type { PtySession, PtySessionKind, TmuxConfig } from '@shared/types';
 const logger = createLogger('ClaudeCliLauncher');
 
 async function findOnPath(name: string): Promise<string | null> {
-  const env = await resolveInteractiveShellEnv();
-  const path = env.PATH ?? process.env.PATH ?? '';
-  if (!path) return null;
-
   const { existsSync } = await import('node:fs');
   const pathSep = process.platform === 'win32' ? ';' : ':';
   const exts = process.platform === 'win32' ? ['.cmd', '.exe'] : [''];
 
-  for (const dir of path.split(pathSep)) {
-    if (!dir) continue;
-    for (const ext of exts) {
-      const candidate = `${dir}/${name}${ext}`;
-      if (existsSync(candidate)) return candidate;
+  const tryDirs = (dirs: string[]): string | null => {
+    for (const dir of dirs) {
+      if (!dir) continue;
+      for (const ext of exts) {
+        const candidate = `${dir}/${name}${ext}`;
+        if (existsSync(candidate)) return candidate;
+      }
     }
-  }
-  return null;
+    return null;
+  };
+
+  // 1. Well-known install dirs FIRST — synchronous + instant, with no
+  //    dependency on the (possibly slow or broken) login shell. Covers
+  //    Homebrew, ~/.local/bin (claude, agy, uv tools), ~/.cargo/bin. On a fresh
+  //    machine this is what stops the dock hanging while it resolves a bin.
+  const fromCommon = tryDirs(commonBinPaths());
+  if (fromCommon) return fromCommon;
+
+  // 2. Fall back to the login-shell PATH for custom/nvm locations. Bounded by
+  //    the shell-env resolve timeout; falls back to the process PATH on failure.
+  const env = await resolveInteractiveShellEnv();
+  return tryDirs((env.PATH ?? process.env.PATH ?? '').split(pathSep));
 }
 
 async function findClaudeBinary(): Promise<string | null> {
