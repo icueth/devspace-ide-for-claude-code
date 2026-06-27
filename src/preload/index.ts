@@ -551,6 +551,7 @@ const api = {
     installTool: (toolId: import('@shared/setup').SetupToolId) =>
       ipcRenderer.invoke(IPC.SETUP_INSTALL_TOOL, toolId),
     installAll: () => ipcRenderer.invoke(IPC.SETUP_INSTALL_ALL),
+    installEverything: () => ipcRenderer.invoke(IPC.SETUP_INSTALL_EVERYTHING),
     uninstallRtkHook: () => ipcRenderer.invoke(IPC.SETUP_UNINSTALL_RTK_HOOK),
     openClaudeDir: () => ipcRenderer.invoke(IPC.SETUP_OPEN_CLAUDE_DIR),
     runClaude: (

@@ -275,6 +275,7 @@ export const IPC = {
   SETUP_GET_STATUS: 'setup:get-status',
   SETUP_INSTALL_TOOL: 'setup:install-tool',
   SETUP_INSTALL_ALL: 'setup:install-all',
+  SETUP_INSTALL_EVERYTHING: 'setup:install-everything',
   SETUP_UNINSTALL_RTK_HOOK: 'setup:uninstall-rtk-hook',
   SETUP_OPEN_CLAUDE_DIR: 'setup:open-claude-dir',
   SETUP_PROGRESS: 'setup:progress',

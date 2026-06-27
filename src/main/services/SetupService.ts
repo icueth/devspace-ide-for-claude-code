@@ -4,7 +4,11 @@ import * as fsp from 'node:fs/promises';
 import * as path from 'node:path';
 import { shell, type WebContents } from 'electron';
 
-import { getStatus as getMempalaceStatus } from '@main/services/MemPalaceService';
+import { syncAllCliMempalace } from '@main/services/cliMcpSetup';
+import {
+  getStatus as getMempalaceStatus,
+  install as mempalaceInstall,
+} from '@main/services/MemPalaceService';
 import {
   commonBinPaths,
   enrichedPath,
@@ -945,6 +949,169 @@ export async function installAllMissing(): Promise<SetupInstallResult> {
       toolId: 'all',
       stage: 'done',
       message: 'Setup complete. Restart Claude Code to pick up new hooks.',
+      done: true,
+    });
+    return { ok: true, status };
+  } catch (err) {
+    const message = (err as Error).message;
+    return { ok: false, status: await getStatus(), error: message };
+  } finally {
+    installing = null;
+  }
+}
+
+/**
+ * All-in-one: install + repair + wire EVERYTHING for a ready-to-use setup —
+ * the base tools, every AI CLI, MemPalace, and the MemPalace+rtk wiring for
+ * each CLI. Idempotent: only acts on what's missing, so it serves new users,
+ * partial installs, and "verify & fix" alike. Optional CLIs that fail don't
+ * abort the run (they're best-effort); a missing base tool does.
+ */
+export async function installEverything(): Promise<SetupInstallResult> {
+  if (installing) {
+    return {
+      ok: false,
+      status: await getStatus(),
+      error: `Already installing ${installing}`,
+    };
+  }
+  installing = 'all';
+
+  try {
+    const initial = await getStatus();
+    if (initial.platform !== 'darwin') {
+      throw new Error(
+        `Set up everything is only supported on macOS in this version (host: ${initial.platform}).`,
+      );
+    }
+
+    const base: SetupToolId[] = [
+      'brew',
+      'jq',
+      'tmux',
+      'rtk',
+      'claude',
+      'rtkHook',
+      'learningHooks',
+    ];
+    const clis: SetupToolId[] = ['opencode', 'codex', 'gemini', 'antigravity'];
+
+    for (const toolId of [...base, ...clis]) {
+      const current = await getStatus();
+      const c = current.checks.find((x) => x.id === toolId);
+      if (!c || c.state === 'ok' || c.state === 'unsupported') continue;
+
+      if (toolId === 'brew') {
+        step('all', 'configure', 'Homebrew is missing — opening installer page.');
+        await installBrew();
+        emit({
+          toolId: 'all',
+          stage: 'error',
+          message:
+            'Install Homebrew from brew.sh, then click Set up everything again.',
+          done: true,
+          error: 'Homebrew required',
+        });
+        return {
+          ok: false,
+          status: await getStatus(),
+          error: 'Homebrew required — see your browser tab.',
+        };
+      }
+
+      step('all', 'install', `Installing ${toolId}…`);
+      try {
+        switch (toolId) {
+          case 'jq':
+            await installBrewPkg('jq', 'jq');
+            break;
+          case 'tmux':
+            await installBrewPkg('tmux', 'tmux');
+            break;
+          case 'rtk':
+            await installRtk();
+            break;
+          case 'claude':
+            await installClaude();
+            break;
+          case 'rtkHook':
+            await installRtkHook();
+            break;
+          case 'learningHooks':
+            await installLearningHooks();
+            break;
+          case 'opencode':
+            await installNpmCli('opencode', 'opencode-ai');
+            break;
+          case 'codex':
+            await installNpmCli('codex', '@openai/codex');
+            break;
+          case 'gemini':
+            await installNpmCli('gemini', '@google/gemini-cli');
+            break;
+          case 'antigravity':
+            await installAntigravity();
+            break;
+        }
+      } catch (err) {
+        const message = (err as Error).message;
+        // A base-tool failure is fatal; an optional CLI failure is not — record
+        // it and keep going so one bad CLI doesn't block the rest.
+        if (base.includes(toolId)) {
+          emit({
+            toolId: 'all',
+            stage: 'error',
+            message: `Step ${toolId} failed: ${message}`,
+            done: true,
+            error: message,
+          });
+          return { ok: false, status: await getStatus(), error: message };
+        }
+        emit({
+          toolId: 'all',
+          stage: 'configure',
+          message: `${toolId} skipped: ${message}`,
+          done: false,
+        });
+      }
+    }
+
+    // MemPalace — the memory brain. Best-effort (its own bundled-uv installer).
+    try {
+      const mp = await getMempalaceStatus();
+      if (!mp.installed) {
+        step('mempalace', 'install', 'Installing MemPalace…');
+        await mempalaceInstall({});
+      }
+    } catch (err) {
+      emit({
+        toolId: 'all',
+        stage: 'configure',
+        message: `MemPalace skipped: ${(err as Error).message}`,
+        done: false,
+      });
+    }
+
+    // Wire MemPalace + rtk guidance into every installed CLI (Codex / Gemini /
+    // Antigravity global configs; OpenCode is per-project on launch).
+    try {
+      step('all', 'configure', 'Connecting MemPalace + rtk to all CLIs…');
+      await syncAllCliMempalace();
+    } catch (err) {
+      emit({
+        toolId: 'all',
+        stage: 'configure',
+        message: `CLI wiring: ${(err as Error).message}`,
+        done: false,
+      });
+    }
+
+    const status = await getStatus();
+    emit({
+      toolId: 'all',
+      stage: 'done',
+      message:
+        'All set. Restart Claude Code for new hooks. Some CLIs need auth before first use (Gemini API key, Antigravity sign-in).',
       done: true,
     });
     return { ok: true, status };

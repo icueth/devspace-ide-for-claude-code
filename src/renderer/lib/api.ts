@@ -551,6 +551,7 @@ export interface DevspaceApi {
     getStatus: () => Promise<SetupStatus>;
     installTool: (toolId: SetupToolId) => Promise<SetupInstallResult>;
     installAll: () => Promise<SetupInstallResult>;
+    installEverything: () => Promise<SetupInstallResult>;
     uninstallRtkHook: () => Promise<SetupInstallResult>;
     openClaudeDir: () => Promise<void>;
     runClaude: (
@@ -928,6 +929,9 @@ function makeStubApi(): DevspaceApi {
         } as SetupStatus),
       installTool: notWired('setup.installTool') as () => Promise<SetupInstallResult>,
       installAll: notWired('setup.installAll') as () => Promise<SetupInstallResult>,
+      installEverything: notWired(
+        'setup.installEverything',
+      ) as () => Promise<SetupInstallResult>,
       uninstallRtkHook: notWired(
         'setup.uninstallRtkHook',
       ) as () => Promise<SetupInstallResult>,

@@ -5,6 +5,7 @@ import { subscribe as subscribePty } from '@main/services/PtyPool';
 import {
   getStatus,
   installAllMissing,
+  installEverything,
   installTool,
   openSettingsDir,
   subscribeSetup,
@@ -38,6 +39,16 @@ export function registerSetupIpc(): void {
       return await installAllMissing();
     } catch (err) {
       logger.error('installAllMissing failed:', (err as Error).message);
+      throw err;
+    }
+  });
+
+  ipcMain.handle(IPC.SETUP_INSTALL_EVERYTHING, async (event) => {
+    subscribeSetup(event.sender);
+    try {
+      return await installEverything();
+    } catch (err) {
+      logger.error('installEverything failed:', (err as Error).message);
       throw err;
     }
   });

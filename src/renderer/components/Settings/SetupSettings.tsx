@@ -108,6 +108,23 @@ export function SetupSettings() {
     }
   };
 
+  // All-in-one: base tools + every AI CLI + MemPalace + the MemPalace/rtk
+  // wiring. Idempotent, so it doubles as "verify & repair" for partial installs.
+  const handleInstallEverything = async (): Promise<void> => {
+    setBusy('all');
+    setError(null);
+    setLog([]);
+    try {
+      const result = await api.setup.installEverything();
+      setStatus(result.status);
+      if (!result.ok && result.error) setError(result.error);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy('idle');
+    }
+  };
+
   const handleRunClaude = useCallback((): void => {
     setError(null);
     setLog([]);
@@ -146,6 +163,7 @@ export function SetupSettings() {
           status={status}
           running={running}
           busy={busy}
+          onInstallEverything={handleInstallEverything}
           onInstallAll={handleInstallAll}
           onRefresh={refreshStatus}
           onRunClaude={handleRunClaude}
@@ -235,6 +253,7 @@ function ActionsBar({
   status,
   running,
   busy,
+  onInstallEverything,
   onInstallAll,
   onRefresh,
   onRunClaude,
@@ -242,10 +261,12 @@ function ActionsBar({
   status: SetupStatus;
   running: boolean;
   busy: 'idle' | SetupToolId | 'all';
+  onInstallEverything: () => void | Promise<void>;
   onInstallAll: () => void | Promise<void>;
   onRefresh: () => void | Promise<void>;
   onRunClaude: () => void;
 }) {
+  const everythingDisabled = running || status.platform !== 'darwin';
   const installAllDisabled =
     running || status.complete || status.platform !== 'darwin';
 
@@ -270,6 +291,41 @@ function ActionsBar({
 
   return (
     <div className="flex flex-wrap items-center gap-2">
+      <button
+        type="button"
+        onClick={() => void onInstallEverything()}
+        disabled={everythingDisabled}
+        title={
+          everythingDisabled
+            ? status.platform !== 'darwin'
+              ? 'All-in-one setup is macOS-only in this version.'
+              : 'Installing…'
+            : 'Install + repair EVERYTHING: base tools, all AI CLIs, MemPalace, and the MemPalace + rtk wiring for each CLI. Safe to re-run to verify & fix.'
+        }
+        className={cn(
+          'inline-flex items-center gap-1.5 rounded-[7px] px-4 py-2 text-[12px] font-semibold transition',
+          everythingDisabled
+            ? 'pointer-events-none border border-border bg-surface-3 text-text-muted opacity-60'
+            : 'text-white hover:brightness-110',
+        )}
+        style={
+          !everythingDisabled
+            ? {
+                background:
+                  'linear-gradient(135deg, #a855f7, var(--color-accent))',
+                boxShadow: '0 4px 14px rgba(168,85,247,0.30)',
+              }
+            : undefined
+        }
+      >
+        {busy === 'all' ? (
+          <Loader2 size={12} className="animate-spin" />
+        ) : (
+          <Sparkles size={12} />
+        )}
+        Set up everything
+      </button>
+
       <button
         type="button"
         onClick={onRunClaude}
