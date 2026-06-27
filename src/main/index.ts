@@ -1,5 +1,6 @@
-import { app, BrowserWindow, Menu, shell } from 'electron';
+import { app, BrowserWindow, Menu, session, shell } from 'electron';
 import type { MenuItemConstructorOptions } from 'electron';
+import * as fs from 'node:fs';
 import path from 'node:path';
 
 // Packaged Electron launched from Finder has no attached TTY. If something
@@ -124,6 +125,14 @@ async function createWindow(): Promise<void> {
   // the devtools network tab stays readable during profiling.
   win.webContents.on('preload-error', (_e, preloadPathErr, error) => {
     console.error('[main] preload-error:', preloadPathErr, error.message);
+  });
+
+  // Self-heal: if the renderer ever wedges (e.g. a stale-cache compile loop),
+  // clear the on-disk V8 code cache so the NEXT load comes up clean. We do NOT
+  // auto-reload (that risks a loop) — the clear takes effect on the next launch.
+  win.webContents.on('unresponsive', () => {
+    console.error('[main] renderer unresponsive — clearing code cache for next load');
+    void session.defaultSession.clearCodeCaches({ urls: [] }).catch(() => undefined);
   });
 
   win.once('ready-to-show', () => {
@@ -261,7 +270,62 @@ function buildMenu(): Menu {
   return Menu.buildFromTemplate(template);
 }
 
+/**
+ * Clear renderer caches when the app build changes. A V8 code cache (compiled
+ * bytecode) or GPU cache written by a DIFFERENT build can wedge the renderer in
+ * an endless compile/optimize loop on the new build — the symptom is a frozen
+ * UI (Settings → Setup stuck on "Detecting…", confirmed on an upgraded install).
+ * These are pure caches Chromium rebuilds; user state (Local Storage, Session
+ * Storage, workspaces.json) is left untouched. Runs synchronously BEFORE the
+ * first window so the stale cache is gone before the renderer loads.
+ */
+function clearStaleRendererCachesOnUpgrade(): void {
+  try {
+    const userData = app.getPath('userData');
+    const verFile = path.join(userData, '.devspace-build-version');
+    const current = app.getVersion();
+    let last = '';
+    try {
+      last = fs.readFileSync(verFile, 'utf8').trim();
+    } catch {
+      // first run — no marker yet
+    }
+    if (last === current) return; // same build: keep caches for a fast boot
+    for (const d of [
+      'Code Cache',
+      'GPUCache',
+      'Cache',
+      'DawnWebGPUCache',
+      'DawnGraphiteCache',
+    ]) {
+      try {
+        fs.rmSync(path.join(userData, d), { recursive: true, force: true });
+      } catch {
+        // best-effort
+      }
+    }
+    try {
+      fs.mkdirSync(userData, { recursive: true });
+      fs.writeFileSync(verFile, current, 'utf8');
+    } catch {
+      // best-effort
+    }
+    console.log(
+      `[main] cleared renderer caches on build change: ${last || '(fresh)'} -> ${current}`,
+    );
+  } catch (err) {
+    console.error(
+      '[main] clearStaleRendererCachesOnUpgrade failed:',
+      (err as Error).message,
+    );
+  }
+}
+
 app.whenReady().then(async () => {
+  // Stale V8 code cache from a previous build can wedge the renderer in a
+  // compile loop (frozen UI) — clear it before the first window loads.
+  clearStaleRendererCachesOnUpgrade();
+
   // Pre-warm shell env so the first PTY spawn doesn't pay the cost.
   void resolveInteractiveShellEnv().catch(() => undefined);
 
