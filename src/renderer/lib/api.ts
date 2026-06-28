@@ -74,6 +74,8 @@ import type {
   MemPalaceProgressEvent,
   MemPalaceStatus,
   MemPalaceUninstallInput,
+  PalaceSyncResult,
+  PalaceSyncStatus,
 } from '@shared/mempalace';
 import type {
   SetupClaudeRunResult,
@@ -545,6 +547,9 @@ export interface DevspaceApi {
     openVault: () => Promise<void>;
     getCliWiring: () => Promise<CliMempalaceWiring[]>;
     syncCli: () => Promise<CliMempalaceWiring[]>;
+    syncStatus: () => Promise<PalaceSyncStatus>;
+    syncPull: () => Promise<PalaceSyncResult>;
+    syncPush: () => Promise<PalaceSyncResult>;
     onProgress: (cb: (ev: MemPalaceProgressEvent) => void) => () => void;
   };
   setup: {
@@ -918,6 +923,19 @@ function makeStubApi(): DevspaceApi {
       openVault: notWired('mempalace.openVault') as () => Promise<void>,
       getCliWiring: () => Promise.resolve([]),
       syncCli: () => Promise.resolve([]),
+      syncStatus: () =>
+        Promise.resolve({
+          enabled: false,
+          vaultPath: '',
+          remoteUrl: null,
+          branch: 'main',
+          ahead: 0,
+          behind: 0,
+          dirty: false,
+          lastSync: null,
+        } as PalaceSyncStatus),
+      syncPull: () => Promise.resolve({ ok: false, message: 'not wired' }),
+      syncPush: () => Promise.resolve({ ok: false, message: 'not wired' }),
       onProgress: () => () => undefined,
     },
     setup: {

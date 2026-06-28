@@ -535,6 +535,9 @@ const api = {
     openVault: () => ipcRenderer.invoke(IPC.MEMPALACE_OPEN_VAULT),
     getCliWiring: () => ipcRenderer.invoke(IPC.MEMPALACE_CLI_WIRING),
     syncCli: () => ipcRenderer.invoke(IPC.MEMPALACE_CLI_SYNC),
+    syncStatus: () => ipcRenderer.invoke(IPC.MEMPALACE_SYNC_STATUS),
+    syncPull: () => ipcRenderer.invoke(IPC.MEMPALACE_SYNC_PULL),
+    syncPush: () => ipcRenderer.invoke(IPC.MEMPALACE_SYNC_PUSH),
     onProgress: (
       cb: (ev: import('@shared/mempalace').MemPalaceProgressEvent) => void,
     ) => {

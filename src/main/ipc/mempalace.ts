@@ -5,6 +5,11 @@ import {
   syncAllCliMempalace,
 } from '@main/services/cliMcpSetup';
 import {
+  getPalaceSyncStatus,
+  pullPalace,
+  pushPalace,
+} from '@main/services/palaceSync';
+import {
   getStatus,
   install,
   openVault,
@@ -33,6 +38,11 @@ export function registerMempalaceIpc(): void {
   // global-config CLIs without needing to open each tab).
   ipcMain.handle(IPC.MEMPALACE_CLI_WIRING, async () => getCliMempalaceWiring());
   ipcMain.handle(IPC.MEMPALACE_CLI_SYNC, async () => syncAllCliMempalace());
+
+  // Git-backed vault sync across machines (pull before use / push after use).
+  ipcMain.handle(IPC.MEMPALACE_SYNC_STATUS, async () => getPalaceSyncStatus());
+  ipcMain.handle(IPC.MEMPALACE_SYNC_PULL, async () => pullPalace());
+  ipcMain.handle(IPC.MEMPALACE_SYNC_PUSH, async () => pushPalace());
 
   ipcMain.handle(
     IPC.MEMPALACE_INSTALL,

@@ -64,6 +64,30 @@ export interface MemPalaceInstallResult {
   error?: string;
 }
 
+/** Git-backed sync of the MemPalace vault across machines (single-writer). */
+export interface PalaceSyncStatus {
+  /** True when the vault is a git repo with an `origin` remote. */
+  enabled: boolean;
+  vaultPath: string;
+  remoteUrl: string | null;
+  branch: string;
+  /** Local commits not on the remote. */
+  ahead: number;
+  /** Remote commits not pulled locally. */
+  behind: number;
+  /** Uncommitted local changes (un-pushed knowledge). */
+  dirty: boolean;
+  /** ISO timestamp of the last local commit. */
+  lastSync: string | null;
+  error?: string;
+}
+
+export interface PalaceSyncResult {
+  ok: boolean;
+  message: string;
+  status?: PalaceSyncStatus;
+}
+
 export type CliMempalaceCliId = 'opencode' | 'codex' | 'gemini' | 'antigravity';
 
 /** Per-CLI MemPalace wiring status, shown in Settings → Memory. */

@@ -9,6 +9,7 @@ import {
   Loader2,
   RefreshCw,
   Trash2,
+  Upload,
 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 
@@ -20,6 +21,7 @@ import type {
   MemPalaceCheckState,
   MemPalaceProgressEvent,
   MemPalaceStatus,
+  PalaceSyncStatus,
 } from '@shared/mempalace';
 
 /**
@@ -125,6 +127,8 @@ export function MemPalaceSettings() {
       <div className="mx-auto flex w-full max-w-[720px] flex-col gap-5 px-6 py-6">
         <Header status={status} />
 
+        <SyncCard />
+
         {!status.hostSupported && <UnsupportedNotice />}
 
         <ChecklistCard status={status} />
@@ -145,6 +149,158 @@ export function MemPalaceSettings() {
 
         <PathsCard status={status} />
       </div>
+    </div>
+  );
+}
+
+// Git-backed sync of the vault across machines — pull before use, push after
+// use (single-writer; the SQLite vault can't merge).
+function SyncCard() {
+  const [status, setStatus] = useState<PalaceSyncStatus | null>(null);
+  const [busy, setBusy] = useState<'idle' | 'pull' | 'push'>('idle');
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
+  const refresh = () => {
+    void api.mempalace
+      .syncStatus()
+      .then(setStatus)
+      .catch(() => setStatus(null));
+  };
+  useEffect(refresh, []);
+
+  const run = async (kind: 'pull' | 'push') => {
+    setBusy(kind);
+    setMsg(null);
+    try {
+      const r =
+        kind === 'pull'
+          ? await api.mempalace.syncPull()
+          : await api.mempalace.syncPush();
+      setMsg({ ok: r.ok, text: r.message });
+      if (r.status) setStatus(r.status);
+      else refresh();
+    } catch (e) {
+      setMsg({ ok: false, text: (e as Error).message });
+    } finally {
+      setBusy('idle');
+    }
+  };
+
+  if (!status) return null;
+
+  if (!status.enabled) {
+    return (
+      <div className="rounded-[10px] border border-border bg-surface-2/60 p-3">
+        <div className="mb-1 text-[10.5px] font-semibold uppercase tracking-wide text-text-muted">
+          Sync across machines
+        </div>
+        <p className="text-[11px] leading-relaxed text-text-dim">
+          Make the vault a git repo with a <b>private</b> remote to share your
+          brain across machines.
+          {status.vaultPath && (
+            <span className="text-text-muted"> Vault: {status.vaultPath}</span>
+          )}
+        </p>
+      </div>
+    );
+  }
+
+  const running = busy !== 'idle';
+  const repo =
+    status.remoteUrl
+      ?.replace(/^https:\/\/github\.com\//, '')
+      .replace(/\.git$/, '') ?? status.remoteUrl;
+  const inSync = status.behind === 0 && !status.dirty;
+
+  return (
+    <div className="rounded-[10px] border border-border bg-surface-2/60 p-3">
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <div className="text-[10.5px] font-semibold uppercase tracking-wide text-text-muted">
+          Sync across machines
+        </div>
+        <span
+          className="max-w-[55%] truncate text-[10px] text-text-dim"
+          title={status.remoteUrl ?? ''}
+        >
+          {repo}
+        </span>
+      </div>
+
+      <div className="mb-2 flex flex-wrap items-center gap-2 text-[10.5px]">
+        {status.behind > 0 && (
+          <span className="rounded-full bg-[rgba(59,130,246,0.15)] px-2 py-0.5 text-[#93c5fd]">
+            {status.behind} behind ↓
+          </span>
+        )}
+        {status.dirty && (
+          <span className="rounded-full bg-[rgba(245,158,11,0.15)] px-2 py-0.5 text-[#fcd34d]">
+            unpushed changes
+          </span>
+        )}
+        {inSync && (
+          <span className="inline-flex items-center gap-1 text-semantic-success">
+            <CheckCircle2 size={11} /> in sync
+          </span>
+        )}
+        {status.lastSync && (
+          <span className="ml-auto text-[10px] text-text-dim">
+            last: {new Date(status.lastSync).toLocaleString()}
+          </span>
+        )}
+      </div>
+
+      <div className="flex gap-2">
+        <button
+          type="button"
+          onClick={() => void run('pull')}
+          disabled={running}
+          className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-[6px] border border-accent/40 bg-accent/10 px-3 py-1.5 text-[11.5px] font-medium text-accent transition hover:bg-accent/20 disabled:opacity-50"
+        >
+          {busy === 'pull' ? (
+            <Loader2 size={12} className="animate-spin" />
+          ) : (
+            <Download size={12} />
+          )}
+          Pull (before use)
+        </button>
+        <button
+          type="button"
+          onClick={() => void run('push')}
+          disabled={running}
+          className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-[6px] border border-border bg-surface-3 px-3 py-1.5 text-[11.5px] font-medium text-text transition hover:bg-surface-4 disabled:opacity-50"
+        >
+          {busy === 'push' ? (
+            <Loader2 size={12} className="animate-spin" />
+          ) : (
+            <Upload size={12} />
+          )}
+          Push (after use)
+        </button>
+        <button
+          type="button"
+          onClick={refresh}
+          disabled={running}
+          title="Refresh status"
+          className="inline-flex items-center justify-center rounded-[6px] border border-border bg-surface-3 px-2 py-1.5 text-text-muted transition hover:bg-surface-4 disabled:opacity-50"
+        >
+          <RefreshCw size={12} />
+        </button>
+      </div>
+
+      {msg && (
+        <p
+          className={cn(
+            'mt-2 text-[10.5px] leading-relaxed',
+            msg.ok ? 'text-semantic-success' : 'text-[#fcd34d]',
+          )}
+        >
+          {msg.text}
+        </p>
+      )}
+      <p className="mt-2 text-[10px] leading-relaxed text-text-dim">
+        Single-writer: pull before you work, push after. The vault is SQLite and
+        can't merge — don't use two machines at the same time.
+      </p>
     </div>
   );
 }

@@ -267,6 +267,9 @@ export const IPC = {
   MEMPALACE_PROGRESS: 'mempalace:progress',
   MEMPALACE_CLI_WIRING: 'mempalace:cli-wiring',
   MEMPALACE_CLI_SYNC: 'mempalace:cli-sync',
+  MEMPALACE_SYNC_STATUS: 'mempalace:sync-status',
+  MEMPALACE_SYNC_PULL: 'mempalace:sync-pull',
+  MEMPALACE_SYNC_PUSH: 'mempalace:sync-push',
 
   // Environment Setup wizard (Settings → Setup tab). Detects + installs
   // Homebrew / Claude / tmux / rtk / jq / rtk hook / MemPalace so a fresh
