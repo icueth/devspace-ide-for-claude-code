@@ -5,6 +5,7 @@ import * as path from 'node:path';
 import { promisify } from 'node:util';
 
 import { resolveMempalaceMcpCommand } from '@main/services/openCodeConfig';
+import { findExecutable } from '@main/utils/setupPaths';
 import { createLogger } from '@shared/logger';
 import type { CliMempalaceWiring } from '@shared/mempalace';
 
@@ -17,17 +18,11 @@ import type { CliMempalaceWiring } from '@shared/mempalace';
 const execFileP = promisify(execFile);
 const logger = createLogger('cli-mcp-setup');
 
+// Robust lookup — independent of the GUI process's minimal launchd PATH (a bare
+// `which` misses CLIs in /opt/homebrew/bin, ~/.local/bin, ~/.opencode/bin, …,
+// which made the per-CLI wiring card show installed CLIs as "not installed").
 async function onPath(name: string): Promise<string | null> {
-  try {
-    const { stdout } = await execFileP(
-      process.platform === 'win32' ? 'where' : 'which',
-      [name],
-      { timeout: 3000 },
-    );
-    return stdout.split(/\r?\n/).map((s) => s.trim()).find(Boolean) ?? null;
-  } catch {
-    return null;
-  }
+  return findExecutable(name);
 }
 
 function fileContains(file: string, needle: string): boolean {

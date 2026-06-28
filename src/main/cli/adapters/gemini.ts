@@ -6,13 +6,13 @@
 // Gemini (installed / version / bin) for the new-tab CLI picker.
 
 import { execFile } from 'node:child_process';
-import * as fs from 'node:fs';
 import { promisify } from 'node:util';
 
 import { createLogger } from '@shared/logger';
 import type { CliDetectionResult, CliProfile } from '@shared/types';
 
 import type { BuildSpawnArgsInput, CliAdapter, CliSpawnArgs } from '@main/cli/types';
+import { findExecutable } from '@main/utils/setupPaths';
 
 const execFileP = promisify(execFile);
 const logger = createLogger('gemini-adapter');
@@ -20,28 +20,10 @@ const logger = createLogger('gemini-adapter');
 const DETECT_TIMEOUT_MS = 4000;
 const VERSION_OUTPUT_CAP = 256;
 
-async function isExecutable(bin: string): Promise<boolean> {
-  try {
-    await fs.promises.access(bin, fs.constants.X_OK);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
+// Robust lookup — well-known install dirs + enriched PATH, so a CLI in
+// /opt/homebrew/bin or ~/.local/bin isn't missed under the minimal launchd PATH.
 async function whichBinary(): Promise<string | null> {
-  const cmd = process.platform === 'win32' ? 'where' : 'which';
-  try {
-    const { stdout } = await execFileP(cmd, ['gemini'], {
-      timeout: DETECT_TIMEOUT_MS,
-      maxBuffer: 16 * 1024,
-    });
-    const first = stdout.split(/\r?\n/).map((s) => s.trim()).find(Boolean);
-    if (first && (await isExecutable(first))) return first;
-  } catch {
-    // No PATH match — Gemini CLI isn't installed.
-  }
-  return null;
+  return findExecutable('gemini');
 }
 
 async function detect(): Promise<CliDetectionResult> {

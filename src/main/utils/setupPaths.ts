@@ -1,6 +1,9 @@
 import { app } from 'electron';
+import { execFile } from 'node:child_process';
+import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { promisify } from 'node:util';
 
 import { getClaudeDir, getClaudeSettingsFile } from './mempalacePaths';
 
@@ -91,4 +94,38 @@ export function enrichedPath(): string {
   const have = new Set(existing.split(':').filter(Boolean));
   const extras = segments.filter((s) => !have.has(s));
   return [existing, ...extras].filter(Boolean).join(':');
+}
+
+const execFileP = promisify(execFile);
+
+/**
+ * Find an executable by name, robustly — independent of the GUI process's
+ * minimal launchd PATH (which a bare `which` inherits, so it misses CLIs in
+ * /opt/homebrew/bin, ~/.local/bin, ~/.opencode/bin, …). Checks the well-known
+ * install dirs first (instant), then `which`/`where` with an enriched PATH
+ * (covers nvm/custom dirs). Returns the absolute path or null.
+ */
+export async function findExecutable(name: string): Promise<string | null> {
+  for (const dir of commonBinPaths()) {
+    const full = path.join(dir, name);
+    try {
+      if (fs.statSync(full).isFile()) return full;
+    } catch {
+      // try the next dir
+    }
+  }
+  try {
+    const { stdout } = await execFileP(
+      process.platform === 'win32' ? 'where' : 'which',
+      [name],
+      {
+        timeout: 3000,
+        env: { ...process.env, PATH: enrichedPath() },
+        maxBuffer: 16 * 1024,
+      },
+    );
+    return stdout.split(/\r?\n/).map((s) => s.trim()).find(Boolean) ?? null;
+  } catch {
+    return null;
+  }
 }
