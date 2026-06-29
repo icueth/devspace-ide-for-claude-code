@@ -253,6 +253,10 @@ export async function ensureOpenCodeConfig(
   const configDir = devspaceConfigDir(projectPath, profile ? profile.id : 'default');
   const config: Record<string, unknown> = {
     $schema: 'https://opencode.ai/config.json',
+    // Auto-approve tool use so OpenCode doesn't prompt per edit/bash/fetch — the
+    // interactive pane is the trust boundary (parity with the other CLIs' bypass
+    // flags / the user opening it here on purpose).
+    permission: { edit: 'allow', bash: 'allow', webfetch: 'allow' },
   };
   const instructions: string[] = [];
 

@@ -2,6 +2,7 @@ import { resolveAuthEnvPairs } from '@main/services/ClaudeAuthService';
 import { getCliProfile } from '@main/services/CliProfileService';
 import {
   ensureAntigravityParity,
+  ensureAntigravityTrust,
   ensureCodexParity,
   ensureGeminiParity,
 } from '@main/services/cliMcpSetup';
@@ -504,6 +505,7 @@ export async function launchAntigravityCli(
   opts: PlainTuiLaunchOptions,
 ): Promise<PtySession> {
   await ensureAntigravityParity();
+  ensureAntigravityTrust(opts.cwd);
   // --dangerously-skip-permissions: auto-approve tool calls (parity with Claude).
   return launchPlainTuiCli(
     'antigravity-cli',

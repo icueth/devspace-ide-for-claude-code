@@ -3,6 +3,7 @@ import * as os from 'node:os';
 import { resolveClaudeBinary } from '@main/services/ClaudeCliLauncher';
 import { createPty } from '@main/services/PtyPool';
 import { getStatus } from '@main/services/SetupService';
+import { ensureFolderTrusted } from '@main/utils/claudeTrust';
 import { createLogger } from '@shared/logger';
 import type { SetupCheck, SetupToolId } from '@shared/setup';
 import type { PtySession } from '@shared/types';
@@ -40,8 +41,19 @@ function buildPrompt(missing: SetupCheck[]): string {
           '  Register `devspace-learnings.mjs` as a `SessionStart` hook and `devspace-distill-stop.mjs` as a `Stop` hook in `~/.claude/settings.json`.',
           '  Back up `~/.claude/settings.json` first. Use `jq` to edit JSON safely — do not regex-replace. De-duplicate by filename so re-runs do not multiply entries; never disturb existing SessionStart/Stop hooks.',
         ].join('\n');
+      case 'opencode':
+        return '- **OpenCode** — `npm install -g opencode-ai`. Verify `opencode --version`.';
+      case 'codex':
+        return '- **Codex CLI** — `npm install -g @openai/codex`. Verify `codex --version`.';
+      case 'gemini':
+        return '- **Gemini CLI** — `npm install -g @google/gemini-cli`. Verify `GEMINI_CLI_NO_RELAUNCH=1 gemini --version` (set that env var, Gemini can hang re-execing otherwise).';
+      case 'antigravity':
+        return '- **Antigravity CLI (agy)** — `curl -fsSL https://antigravity.google/cli/install.sh | bash` (installs to ~/.local/bin). Verify `~/.local/bin/agy --version`.';
       case 'mempalace':
-        return '- **MemPalace** — skip here; the user has a dedicated Settings → Memory tab for it.';
+        return [
+          '- **MemPalace** — install the binary: `uv tool install mempalace` (run `brew install uv` first if `uv` is missing). Verify `mempalace --version`.',
+          '  This gives every CLI the shared memory brain. The full Claude plugin + session hooks + vault are best set up from DevSpace → Settings → Memory (bundled installer) — mention that to the user when done.',
+        ].join('\n');
     }
   });
 
@@ -101,9 +113,7 @@ export async function runClaudeSetup(
   // the user already fixed manually between clicks.
   const status = await getStatus();
   const missing = status.checks.filter(
-    (c): c is SetupCheck =>
-      c.id !== 'mempalace' &&
-      (c.state === 'missing' || c.state === 'blocked'),
+    (c): c is SetupCheck => c.state === 'missing' || c.state === 'blocked',
   );
 
   if (missing.length === 0) {
@@ -130,6 +140,10 @@ export async function runClaudeSetup(
   //
   // The prompt is passed as a positional argument: claude prefills it as the
   // first user message and starts working immediately on launch.
+  // Pre-accept Claude's "trust this folder" dialog for the setup cwd — without
+  // this the session loops on the trust prompt instead of running the prefilled
+  // install (pressing Enter just re-shows the dialog).
+  await ensureFolderTrusted(cwd);
   const session = await createPty({
     projectId: SETUP_PROJECT_ID,
     kind: 'setup-claude',
@@ -150,8 +164,21 @@ export async function runClaudeSetup(
 
 /**
  * Exposed so the renderer (and tests) can know which tool ids we treat as
- * Claude-resolvable. MemPalace is excluded — it has its own installer.
+ * Claude-resolvable — now the full set: base tools + every AI CLI + MemPalace.
  */
 export function claudeAddressableTools(): SetupToolId[] {
-  return ['brew', 'claude', 'tmux', 'rtk', 'jq', 'rtkHook', 'learningHooks'];
+  return [
+    'brew',
+    'claude',
+    'tmux',
+    'rtk',
+    'jq',
+    'rtkHook',
+    'learningHooks',
+    'opencode',
+    'codex',
+    'gemini',
+    'antigravity',
+    'mempalace',
+  ];
 }

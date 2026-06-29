@@ -67,7 +67,12 @@ export async function ensureCodexConfig(
     `env_key = ${toml(KEY_ENV)}\n` +
     // Codex dropped wire_api="chat"; "responses" is required (the provider must
     // implement OpenAI's Responses API — verified working for the qwen endpoint).
-    `wire_api = "responses"\n`;
+    `wire_api = "responses"\n` +
+    // Pre-trust the project dir so Codex doesn't prompt "trust this folder?" on
+    // every launch. Codex persists this after the user accepts, but we
+    // regenerate this file each launch — which would otherwise wipe the trust.
+    `\n[projects.${toml(projectPath)}]\n` +
+    `trust_level = "trusted"\n`;
 
   await atomicWriteAsync(path.join(configDir, 'config.toml'), body, {
     mode: 0o600,

@@ -212,6 +212,36 @@ export async function ensureAntigravityParity(): Promise<void> {
   await ensureGeminiInstructions();
 }
 
+// Pre-trust the launch dir in Antigravity's settings so `agy` doesn't prompt
+// "trust this workspace?" for a project dir that isn't already trusted.
+// Preserves the user's other settings (model, permissions, existing trusts).
+export function ensureAntigravityTrust(cwd: string): void {
+  try {
+    const file = path.join(
+      os.homedir(),
+      '.gemini',
+      'antigravity-cli',
+      'settings.json',
+    );
+    let cfg: { trustedWorkspaces?: string[] } & Record<string, unknown> = {};
+    try {
+      cfg = JSON.parse(fs.readFileSync(file, 'utf8'));
+    } catch {
+      // new / unreadable — start fresh
+    }
+    const list = Array.isArray(cfg.trustedWorkspaces)
+      ? cfg.trustedWorkspaces
+      : [];
+    if (list.includes(cwd)) return;
+    cfg.trustedWorkspaces = [...list, cwd];
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify(cfg, null, 2), 'utf8');
+    logger.info('trusted antigravity workspace');
+  } catch (err) {
+    logger.warn(`ensureAntigravityTrust: ${(err as Error).message}`);
+  }
+}
+
 // Read-only roll-up of MemPalace wiring across the non-Claude CLIs, for the
 // Settings → Memory panel. (Claude's own MemPalace is the main status there.)
 export async function getCliMempalaceWiring(): Promise<CliMempalaceWiring[]> {
