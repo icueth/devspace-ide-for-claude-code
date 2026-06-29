@@ -23,6 +23,8 @@ interface ClaudeSetupPaneProps {
    * key for the underlying terminal so the effect re-runs cleanly.
    */
   runKey: number;
+  /** 'install' (fill missing) or 'recheck' (verify + repair the whole system). */
+  mode?: 'install' | 'recheck';
   /** Fires when the spawned PTY exits, so parent can re-check status. */
   onExit?: (exitCode: number) => void;
   /** Fires when the spawn fails synchronously (before any PTY output). */
@@ -37,6 +39,7 @@ interface ClaudeSetupPaneProps {
  */
 export function ClaudeSetupPane({
   runKey,
+  mode,
   onExit,
   onError,
 }: ClaudeSetupPaneProps) {
@@ -94,7 +97,7 @@ export function ClaudeSetupPane({
         term.write('\x1b[36m▶ Asking Claude to install the missing tools…\x1b[0m\r\n');
 
         void api.setup
-          .runClaude({ cols: term.cols, rows: term.rows })
+          .runClaude({ cols: term.cols, rows: term.rows, mode })
           .then((result) => {
             if (disposed) return;
             if (!result.ok || !result.sessionId) {
@@ -155,7 +158,7 @@ export function ClaudeSetupPane({
       termRef.current = null;
       fitRef.current = null;
     };
-  }, [runKey, onExit, onError]);
+  }, [runKey, mode, onExit, onError]);
 
   // v0.37: surface the detected claude CLI version so the user can verify
   // they're on >= 2.1.154 (the build that ships /effort, /goal, /reload-

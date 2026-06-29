@@ -561,7 +561,7 @@ export interface DevspaceApi {
     uninstallRtkHook: () => Promise<SetupInstallResult>;
     openClaudeDir: () => Promise<void>;
     runClaude: (
-      opts?: { cols?: number; rows?: number },
+      opts?: { cols?: number; rows?: number; mode?: 'install' | 'recheck' },
     ) => Promise<SetupClaudeRunResult>;
     onProgress: (cb: (ev: SetupProgressEvent) => void) => () => void;
   };

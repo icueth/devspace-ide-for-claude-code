@@ -71,12 +71,13 @@ export function registerSetupIpc(): void {
     IPC.SETUP_RUN_CLAUDE,
     async (
       event,
-      opts: { cols?: number; rows?: number } = {},
+      opts: { cols?: number; rows?: number; mode?: 'install' | 'recheck' } = {},
     ): Promise<SetupClaudeRunResult> => {
       try {
         const result = await runClaudeSetup({
           cols: opts.cols,
           rows: opts.rows,
+          mode: opts.mode,
         });
         if (!result.ok || !result.session) {
           return { ok: false, error: result.error };

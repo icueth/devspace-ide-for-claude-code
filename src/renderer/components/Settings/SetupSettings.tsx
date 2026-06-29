@@ -8,6 +8,7 @@ import {
   Folder,
   Loader2,
   RefreshCw,
+  ShieldCheck,
   Sparkles,
   Wrench,
 } from 'lucide-react';
@@ -40,6 +41,7 @@ export function SetupSettings() {
   // Claude-driven install pane: bumped each click to remount the embedded
   // xterm + spawn a fresh `claude` PTY. 0 = pane hidden.
   const [claudeRunKey, setClaudeRunKey] = useState<number>(0);
+  const [claudeMode, setClaudeMode] = useState<'install' | 'recheck'>('install');
 
   const refreshStatus = async (): Promise<void> => {
     try {
@@ -128,6 +130,14 @@ export function SetupSettings() {
   const handleRunClaude = useCallback((): void => {
     setError(null);
     setLog([]);
+    setClaudeMode('install');
+    setClaudeRunKey((k) => k + 1);
+  }, []);
+
+  const handleRecheck = useCallback((): void => {
+    setError(null);
+    setLog([]);
+    setClaudeMode('recheck');
     setClaudeRunKey((k) => k + 1);
   }, []);
 
@@ -167,11 +177,13 @@ export function SetupSettings() {
           onInstallAll={handleInstallAll}
           onRefresh={refreshStatus}
           onRunClaude={handleRunClaude}
+          onRecheck={handleRecheck}
         />
 
         {claudeRunKey > 0 && (
           <ClaudeSetupPane
             runKey={claudeRunKey}
+            mode={claudeMode}
             onExit={handleClaudeExit}
             onError={(msg) => setError(msg)}
           />
@@ -257,6 +269,7 @@ function ActionsBar({
   onInstallAll,
   onRefresh,
   onRunClaude,
+  onRecheck,
 }: {
   status: SetupStatus;
   running: boolean;
@@ -265,6 +278,7 @@ function ActionsBar({
   onInstallAll: () => void | Promise<void>;
   onRefresh: () => void | Promise<void>;
   onRunClaude: () => void;
+  onRecheck: () => void;
 }) {
   const everythingDisabled = running || status.platform !== 'darwin';
   const installAllDisabled =
@@ -357,6 +371,24 @@ function ActionsBar({
       >
         <Bot size={12} />
         Let Claude finish setup
+      </button>
+
+      <button
+        type="button"
+        onClick={onRecheck}
+        disabled={running || !claudeReady}
+        title={
+          !claudeReady
+            ? 'Install Claude Code first.'
+            : 'Run Claude to verify the whole system works (CLIs, rtk, MemPalace wiring, hooks) and repair anything broken.'
+        }
+        className={cn(
+          'inline-flex items-center gap-1.5 rounded-[7px] border border-accent/40 bg-accent/10 px-3 py-2 text-[11.5px] font-medium text-accent transition hover:bg-accent/20',
+          (running || !claudeReady) && 'pointer-events-none opacity-50',
+        )}
+      >
+        <ShieldCheck size={12} />
+        Recheck with Claude
       </button>
 
       <button

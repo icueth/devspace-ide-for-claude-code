@@ -558,7 +558,11 @@ const api = {
     uninstallRtkHook: () => ipcRenderer.invoke(IPC.SETUP_UNINSTALL_RTK_HOOK),
     openClaudeDir: () => ipcRenderer.invoke(IPC.SETUP_OPEN_CLAUDE_DIR),
     runClaude: (
-      opts: { cols?: number; rows?: number } = {},
+      opts: {
+        cols?: number;
+        rows?: number;
+        mode?: 'install' | 'recheck';
+      } = {},
     ): Promise<import('@shared/setup').SetupClaudeRunResult> =>
       ipcRenderer.invoke(IPC.SETUP_RUN_CLAUDE, opts),
     onProgress: (

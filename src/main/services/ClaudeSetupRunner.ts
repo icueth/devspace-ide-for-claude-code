@@ -80,6 +80,47 @@ function buildPrompt(missing: SetupCheck[]): string {
 export interface RunClaudeSetupOptions {
   cols?: number;
   rows?: number;
+  // 'install' (default): install the still-missing tools. 'recheck': verify the
+  // WHOLE system works (installed AND functional) and repair anything broken.
+  mode?: 'install' | 'recheck';
+}
+
+/**
+ * Comprehensive verify-and-repair prompt: Claude checks every component is not
+ * just installed but actually working (CLIs run, rtk works, MemPalace's MCP
+ * command points at a python that exists on THIS machine, hooks registered),
+ * and fixes whatever is broken. Runs regardless of the deterministic status.
+ */
+function buildRecheckPrompt(checks: SetupCheck[]): string {
+  const summary = checks
+    .map((c) => `- ${c.id}: ${c.state}${c.version ? ` (${c.version})` : ''}`)
+    .join('\n');
+  return [
+    'You are running inside DevSpace as a SYSTEM HEALTH-CHECK + REPAIR agent for Claude Code and its companion CLIs.',
+    'You are launched interactively with `--dangerously-skip-permissions`, so the Bash tool runs without per-command approval.',
+    '',
+    'Goal: verify EVERY component below is installed AND actually works, then REPAIR anything broken — leave the system fully usable. Work one area at a time and print real command output; never claim success without observed output.',
+    '',
+    "DevSpace's detector currently reports:",
+    summary,
+    '',
+    '## Verify + repair:',
+    '1. Core: `brew --version`, `claude --version`, `tmux -V`, `jq --version`.',
+    '2. rtk: `rtk --version` and `rtk gain` (must not error — it is the Rust Token Killer, not the Rust Type Kit). If missing: `brew tap rtk-ai/rtk && brew install rtk`.',
+    '3. AI CLIs (install if missing): `opencode --version` (`npm i -g opencode-ai`); `codex --version` (`npm i -g @openai/codex`); `GEMINI_CLI_NO_RELAUNCH=1 gemini --version` (`npm i -g @google/gemini-cli`); `~/.local/bin/agy --version` (`curl -fsSL https://antigravity.google/cli/install.sh | bash`).',
+    '4. MemPalace (the shared brain) — CRITICAL:',
+    '   - `mempalace --version` (install with `uv tool install mempalace`; run `brew install uv` first if needed).',
+    "   - Resolve its real interpreter from the shebang: `head -1 \"$(command -v mempalace)\"`, then confirm `<that python> -c 'import mempalace.mcp_server'` prints no error.",
+    "   - Check that EACH CLI's MemPalace MCP `command` points at a python that EXISTS on THIS machine — a synced ~/.claude can hardcode another host's ~/.venv path (→ posix_spawn ENOENT). Inspect: ~/.gemini/settings.json (mcpServers.mempalace), ~/.gemini/config/mcp_config.json (mcpServers.mempalace), ~/.devspace/opencode/*/opencode.json (mcp.mempalace), ~/.claude/plugins/cache/mempalace/*/.mcp.json.",
+    '     For any whose interpreter does not exist, replace it (jq) with the real one from the shebang. NEVER alter apiKeys.',
+    '5. Hooks in ~/.claude/settings.json (back up first; edit with jq, never regex): rtk `PreToolUse` "Bash" hook + DevSpace learning hooks (`SessionStart` + `Stop`). Re-add if missing; de-dupe; leave unrelated keys untouched.',
+    '',
+    'Rules: print the actual command output; if a fix fails, report the real error (exit code + stderr); retry once only for transient network errors.',
+    '',
+    'When done, print exactly `RECHECK-COMPLETE` on its own line, then one line per area: `<area>: ok` / `<area>: fixed <what>` / `<area>: failed <reason>`.',
+    '',
+    'Start now — begin with area 1.',
+  ].join('\n');
 }
 
 export interface RunClaudeSetupResult {
@@ -111,20 +152,26 @@ export async function runClaudeSetup(
 
   // Re-check status fresh so we don't ask Claude to re-install things that
   // the user already fixed manually between clicks.
+  const mode = opts.mode ?? 'install';
   const status = await getStatus();
   const missing = status.checks.filter(
     (c): c is SetupCheck => c.state === 'missing' || c.state === 'blocked',
   );
 
-  if (missing.length === 0) {
+  // 'recheck' always runs (verify + repair the whole system); 'install' only
+  // when something is actually missing.
+  if (mode === 'install' && missing.length === 0) {
     return {
       ok: false,
       error: 'Nothing to install — every required tool is already set up.',
     };
   }
 
-  const prompt = buildPrompt(missing);
-  const tabId = `setup-${Date.now()}`;
+  const prompt =
+    mode === 'recheck'
+      ? buildRecheckPrompt(status.checks)
+      : buildPrompt(missing);
+  const tabId = `${mode}-${Date.now()}`;
   const cwd = os.homedir();
 
   logger.info(
