@@ -64,6 +64,7 @@ export async function saveCliProfile(input: {
   baseURL: string;
   apiKey: string;
   model: string;
+  contextLimit?: number;
 }): Promise<CliProfile> {
   const stored = await loadStored();
   const id = input.id || randomUUID();
@@ -78,6 +79,10 @@ export async function saveCliProfile(input: {
       baseURL: input.baseURL.trim(),
       apiKey: apiKey.slice(0, 8192),
       model: input.model.trim(),
+      contextLimit:
+        input.contextLimit && input.contextLimit > 0
+          ? Math.floor(input.contextLimit)
+          : existing?.provider.contextLimit,
     },
     createdAt: existing?.createdAt ?? Date.now(),
   };

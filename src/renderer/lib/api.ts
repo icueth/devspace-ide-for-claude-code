@@ -278,6 +278,7 @@ export interface DevspaceApi {
       baseURL: string;
       apiKey: string;
       model: string;
+      contextLimit?: number;
     }) => Promise<CliProfile>;
     deleteProfile: (id: string) => Promise<void>;
   };

@@ -182,6 +182,7 @@ export function ManageCliProviderDialog({
   const [baseURL, setBaseURL] = useState('');
   const [apiKey, setApiKey] = useState('');
   const [model, setModel] = useState('');
+  const [contextWindow, setContextWindow] = useState('');
   const [busy, setBusy] = useState(false);
 
   const reload = useCallback(() => {
@@ -211,11 +212,15 @@ export function ManageCliProviderDialog({
         baseURL: baseURL.trim(),
         apiKey: apiKey.trim(),
         model: model.trim(),
+        contextLimit: contextWindow.trim()
+          ? Number(contextWindow.trim())
+          : undefined,
       });
       setName('');
       setBaseURL('');
       setApiKey('');
       setModel('');
+      setContextWindow('');
       reload();
     } finally {
       setBusy(false);
@@ -292,6 +297,15 @@ export function ManageCliProviderDialog({
                 value={model}
                 onChange={(e) => setModel(e.target.value)}
                 placeholder="Model id (e.g. Qwen3.6-27B)"
+                className="rounded-[6px] border border-border bg-surface-3 px-2 py-1.5 font-mono text-[11px] text-text outline-none focus:border-accent"
+              />
+              <input
+                value={contextWindow}
+                onChange={(e) =>
+                  setContextWindow(e.target.value.replace(/[^0-9]/g, ''))
+                }
+                inputMode="numeric"
+                placeholder="Context window tokens (optional — Codex needs it for custom models, e.g. 8192)"
                 className="rounded-[6px] border border-border bg-surface-3 px-2 py-1.5 font-mono text-[11px] text-text outline-none focus:border-accent"
               />
               <button

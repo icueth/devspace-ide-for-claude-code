@@ -34,6 +34,7 @@ export function registerCliIpc(): void {
         baseURL: string;
         apiKey: string;
         model: string;
+        contextLimit?: number;
       },
     ) => saveCliProfile(input),
   );

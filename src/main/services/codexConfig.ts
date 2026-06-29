@@ -53,10 +53,15 @@ export async function ensureCodexConfig(
     `${hash}-${profile.id}`,
   );
 
+  const ctx = profile.provider.contextLimit;
   let body =
     `model = ${toml(profile.provider.model)}\n` +
-    `model_provider = "custom"\n\n` +
-    `[model_providers.custom]\n` +
+    `model_provider = "custom"\n` +
+    // Declare the model's context window so Codex doesn't fall back to default
+    // metadata (it warns "Model metadata for <model> not found" and can degrade
+    // performance) for a custom/local model name like "gemma-local".
+    (ctx && ctx > 0 ? `model_context_window = ${Math.floor(ctx)}\n` : '') +
+    `\n[model_providers.custom]\n` +
     `name = ${toml(profile.name)}\n` +
     `base_url = ${toml(profile.provider.baseURL)}\n` +
     `env_key = ${toml(KEY_ENV)}\n` +
