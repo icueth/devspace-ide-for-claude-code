@@ -14,7 +14,7 @@ import {
 import { useGitStore } from '@renderer/state/git';
 import { useLayoutStore } from '@renderer/state/layout';
 import { usePromptStore } from '@renderer/state/prompt';
-import { useWorkspaceStore } from '@renderer/state/workspace';
+import { markTreeOpen, useWorkspaceStore } from '@renderer/state/workspace';
 import {
   aggregateFolderChanges,
   type FolderChangeStats,
@@ -550,7 +550,14 @@ export const FileTree = memo(function FileTree({ rootPath, onOpenFile }: FileTre
       onDelete: (absPath) => void handleDelete(absPath),
       onReveal: (absPath) => handleReveal(absPath),
       onCopyPath: (absPath) => handleCopyPath(absPath),
-      onPreview: (absPath) => openHtmlPreview(rootPath, absPath),
+      onPreview: (absPath) => {
+        // Tag this as an in-tree gesture so the editor→sidebar follow effect
+        // opens the preview WITHOUT docking a CLI for the project. The tab key
+        // is the synthetic `html-preview:<path>`, so markTreeOpen must match it
+        // exactly (followTab compares the tab path, not the file path).
+        markTreeOpen(`html-preview:${absPath}`);
+        openHtmlPreview(rootPath, absPath);
+      },
       isExpanded: (path) => treeRef.current[path]?.expanded ?? false,
       hasLoadedEntries: (path) => !!treeRef.current[path]?.entries,
       isLoading: (path) => !!treeRef.current[path]?.loading,
