@@ -523,6 +523,11 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     // tab the user just clicked (no-op) instead of stealing focus to an
     // older tab of the same project.
     mruTabByProject.set(derived, tabPath);
+    // A preview tab (`html-preview:<file>`) is a read-only view — record its MRU
+    // but NEVER switch/dock a project for it. Previewing a file in a nested
+    // folder (e.g. docs/) must not spawn a CLI dock chip for that folder. This
+    // is timing-independent (unlike the markTreeOpen gesture guard below).
+    if (tabPath.startsWith('html-preview:')) return;
     // A FileTree click (markTreeOpen tagged this exact path) opens a file inside
     // the active project's own tree — record its MRU but NEVER switch/dock the
     // project, even when longest-prefix attribution maps it to a nested detected

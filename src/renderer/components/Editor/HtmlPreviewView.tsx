@@ -101,7 +101,10 @@ export function HtmlPreviewView({
     }
     setState({ status: 'loading' });
     try {
-      const html = await api.preview.readHtml(projectPath, htmlPath);
+      // Read via the workspace-scoped fs API (NOT preview.readHtml, which is
+      // restricted to <project>/.devspace/preview/) so ANY html file the user
+      // right-clicks → Live Preview renders — not only generated previews.
+      const html = await api.fs.readFile(htmlPath);
       // Revoke any URL from a prior load before minting the new one.
       revoke();
       const blob = new Blob([html], { type: 'text/html' });
@@ -119,7 +122,7 @@ export function HtmlPreviewView({
         : message;
       setState({ status: 'error', message: friendly });
     }
-  }, [projectPath, htmlPath, revoke]);
+  }, [htmlPath, revoke]);
 
   // Re-read + rebuild the Blob URL whenever the file or the reload key flips.
   useEffect(() => {
