@@ -77,6 +77,7 @@ export const FileTree = memo(function FileTree({ rootPath, onOpenFile }: FileTre
   const [tree, setTree] = useState<Record<string, NodeState>>({});
   const askPrompt = usePromptStore((s) => s.ask);
   const editorClose = useEditorStore((s) => s.close);
+  const openHtmlPreview = useEditorStore((s) => s.openHtmlPreview);
   const showHidden = useLayoutStore((s) => s.showHiddenFiles);
 
   const activeProjectId = useWorkspaceStore((s) => s.activeProjectId);
@@ -549,6 +550,7 @@ export const FileTree = memo(function FileTree({ rootPath, onOpenFile }: FileTre
       onDelete: (absPath) => void handleDelete(absPath),
       onReveal: (absPath) => handleReveal(absPath),
       onCopyPath: (absPath) => handleCopyPath(absPath),
+      onPreview: (absPath) => openHtmlPreview(rootPath, absPath),
       isExpanded: (path) => treeRef.current[path]?.expanded ?? false,
       hasLoadedEntries: (path) => !!treeRef.current[path]?.entries,
       isLoading: (path) => !!treeRef.current[path]?.loading,
@@ -579,6 +581,8 @@ export const FileTree = memo(function FileTree({ rootPath, onOpenFile }: FileTre
       handleDelete,
       handleReveal,
       handleCopyPath,
+      openHtmlPreview,
+      rootPath,
     ],
   );
 

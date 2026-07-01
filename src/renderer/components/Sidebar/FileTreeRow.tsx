@@ -38,6 +38,7 @@ export interface FileTreeRowCallbacks {
   onDelete: (absPath: string) => void;
   onReveal: (absPath: string) => void;
   onCopyPath: (absPath: string) => void;
+  onPreview: (absPath: string) => void;
   // Per-row derived data accessors (stable identity, fresh values via refs).
   isExpanded: (path: string) => boolean;
   hasLoadedEntries: (path: string) => boolean;
@@ -249,6 +250,14 @@ function FileTreeRowImpl({
             className="z-50 min-w-[200px] rounded-md border border-border-emphasis bg-surface-raised p-1 text-xs shadow-lg animate-in fade-in-0 zoom-in-95"
             style={{ backgroundColor: 'var(--color-surface-raised)' }}
           >
+            {!entry.isDirectory && /\.html?$/i.test(entry.path) && (
+              <>
+                <MenuItem onSelect={() => callbacks.onPreview(entry.path)}>
+                  Live Preview
+                </MenuItem>
+                <ContextMenu.Separator className="my-1 h-px bg-border-subtle" />
+              </>
+            )}
             <MenuItem onSelect={() => callbacks.onAddToClaudeCli(entry.path)}>
               Add to Claude CLI
             </MenuItem>
