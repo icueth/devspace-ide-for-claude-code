@@ -1,6 +1,7 @@
 import * as os from 'node:os';
 import * as path from 'node:path';
 
+import { flowControlSocketPath } from '@main/services/flowControl';
 import {
   createMcpServer,
   deleteMcpServer,
@@ -36,17 +37,24 @@ export async function ensureTaskMcpRegistered(projectPath: string): Promise<void
         ELECTRON_RUN_AS_NODE: '1',
         DEVSPACE_PROJECT_PATH: projectPath,
         DEVSPACE_TASK_SOCK: taskControlSocketPath(),
+        // Agent Flow's own socket — same bundled server, second subsystem.
+        DEVSPACE_FLOW_SOCK: flowControlSocketPath(),
       },
     };
 
-    // Upsert: only rewrite when absent or when the command path drifted (e.g.
-    // dev electron → packaged app), so we self-heal without churning the file.
+    // Upsert: rewrite when absent, when the command path drifted (dev electron →
+    // packaged app), or when the injected env drifted — the env check is what
+    // migrates the entries written before a new socket was added, which would
+    // otherwise keep spawning the server without it (the flow tools would then
+    // silently talk to a default path that may not be where DevSpace listens).
     const existing = (await listMcpServers(projectPath)).find(
       (e) => e.name === SERVER_NAME,
     );
-    const prevCmd =
-      existing?.server.transport === 'stdio' ? existing.server.command : undefined;
-    if (existing && prevCmd === server.command) return;
+    const prev = existing?.server.transport === 'stdio' ? existing.server : undefined;
+    const envMatches =
+      !!prev &&
+      Object.entries(server.env ?? {}).every(([k, v]) => prev.env?.[k] === v);
+    if (existing && prev?.command === server.command && envMatches) return;
     if (existing) await deleteMcpServer('project', existing.filePath, SERVER_NAME);
     await createMcpServer('project', projectPath, SERVER_NAME, server);
   } catch (e) {

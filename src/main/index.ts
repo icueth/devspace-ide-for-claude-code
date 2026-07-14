@@ -29,6 +29,7 @@ import { registerAgentsIpc } from '@main/ipc/agents';
 import { registerAppIpc } from '@main/ipc/app';
 import { registerBgClaudeIpc } from '@main/ipc/bgClaude';
 import { registerTasksIpc } from '@main/ipc/tasks';
+import { registerFlowsIpc } from '@main/ipc/flows';
 import { registerClaudeAuthIpc } from '@main/ipc/claudeAuth';
 import { registerCliIpc } from '@main/ipc/cli';
 import { registerCodeflowIpc } from '@main/ipc/codeflow';
@@ -374,6 +375,7 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
   registerSetupIpc();
   registerBgClaudeIpc();
   registerTasksIpc();
+  registerFlowsIpc();
 
   // Warm the memory index in the background so the dashboard doesn't
   // pay the walk cost on first open. ensureInit() is idempotent — every

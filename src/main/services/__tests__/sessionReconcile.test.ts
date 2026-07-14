@@ -36,6 +36,18 @@ describe('tmuxNameToKey', () => {
       'p1:antigravity-cli:tab1',
     );
   });
+  // Agent Flow tab ids contain dashes (`flow-<runId>-<nodeId>`). Splitting on
+  // the LAST dash would derive `…-flow-r1:claude-cli:coder` — a key that matches
+  // no protected session, so boot reconcile would kill a live flow agent.
+  it('maps an Agent Flow session name whose tab id contains dashes', () => {
+    expect(tmuxNameToKey('devspace-cli-abc123-flow-r1-coder', 'devspace')).toBe(
+      'abc123:claude-cli:flow-r1-coder',
+    );
+    expect(tmuxNameToKey('devspace-cx-abc123-flow-r1-tester', 'devspace')).toBe(
+      'abc123:codex-cli:flow-r1-tester',
+    );
+  });
+
   it('returns null for non-cli sessions (shells, chat-runs)', () => {
     expect(tmuxNameToKey('devspace-shell-abc123', 'devspace')).toBeNull();
     expect(tmuxNameToKey('devspace-chatrun-xyz', 'devspace')).toBeNull();

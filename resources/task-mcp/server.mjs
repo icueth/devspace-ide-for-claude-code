@@ -1,13 +1,18 @@
-// DevSpace task MCP server (bundled, zero-dependency). Spawned over stdio by
-// the main-chat claude CLI; relays task orchestration to DevSpace's task-control
-// unix socket so the agent can create / monitor / drive / integrate
-// worktree-isolated tasks by tool call. Newline-delimited JSON-RPC 2.0 (the MCP
-// stdio transport).
+// DevSpace task + flow MCP server (bundled, zero-dependency). Spawned over stdio
+// by the main-chat claude CLI; relays orchestration to DevSpace's unix control
+// sockets so the agent can (a) create / monitor / drive / integrate
+// worktree-isolated tasks and (b) run / monitor / steer / stop Agent Flows — a
+// user-designed graph of real CLI agents. Newline-delimited JSON-RPC 2.0 (the
+// MCP stdio transport).
+//
+// Two sockets, one server: tasks and flows are separate subsystems in the main
+// process, each owning its own socket.
 //
 // Runs under plain node OR electron-as-node (ELECTRON_RUN_AS_NODE=1) so no
 // external node install is required. Env:
-//   DEVSPACE_TASK_SOCK     path to the control socket (default ~/.devspace/...)
-//   DEVSPACE_PROJECT_PATH  default repo for create_task when `repo` is omitted
+//   DEVSPACE_TASK_SOCK     task control socket (default ~/.devspace/task-control.sock)
+//   DEVSPACE_FLOW_SOCK     flow control socket (default ~/.devspace/flow-control.sock)
+//   DEVSPACE_PROJECT_PATH  default repo when `repo` is omitted
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
@@ -16,6 +21,9 @@ import readline from 'node:readline';
 const SOCK =
   process.env.DEVSPACE_TASK_SOCK ||
   path.join(os.homedir(), '.devspace', 'task-control.sock');
+const FLOW_SOCK =
+  process.env.DEVSPACE_FLOW_SOCK ||
+  path.join(os.homedir(), '.devspace', 'flow-control.sock');
 const DEFAULT_REPO = process.env.DEVSPACE_PROJECT_PATH || '';
 
 const idSchema = {
@@ -82,9 +90,110 @@ const TOOLS = [
     description: 'Discard a task: remove its worktree + branch without merging.',
     inputSchema: idSchema,
   },
+
+  // ── Agent Flows ───────────────────────────────────────────────────────────
+  // A flow is a graph the USER designed on the DevSpace canvas: each node is a
+  // real CLI agent with a role (researcher → coder → tester → reviewer), each
+  // edge hands the upstream node's output to the next node's brief. You are the
+  // only way to start one — the canvas has no Run button.
+  //
+  // ROUTING — how to decide, every turn:
+  //   • Normal conversation, a question, a quick edit, a one-off command?
+  //     Just answer / do it yourself. Do NOT run a flow.
+  //   • Multi-step procedural work the user wants carried out end-to-end
+  //     (build this feature, investigate + fix + test this bug, review and
+  //     harden this module)? Call list_flows, see whether a flow's description
+  //     matches the shape of the work, and if one does, run_flow it with a
+  //     well-formed `task`.
+  //   • No flow fits? Say so and do the work yourself (or use create_task).
+  // Never invent a flow name — only run what list_flows returned.
+  {
+    name: 'list_flows',
+    description:
+      "List the Agent Flows the user has designed for this project: id, name, description, and the node graph (role + CLI + mode per node). Each flow's description says what kind of work it is for — read it to decide whether the user's request matches. Call this BEFORE run_flow, never guess a flow name.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        repo: {
+          type: 'string',
+          description: 'Absolute project path. Defaults to the current project.',
+        },
+      },
+    },
+  },
+  {
+    name: 'run_flow',
+    description:
+      "Start a run of a user-designed flow. Use when the user asks for multi-step procedural work that matches a flow's description (from list_flows) — the flow's agents then do the work, not you. `task` is the kickoff brief handed to every entry node: write it as a complete, self-contained statement of the goal (what to build/fix, which files or areas, what 'done' looks like, any constraints from the conversation) — the flow's agents cannot see this chat. Returns a runId; monitor it with flow_status.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        flow: { type: 'string', description: 'Flow name or id (from list_flows).' },
+        task: {
+          type: 'string',
+          description:
+            "The kickoff brief for the flow's agents — full goal + context + constraints. They see only this, not the conversation.",
+        },
+        repo: {
+          type: 'string',
+          description: 'Absolute project path. Defaults to the current project.',
+        },
+      },
+      required: ['flow', 'task'],
+    },
+  },
+  {
+    name: 'flow_status',
+    description:
+      "Progress of a live run: each node's status (queued / running / done / failed / skipped) and a tail of its output. Poll this to monitor a flow you started, and report progress back to the user in your own words. A finished run is no longer live — use list_flow_runs for its final state.",
+    inputSchema: {
+      type: 'object',
+      properties: { runId: { type: 'string', description: 'Run id (from run_flow).' } },
+      required: ['runId'],
+    },
+  },
+  {
+    name: 'send_flow',
+    description:
+      "Type an instruction into one running node's live agent session — relay a user message, answer a question the agent is stuck on, or steer it. Only works for interactive nodes (headless nodes have no session). Use the node id shown by flow_status.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        runId: { type: 'string', description: 'Run id.' },
+        node: { type: 'string', description: 'Node id (from flow_status).' },
+        text: { type: 'string', description: 'The instruction to send to that agent.' },
+      },
+      required: ['runId', 'node', 'text'],
+    },
+  },
+  {
+    name: 'stop_flow',
+    description:
+      'Stop a running flow: kills its in-flight agents and marks the run stopped. Use when the user asks to stop/cancel/abort it.',
+    inputSchema: {
+      type: 'object',
+      properties: { runId: { type: 'string', description: 'Run id.' } },
+      required: ['runId'],
+    },
+  },
+  {
+    name: 'list_flow_runs',
+    description:
+      'Recent flow runs for this project (live and finished) with per-node status. Use to answer "how did that run end?" or to find the runId of a run already in progress.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        repo: {
+          type: 'string',
+          description: 'Absolute project path. Defaults to the current project.',
+        },
+      },
+    },
+  },
 ];
 
-// tool name → control-socket request payload.
+// tool name → control-socket request payload. `sock` picks which subsystem's
+// socket the request goes to (tasks vs flows).
 const TOOL_OP = {
   create_task: (a) => ({
     op: 'create',
@@ -97,22 +206,54 @@ const TOOL_OP = {
   send_task: (a) => ({ op: 'send', id: a.id, text: a.text }),
   merge_task: (a) => ({ op: 'merge', id: a.id }),
   discard_task: (a) => ({ op: 'discard', id: a.id }),
+
+  list_flows: (a) => ({ op: 'list', repo: a.repo || DEFAULT_REPO }),
+  run_flow: (a) => ({
+    op: 'run',
+    repo: a.repo || DEFAULT_REPO,
+    flow: a.flow,
+    task: a.task,
+  }),
+  flow_status: (a) => ({ op: 'status', runId: a.runId }),
+  send_flow: (a) => ({ op: 'send', runId: a.runId, node: a.node, text: a.text }),
+  stop_flow: (a) => ({ op: 'stop', runId: a.runId }),
+  list_flow_runs: (a) => ({ op: 'runs', repo: a.repo || DEFAULT_REPO }),
 };
+
+// Tools whose op is routed to the flow socket rather than the task socket.
+const FLOW_TOOLS = new Set([
+  'list_flows',
+  'run_flow',
+  'flow_status',
+  'send_flow',
+  'stop_flow',
+  'list_flow_runs',
+]);
 
 function resultText(name, res) {
   if (!res.ok) return `Error: ${res.error}`;
   if (res.task) return `Task ${res.task.id} — ${res.task.status} on ${res.task.branch}`;
   if (res.diff !== undefined) return res.diff || '(no changes vs base branch)';
   if (res.tasks) return JSON.stringify(res.tasks, null, 2);
+  if (res.flows) return JSON.stringify(res.flows, null, 2) || '(no flows designed yet)';
+  if (res.runs) return JSON.stringify(res.runs, null, 2);
+  if (res.run) return JSON.stringify(res.run, null, 2);
+  if (res.runId) {
+    return `Flow started — runId ${res.runId}. Monitor it with flow_status; report progress to the user.`;
+  }
   if (name === 'send_task') return 'Instruction sent to the task agent.';
   if (name === 'merge_task') return 'Merged into the base branch; task is now Done.';
   if (name === 'discard_task') return 'Task discarded.';
+  if (name === 'send_flow') return 'Instruction sent to the flow node agent.';
+  if (name === 'stop_flow') return 'Flow run stopped.';
   return 'OK';
 }
 
-// One request to the control socket → one JSON reply. Best-effort: a missing
-// socket means DevSpace isn't running, surfaced as a tool error.
-function callControl(payload) {
+// One request to a control socket → one JSON reply. Best-effort: a missing
+// socket means DevSpace isn't running, surfaced as a tool error. `sock` selects
+// the subsystem (task-control vs flow-control) — the wire shape is identical.
+function callControl(payload, sock = SOCK) {
+  const what = sock === FLOW_SOCK ? 'flow' : 'task';
   return new Promise((resolve) => {
     let buf = '';
     let done = false;
@@ -126,7 +267,7 @@ function callControl(payload) {
       }
       resolve(res);
     };
-    const conn = net.createConnection(SOCK);
+    const conn = net.createConnection(sock);
     conn.on('connect', () => conn.write(`${JSON.stringify(payload)}\n`));
     conn.on('data', (d) => {
       buf += d.toString('utf8');
@@ -140,9 +281,12 @@ function callControl(payload) {
       }
     });
     conn.on('error', () =>
-      finish({ ok: false, error: 'DevSpace is not running (task socket unavailable)' }),
+      finish({
+        ok: false,
+        error: `DevSpace is not running (${what} socket unavailable)`,
+      }),
     );
-    setTimeout(() => finish({ ok: false, error: 'task socket timeout' }), 8000);
+    setTimeout(() => finish({ ok: false, error: `${what} socket timeout` }), 8000);
   });
 }
 
@@ -163,7 +307,7 @@ async function handle(msg) {
       return ok(id, {
         protocolVersion: params?.protocolVersion || '2024-11-05',
         capabilities: { tools: {} },
-        serverInfo: { name: 'devspace-tasks', version: '1.1.0' },
+        serverInfo: { name: 'devspace-tasks', version: '1.2.0' },
       });
     case 'notifications/initialized':
       return; // notification — no reply
@@ -175,7 +319,10 @@ async function handle(msg) {
       const name = params?.name;
       const build = TOOL_OP[name];
       if (!build) return fail(id, -32602, `unknown tool: ${name}`);
-      const res = await callControl(build(params?.arguments || {}));
+      const res = await callControl(
+        build(params?.arguments || {}),
+        FLOW_TOOLS.has(name) ? FLOW_SOCK : SOCK,
+      );
       return ok(id, {
         content: [{ type: 'text', text: resultText(name, res) }],
         isError: !res.ok,

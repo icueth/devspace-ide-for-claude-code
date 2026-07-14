@@ -17,8 +17,12 @@ export interface CliTmuxSession {
 }
 
 // devspace-{cli|oc|cx|gm|ag}-<proj>-<tab> → the matching PtyPool key.
-// project ids (hex) and tab ids (base36) never contain '-', so the LAST '-'
-// after the prefix splits project from tab unambiguously. Returns null for
+// A project id is 12 hex chars and never contains '-', so the FIRST '-' after
+// the prefix splits project from tab unambiguously — and unlike splitting on
+// the LAST '-', it survives a tab id that itself contains dashes. Agent Flow
+// tabs are exactly that (`flow-<runId>-<nodeId>`): splitting on the last dash
+// would derive `…-flow-<runId>:claude-cli:<nodeId>`, which matches no protected
+// key, and boot reconcile would kill a live flow agent. Returns null for
 // non-cli session names (shells, chat-runs) so the caller skips them.
 export function tmuxNameToKey(name: string, sessionPrefix: string): string | null {
   const kinds = {
@@ -34,7 +38,7 @@ export function tmuxNameToKey(name: string, sessionPrefix: string): string | nul
   if (!match) return null;
   const [tmuxPrefix, kind] = match;
   const rest = name.slice(`${sessionPrefix}-${tmuxPrefix}-`.length);
-  const dash = rest.lastIndexOf('-');
+  const dash = rest.indexOf('-');
   if (dash < 0) return `${rest}:${kind}:default`;
   return `${rest.slice(0, dash)}:${kind}:${rest.slice(dash + 1)}`;
 }
@@ -78,10 +82,12 @@ async function readLiveTaskKeys(): Promise<Set<string>> {
 export async function reconcileOrphanCliSessions(
   liveKeys: Set<string>,
 ): Promise<string[]> {
-  const [{ resolveTmuxBinary }, { getTmuxConfigSync }] = await Promise.all([
-    import('@main/services/ClaudeCliLauncher'),
-    import('@main/services/TmuxConfigService'),
-  ]);
+  const [{ resolveTmuxBinary }, { getTmuxConfigSync }, { getActiveFlowSessionKeys }] =
+    await Promise.all([
+      import('@main/services/ClaudeCliLauncher'),
+      import('@main/services/TmuxConfigService'),
+      import('@main/services/FlowService'),
+    ]);
 
   const tmuxBin = await resolveTmuxBinary();
   if (!tmuxBin) return [];
@@ -114,7 +120,11 @@ export async function reconcileOrphanCliSessions(
     return []; // no tmux server / no sessions
   }
 
+  // Protected beyond open tabs: live task agents AND live Agent Flow nodes.
+  // Both run eagerly with no pane attached, so to the sweep they look exactly
+  // like an orphan — killing one would take out a working agent mid-run.
   const taskKeys = await readLiveTaskKeys();
+  for (const key of getActiveFlowSessionKeys()) taskKeys.add(key);
   const orphans = selectOrphans(sessions, liveKeys, taskKeys);
   for (const name of orphans) {
     await pexec(tmuxBin, ['-L', cfg.socketName, 'kill-session', '-t', name]).catch(

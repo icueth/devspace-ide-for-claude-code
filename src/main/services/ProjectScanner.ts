@@ -48,6 +48,18 @@ function hashPath(absPath: string): string {
   return createHash('sha1').update(absPath).digest('hex').slice(0, 12);
 }
 
+/**
+ * The canonical Project.id for an absolute project path — the id every scanned
+ * Project carries (see detectProject), and therefore the id the renderer keys
+ * PTY panes / dock tabs by. Exported so main-side services that launch a session
+ * for a project they only know by *path* (Agent Flow runs) derive the SAME id;
+ * a divergent id silently orphans the pane. Pure + path-derived: stable across
+ * scans, restarts, and machines.
+ */
+export function projectIdForPath(absPath: string): string {
+  return hashPath(absPath);
+}
+
 async function detectProject(
   absPath: string,
   workspaceId: string,
