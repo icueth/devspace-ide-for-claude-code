@@ -58,6 +58,30 @@ const TMUX_PREFIX_BY_CLI: Record<CliId, string> = {
 // alternative (parsing five different TUI ready-banners) is far more brittle.
 const TUI_BOOT_MS = 6_000;
 
+// codex (and gemini) self-update on launch when a new release is out — via
+// `npm install -g`, which is NOT concurrency-safe. A fan-out that spawns three
+// codex nodes at once races the same global install and two crash with exit
+// 190 (observed live, run dzuqwx). Serializing same-CLI launches with a small
+// gap lets the first launch do the update once; the rest see the new binary.
+const LAUNCH_GAP_MS = 2_500;
+const launchChains = new Map<CliId, Promise<void>>();
+
+function serializedLaunch<T>(cliId: CliId, launch: () => Promise<T>): Promise<T> {
+  const prev = launchChains.get(cliId) ?? Promise.resolve();
+  const run = prev.then(launch);
+  const settle = (): Promise<void> =>
+    new Promise((r) => {
+      const t = setTimeout(r, LAUNCH_GAP_MS);
+      t.unref?.();
+    });
+  // The chain must survive a failed launch — later nodes still get their turn.
+  launchChains.set(
+    cliId,
+    run.then(settle, settle),
+  );
+  return run;
+}
+
 export function flowTabId(runId: string, nodeId: string): string {
   return `flow-${runId}-${nodeId}`;
 }
@@ -112,24 +136,32 @@ export async function launchFlowSession(
       });
       return key;
     case 'codex':
-      await launchCodexCli({
-        ...base,
-        cliProfileId: node.cliProfileId,
-        initialPrompt: opts.prompt,
-      });
+      await serializedLaunch(node.cliId, () =>
+        launchCodexCli({
+          ...base,
+          cliProfileId: node.cliProfileId,
+          initialPrompt: opts.prompt,
+        }),
+      );
       return key;
     case 'gemini':
-      await launchGeminiCli({
-        ...base,
-        cliProfileId: node.cliProfileId,
-        initialPrompt: opts.prompt,
-      });
+      await serializedLaunch(node.cliId, () =>
+        launchGeminiCli({
+          ...base,
+          cliProfileId: node.cliProfileId,
+          initialPrompt: opts.prompt,
+        }),
+      );
       return key;
     case 'opencode':
-      await launchOpenCodeCli({ ...base, cliProfileId: node.cliProfileId });
+      await serializedLaunch(node.cliId, () =>
+        launchOpenCodeCli({ ...base, cliProfileId: node.cliProfileId }),
+      );
       break;
     case 'antigravity':
-      await launchAntigravityCli({ ...base, cliProfileId: node.cliProfileId });
+      await serializedLaunch(node.cliId, () =>
+        launchAntigravityCli({ ...base, cliProfileId: node.cliProfileId }),
+      );
       break;
   }
 
