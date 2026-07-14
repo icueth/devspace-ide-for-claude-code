@@ -93,6 +93,7 @@ import type {
   DevServerStartInput,
 } from '@shared/design';
 import type { PreviewChangedEvent, PreviewFileInfo } from '@shared/preview';
+import type { FlowChangedEvent, FlowGraph, FlowRun } from '@shared/flowTypes';
 
 export interface DevspaceApi {
   app: {
@@ -145,6 +146,19 @@ export interface DevspaceApi {
       id: string,
     ) => Promise<{ ok: boolean; url?: string; error?: string }>;
     onChanged: (cb: (tasks: Task[]) => void) => () => void;
+  };
+  // Agent Flow (phase 1). The canvas designs + monitors; runs are triggered
+  // from chat only (lead agent's run_flow tool → flow-control socket), which
+  // is why there is no `run` here. `stop`/`send` act on an in-flight run.
+  flows: {
+    list: (projectPath: string) => Promise<FlowGraph[]>;
+    save: (projectPath: string, graph: FlowGraph) => Promise<FlowGraph>;
+    remove: (projectPath: string, id: string) => Promise<void>;
+    runs: (projectPath: string) => Promise<FlowRun[]>;
+    stop: (runId: string) => Promise<void>;
+    send: (runId: string, nodeId: string, text: string) => Promise<void>;
+    // Single main → renderer push for both flow-list and run changes.
+    onChanged: (cb: (event: FlowChangedEvent) => void) => () => void;
   };
   fs: {
     readDir: (path: string) => Promise<DirEntry[]>;
@@ -675,6 +689,15 @@ function makeStubApi(): DevspaceApi {
       diffStat: () => Promise.resolve({ files: 0 }),
       diff: () => Promise.resolve(''),
       createPr: notWired('tasks.createPr'),
+      onChanged: () => () => undefined,
+    },
+    flows: {
+      list: () => Promise.resolve([]),
+      save: notWired('flows.save'),
+      remove: notWired('flows.remove'),
+      runs: () => Promise.resolve([]),
+      stop: notWired('flows.stop'),
+      send: notWired('flows.send'),
       onChanged: () => () => undefined,
     },
     fs: {

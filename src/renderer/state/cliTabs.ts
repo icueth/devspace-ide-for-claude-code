@@ -2,6 +2,11 @@ import { create } from 'zustand';
 
 import { api } from '@renderer/lib/api';
 import {
+  attachExternalTabState,
+  makeExternalTab,
+  type AttachExternalTabOpts,
+} from '@renderer/state/cliTabsAttach';
+import {
   addColumnState,
   arraysEqualUnordered,
   claudeCliSessionId,
@@ -119,6 +124,14 @@ interface CliTabsState extends PersistedShape {
     projectId: string,
     opts?: { authProfileId?: string; cliId?: CliId; cliProfileId?: string },
   ) => CliTab | null;
+  // Dock a session spawned OUTSIDE the dock (Agent Flow's interactive nodes).
+  // Unlike addTab it takes `tabId` verbatim — that's what makes the pane
+  // attach to the live tmux session instead of starting a second agent. See
+  // cliTabsAttach.ts. Idempotent: re-attaching just focuses the tab.
+  attachExternalTab: (
+    project: DockedProjectMeta,
+    opts: AttachExternalTabOpts,
+  ) => CliTab;
   chooseTabCli: (
     projectId: string,
     tabId: string,
@@ -336,6 +349,22 @@ export const useCliTabsStore = create<CliTabsState>((set, get) => {
           activeDockedProjectId: projectId,
           columns: pinForActiveSelection(prev, projectId, tab.id),
         };
+        persist(next);
+        return next;
+      });
+      return tab;
+    },
+
+    attachExternalTab(project, opts) {
+      // dockProject first: a tab can only live under a docked project (addTab
+      // enforces the same rule), and this may be the dock's first sight of it.
+      get().dockProject(project);
+      const existing = (get().tabsByProject[project.id] ?? []).find(
+        (t) => t.id === opts.tabId,
+      );
+      const tab = existing ?? makeExternalTab(project.id, opts);
+      set((prev) => {
+        const next = attachExternalTabState(prev, project.id, tab);
         persist(next);
         return next;
       });

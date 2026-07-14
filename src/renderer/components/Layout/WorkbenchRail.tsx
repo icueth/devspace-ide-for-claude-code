@@ -4,6 +4,7 @@ import {
   Files,
   GitBranch,
   Settings,
+  Spline,
   Terminal,
   Workflow,
 } from 'lucide-react';
@@ -15,6 +16,7 @@ export type WorkbenchDestination =
   | 'tasks'
   | 'sessions'
   | 'codeflow'
+  | 'flows'
   | 'git'
   | 'settings';
 
@@ -30,6 +32,7 @@ const destinations = [
   { id: 'tasks', label: 'Tasks', icon: CheckSquare2 },
   { id: 'sessions', label: 'CLI sessions', icon: Terminal },
   { id: 'codeflow', label: 'Codeflow', icon: Workflow },
+  { id: 'flows', label: 'Agent Flows', icon: Spline },
   { id: 'git', label: 'Git changes', icon: GitBranch },
 ] as const;
 
@@ -53,7 +56,7 @@ export function WorkbenchRail({
 
       {destinations.map(({ id, label, icon: Icon }) => {
         const disabled =
-          (id === 'codeflow' || id === 'git') && !hasProject
+          (id === 'codeflow' || id === 'flows' || id === 'git') && !hasProject
             ? true
             : id === 'sessions' && !hasSessions;
         return (

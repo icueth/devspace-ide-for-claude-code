@@ -94,6 +94,7 @@ function AppInner() {
   useProjectWatchers(openedProjectIds, projects, activeProjectId);
   const openFile = useEditorStore((s) => s.open);
   const openCodeflow = useEditorStore((s) => s.openCodeflow);
+  const openFlows = useEditorStore((s) => s.openFlows);
   const openLivePreview = useEditorStore((s) => s.openLivePreview);
   const openHtmlPreview = useEditorStore((s) => s.openHtmlPreview);
   // Stable identity so the memoized <FileTree> isn't re-rendered every shell
@@ -520,6 +521,16 @@ function AppInner() {
         },
       },
       {
+        id: 'nav.flows',
+        title: 'Open Agent Flows',
+        keywords: 'flow graph agents pipeline canvas handoff',
+        group: 'Navigate',
+        requiresProject: true,
+        run: () => {
+          if (activeProject) openFlows(activeProject.path, activeProject.name);
+        },
+      },
+      {
         id: 'nav.livepreview',
         title: 'Open Live Preview',
         keywords: 'dev server webview browser',
@@ -657,7 +668,14 @@ function AppInner() {
       { id: 'forge.agent', title: 'Generate an agent from a brief…', keywords: 'create agent subagent forge generate claude ai new', group: 'Settings', run: () => askForgeBrief('agent') },
     ];
     return cmds;
-  }, [activeProject, openCodeflow, openLivePreview, openHtmlPreview, askPrompt]);
+  }, [
+    activeProject,
+    openCodeflow,
+    openFlows,
+    openLivePreview,
+    openHtmlPreview,
+    askPrompt,
+  ]);
 
   // The dock owns cross-workspace sessions independently from the workspace's
   // currently-open project list. On restart those lists can hydrate at
@@ -693,6 +711,11 @@ function AppInner() {
         setDockFull(false);
         setSidebarMode('projects');
         if (activeProject) openCodeflow(activeProject.path, activeProject.name);
+        break;
+      case 'flows':
+        setDockFull(false);
+        setSidebarMode('projects');
+        if (activeProject) openFlows(activeProject.path, activeProject.name);
         break;
       case 'git':
         setDockFull(false);
@@ -1047,6 +1070,7 @@ function readWorkbenchDestination(
       saved === 'tasks' ||
       saved === 'sessions' ||
       saved === 'codeflow' ||
+      saved === 'flows' ||
       saved === 'git' ||
       saved === 'settings'
     ) {

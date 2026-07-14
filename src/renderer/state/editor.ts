@@ -10,6 +10,7 @@ export type EditorTabKind =
   | 'diff'
   | 'pdf'
   | 'codeflow'
+  | 'flows'
   | 'live-preview'
   | 'html-preview';
 
@@ -36,6 +37,10 @@ export interface EditorTab {
   // analysis should run against. Stored separately from `path` because `path`
   // is the synthetic "codeflow:<projectPath>" key used for tab dedup.
   codeflowProjectPath?: string;
+  // Populated when kind === 'flows' — the project whose `.devspace/flows/`
+  // graphs FlowsView edits. Tab `path` is the synthetic key
+  // "flows:<projectPath>" (same dedup convention as codeflow).
+  flowsProjectPath?: string;
   // Populated when kind === 'live-preview' — drives LivePreviewView with
   // the project whose dev-server should be detected/started/observed.
   // Tab `path` is the synthetic key "live-preview:<projectPath>".
@@ -90,6 +95,7 @@ interface EditorState {
   open: (path: string, opts?: OpenOptions) => Promise<void>;
   openDiff: (cwd: string, relPath: string, absPath: string) => Promise<void>;
   openCodeflow: (projectPath: string, projectName: string) => void;
+  openFlows: (projectPath: string, projectName: string) => void;
   openLivePreview: (projectPath: string, projectName: string) => void;
   // v0.31: HTML preview tab for a file Claude wrote under .devspace/preview/.
   // Keyed by the html file path; reopening the same file refreshes (bumps
@@ -261,6 +267,25 @@ export const useEditorStore = create<
       savedContent: '',
       loading: false,
       codeflowProjectPath: projectPath,
+    };
+    set((s) => ({ tabs: [...s.tabs, tab], activeTabPath: tabPath }));
+  },
+
+  openFlows(projectPath, projectName) {
+    const tabPath = `flows:${projectPath}`;
+    const existing = get().tabs.find((t) => t.path === tabPath);
+    if (existing) {
+      set({ activeTabPath: tabPath });
+      return;
+    }
+    const tab: EditorTab = {
+      path: tabPath,
+      name: `${projectName} · Flows`,
+      kind: 'flows',
+      content: '',
+      savedContent: '',
+      loading: false,
+      flowsProjectPath: projectPath,
     };
     set((s) => ({ tabs: [...s.tabs, tab], activeTabPath: tabPath }));
   },

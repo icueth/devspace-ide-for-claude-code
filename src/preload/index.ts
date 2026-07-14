@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer, webFrame, webUtils } from 'electron';
 
+import type { FlowChangedEvent, FlowGraph } from '@shared/flowTypes';
 import { IPC } from '@shared/ipc-channels';
 import type { Task } from '@shared/types';
 
@@ -39,6 +40,25 @@ const api = {
       const h = (_e: unknown, tasks: Task[]): void => cb(tasks);
       ipcRenderer.on(IPC.TASK_CHANGED, h);
       return () => ipcRenderer.removeListener(IPC.TASK_CHANGED, h);
+    },
+  },
+  // Agent Flow (phase 1). Graph CRUD + run monitoring. There is deliberately
+  // no `run` binding: runs start from chat (the lead agent's run_flow tool via
+  // the flow-control socket), never from the renderer.
+  flows: {
+    list: (projectPath: string) => ipcRenderer.invoke(IPC.FLOW_LIST, projectPath),
+    save: (projectPath: string, graph: FlowGraph) =>
+      ipcRenderer.invoke(IPC.FLOW_SAVE, projectPath, graph),
+    remove: (projectPath: string, id: string) =>
+      ipcRenderer.invoke(IPC.FLOW_DELETE, projectPath, id),
+    runs: (projectPath: string) => ipcRenderer.invoke(IPC.FLOW_RUNS, projectPath),
+    stop: (runId: string) => ipcRenderer.invoke(IPC.FLOW_STOP, runId),
+    send: (runId: string, nodeId: string, text: string) =>
+      ipcRenderer.invoke(IPC.FLOW_SEND, runId, nodeId, text),
+    onChanged: (cb: (event: FlowChangedEvent) => void) => {
+      const listener = (_e: unknown, ev: FlowChangedEvent): void => cb(ev);
+      ipcRenderer.on(IPC.FLOW_CHANGED, listener);
+      return () => ipcRenderer.off(IPC.FLOW_CHANGED, listener);
     },
   },
   // Electron 32+ removed the non-standard `File.path` property from

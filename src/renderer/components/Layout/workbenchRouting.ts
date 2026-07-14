@@ -26,5 +26,9 @@ export function resolveEditorDestination(
   activeTabKind: string | null,
 ): WorkbenchDestination {
   if (activeTabKind === 'codeflow') return 'codeflow';
-  return current === 'codeflow' ? 'workspace' : current;
+  if (activeTabKind === 'flows') return 'flows';
+  // Falling out of an editor-backed destination (codeflow / flows) onto any
+  // other tab returns the rail to Workspace — the rail must not keep
+  // highlighting a surface the editor no longer shows.
+  return current === 'codeflow' || current === 'flows' ? 'workspace' : current;
 }

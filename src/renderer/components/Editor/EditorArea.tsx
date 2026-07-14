@@ -26,6 +26,11 @@ const CodeflowView = lazy(() =>
     default: m.CodeflowView,
   })),
 );
+const FlowsView = lazy(() =>
+  import('@renderer/components/Flows/FlowsView').then((m) => ({
+    default: m.FlowsView,
+  })),
+);
 const LivePreviewView = lazy(() =>
   import('@renderer/components/LivePreview/LivePreviewView').then((m) => ({
     default: m.LivePreviewView,
@@ -240,6 +245,12 @@ function EditorBody({ tab, onChange, onSave, onNavDone, mdMode }: EditorBodyProp
         <RouteErrorBoundary label="Codeflow">
           <Suspense fallback={<LazyFallback label="Loading codeflow…" />}>
             <CodeflowView projectPath={tab.codeflowProjectPath ?? ''} />
+          </Suspense>
+        </RouteErrorBoundary>
+      ) : tab.kind === 'flows' ? (
+        <RouteErrorBoundary label="Agent Flows">
+          <Suspense fallback={<LazyFallback label="Loading flows…" />}>
+            <FlowsView projectPath={tab.flowsProjectPath ?? ''} />
           </Suspense>
         </RouteErrorBoundary>
       ) : tab.kind === 'live-preview' ? (

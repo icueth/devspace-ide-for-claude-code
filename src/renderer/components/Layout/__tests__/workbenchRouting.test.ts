@@ -54,4 +54,19 @@ describe('workbench routing', () => {
     expect(resolveEditorDestination('workspace', 'codeflow')).toBe('codeflow');
     expect(resolveEditorDestination('codeflow', 'text')).toBe('workspace');
   });
+
+  it('follows Agent Flows tabs and returns to Workspace when leaving them', () => {
+    expect(resolveEditorDestination('workspace', 'flows')).toBe('flows');
+    expect(resolveEditorDestination('flows', 'text')).toBe('workspace');
+  });
+
+  it('switches directly between the two editor-backed destinations', () => {
+    expect(resolveEditorDestination('codeflow', 'flows')).toBe('flows');
+    expect(resolveEditorDestination('flows', 'codeflow')).toBe('codeflow');
+  });
+
+  it('leaves non-editor destinations alone regardless of the active tab', () => {
+    expect(resolveEditorDestination('git', 'text')).toBe('git');
+    expect(resolveEditorDestination('sessions', null)).toBe('sessions');
+  });
 });
