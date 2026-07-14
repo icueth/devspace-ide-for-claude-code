@@ -115,6 +115,14 @@ export function ModelField({
             </code>{' '}
             — any model your {cliId} profile's provider serves. Leave empty for the
             profile's own default.
+            {cliId === 'codex' && (
+              <>
+                {' '}
+                Append <code className="font-mono text-accent">@effort</code> for
+                reasoning effort, e.g.{' '}
+                <code className="font-mono text-accent">gpt-5.6-sol@xhigh</code>.
+              </>
+            )}
           </>
         )}
       </p>

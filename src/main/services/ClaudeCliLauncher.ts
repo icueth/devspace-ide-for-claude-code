@@ -488,6 +488,23 @@ async function launchPlainTuiCli(
   });
 }
 
+// Codex's model field supports "model@effort" ("gpt-5.6-sol@xhigh"): codex has
+// no dedicated effort flag, so the suffix maps to a `-c model_reasoning_effort`
+// config override. Matters most for custom profiles — their isolated
+// CODEX_HOME doesn't inherit the user's global ~/.codex/config.toml effort.
+export function codexModelArgs(model?: string): string[] {
+  const raw = (model ?? '').trim();
+  if (!raw) return [];
+  const at = raw.indexOf('@');
+  if (at < 0) return ['--model', raw];
+  const m = raw.slice(0, at).trim();
+  const effort = raw.slice(at + 1).trim();
+  return [
+    ...(m ? ['--model', m] : []),
+    ...(effort ? ['-c', `model_reasoning_effort="${effort}"`] : []),
+  ];
+}
+
 export async function launchCodexCli(
   opts: PlainTuiLaunchOptions,
 ): Promise<PtySession> {
@@ -507,7 +524,7 @@ export async function launchCodexCli(
         'https://github.com/openai/codex',
         [
           '--dangerously-bypass-approvals-and-sandbox',
-          ...(opts.model ? ['--model', opts.model] : []),
+          ...codexModelArgs(opts.model),
           ...(opts.initialPrompt ? [opts.initialPrompt] : []),
         ],
         [`CODEX_HOME=${configDir}`, `${keyEnv}=${keyValue}`],
@@ -524,7 +541,7 @@ export async function launchCodexCli(
     'https://github.com/openai/codex',
     [
       '--dangerously-bypass-approvals-and-sandbox',
-      ...(opts.model ? ['--model', opts.model] : []),
+      ...codexModelArgs(opts.model),
       ...(opts.initialPrompt ? [opts.initialPrompt] : []),
     ],
     [],
