@@ -19,8 +19,17 @@ export type FlowRunStatus = 'running' | 'done' | 'failed' | 'stopped';
 // dock and watch; completion is the idle heuristic (see FlowService).
 export type FlowNodeMode = 'headless' | 'interactive';
 
+// agent — a real CLI agent (the phase-1 node; `kind` undefined means agent so
+//         phase-1 files stay valid). gate — a branch point: an LLM judge
+//         evaluates `condition` against the upstream outputs and answers
+//         pass/fail; pass-branch edges proceed, fail-branch edges re-queue
+//         their target (bounded by maxRetries). note — canvas annotation,
+//         never executed, may not carry edges.
+export type FlowNodeKind = 'agent' | 'gate' | 'note';
+
 export interface FlowNode {
   id: string;
+  kind?: FlowNodeKind; // undefined = 'agent' (back-compat with phase-1 files)
   role: string; // "researcher" — short label shown on the node card
   rolePrompt: string; // the node's brief template (what this agent does)
   cliId: CliId;
@@ -29,6 +38,18 @@ export interface FlowNode {
   // Provider profile for non-claude nodes (undefined = the CLI's own default).
   cliProfileId?: string;
   mode: FlowNodeMode;
+  // Claude nodes only: `--model` for this node's session (works on
+  // subscription logins, unlike ANTHROPIC_MODEL). Non-claude models come from
+  // the CliProfile. undefined = the CLI's default.
+  model?: string;
+  // gate only: the condition the judge evaluates against upstream outputs
+  // ("tests pass — tester output shows 0 failures").
+  condition?: string;
+  // gate only: how many times a fail branch may re-queue its target before the
+  // run fails (default 3).
+  maxRetries?: number;
+  // note only: the annotation text.
+  noteText?: string;
   // Canvas position (world coords) — pure presentation, but persisted so the
   // layout survives reloads and external edits stay meaningful.
   x: number;
@@ -39,6 +60,11 @@ export interface FlowEdge {
   from: string; // FlowNode.id
   to: string; // FlowNode.id
   label?: string;
+  // Only meaningful when `from` is a gate: 'pass' fires on a pass verdict,
+  // 'fail' re-queues its target for a retry (and is exempt from the cycle
+  // check — a fail edge pointing backward IS the retry loop). undefined on a
+  // gate edge = 'pass'.
+  branch?: 'pass' | 'fail';
 }
 
 export interface FlowGraph {
@@ -58,6 +84,11 @@ export interface FlowNodeRun {
   status: FlowNodeStatus;
   startedAt?: number;
   endedAt?: number;
+  // How many times this node has been (re)launched — bumps when a gate's fail
+  // branch re-queues it. undefined = first attempt.
+  attempts?: number;
+  // gate nodes: the judge's verdict for the latest evaluation.
+  verdict?: 'pass' | 'fail';
   // Captured output (headless stdout / interactive terminal tail), capped at
   // 20_000 chars before persist — feeds downstream prompts and flow_status.
   output?: string;
@@ -86,4 +117,34 @@ export interface FlowChangedEvent {
   projectPath: string;
   flows?: FlowGraph[]; // present when the flow list changed
   run?: FlowRun; // present when a run changed
+}
+
+// ── lead chat (phase 2) ──────────────────────────────────────────────────────
+// The FlowsView chat panel talks to a "lead" agent: one claude print-mode turn
+// per user message (TmuxChatRunner), continuity via prompt-stuffed history,
+// flow tools via an explicit --mcp-config. Persisted per project at
+// <projectPath>/.devspace/flows/chat.json — plain curatable JSON.
+
+export type FlowChatRole = 'user' | 'lead';
+
+export interface FlowChatMessage {
+  id: string;
+  role: FlowChatRole;
+  text: string;
+  at: number;
+  // Set on a lead message when its turn started/steered a run — lets the
+  // panel link the bubble to the run it talks about.
+  runId?: string;
+  // The turn errored (claude exited non-zero / timed out); text carries the
+  // human-readable reason.
+  error?: boolean;
+}
+
+// Push payload for IPC.FLOW_CHAT_EVENT.
+export interface FlowChatEvent {
+  projectPath: string;
+  // A finished turn appends the lead's message; 'busy' flags a turn in flight
+  // so every window renders the same typing indicator.
+  message?: FlowChatMessage;
+  busy?: boolean;
 }

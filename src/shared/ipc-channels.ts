@@ -332,6 +332,13 @@ export const IPC = {
   FLOW_STOP: 'flow:stop',
   FLOW_SEND: 'flow:send',
   FLOW_CHANGED: 'flow:changed',
+  // Lead chat (phase 2): the FlowsView chat panel. SEND returns immediately
+  // ({ ok } — one turn in flight per project); the lead's reply arrives as a
+  // FLOW_CHAT_EVENT push when the print-mode turn finishes.
+  FLOW_CHAT_SEND: 'flow:chat-send',
+  FLOW_CHAT_HISTORY: 'flow:chat-history',
+  FLOW_CHAT_CLEAR: 'flow:chat-clear',
+  FLOW_CHAT_EVENT: 'flow:chat-event',
 } as const;
 
 export type IpcChannel = (typeof IPC)[keyof typeof IPC];
