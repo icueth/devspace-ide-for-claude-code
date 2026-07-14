@@ -60,7 +60,7 @@ export function resetSelectedFlows(): void {
 // The subset of FlowService the router drives.
 type RouterSvc = Pick<
   FlowService,
-  'list' | 'runs' | 'runFlow' | 'stopRun' | 'sendToNode' | 'getRun'
+  'list' | 'runs' | 'runFlow' | 'stopRun' | 'sendToNode' | 'getRun' | 'liveFlowIds'
 >;
 
 export interface FlowControlReq {
@@ -94,7 +94,7 @@ const BROADCAST_OPS = new Set(['stop']);
 // node produced without dragging a 20k-char transcript through the tool reply.
 const TAIL = 2_000;
 
-function slimFlow(f: FlowGraph, pinnedId?: string): unknown {
+function slimFlow(f: FlowGraph, pinnedId?: string, running?: boolean): unknown {
   return {
     id: f.id,
     name: f.name,
@@ -102,6 +102,9 @@ function slimFlow(f: FlowGraph, pinnedId?: string): unknown {
     // Only on the pinned flow — an absent key reads as "not pinned", so the
     // agent sees exactly one marked entry instead of a wall of `pinned:false`.
     ...(pinnedId && f.id === pinnedId ? { pinned: true } : {}),
+    // Only while a run is in flight — one live run per flow, so a marked flow
+    // cannot be run again until it finishes (Clone it to work in parallel).
+    ...(running ? { running: true } : {}),
     nodes: f.nodes.map((n) => ({ id: n.id, role: n.role, cli: n.cliId, mode: n.mode })),
     edges: f.edges,
   };
@@ -167,7 +170,13 @@ export async function routeFlowControl(
       // `tab` is optional: a claude launched outside the dock has no tab id, and
       // then nothing is marked — the list is still correct, just unpinned.
       const pinned = pinnedFlowFor(dir, str(req.tab));
-      return { ok: true, flows: (await svc.list(dir)).map((f) => slimFlow(f, pinned)) };
+      const liveIds = new Set(svc.liveFlowIds());
+      return {
+        ok: true,
+        flows: (await svc.list(dir)).map((f) =>
+          slimFlow(f, pinned, liveIds.has(f.id)),
+        ),
+      };
     }
 
     case 'runs': {

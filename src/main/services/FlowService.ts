@@ -92,6 +92,9 @@ export interface FlowService {
   ): Promise<{ ok: boolean; error?: string }>;
   getRun(runId: string): FlowRun | undefined;
   activeSessionKeys(): Set<string>;
+  /** Flow ids with a run in flight — feeds the one-live-run-per-flow guard
+   *  and the [running] marker in list_flows. */
+  liveFlowIds(): string[];
 }
 
 // ── module-level session registry ───────────────────────────────────────────
@@ -369,6 +372,21 @@ export function createFlowService(deps: FlowServiceDeps): FlowService {
         return { ok: false, error: `flow not found: ${flowIdOrName}. Available: ${names}` };
       }
 
+      // One live run per flow (user decision): a second tab starting the same
+      // flow would fight the first over the working tree AND over the canvas,
+      // which shows only the newest run. Parallel work = Clone the flow.
+      const already = [...live.values()].find((lr) => lr.run.flowId === graph.id);
+      if (already) {
+        const ageS = Math.max(0, Math.round((now() - already.run.startedAt) / 1000));
+        return {
+          ok: false,
+          error:
+            `flow "${graph.name}" already has a run in progress ` +
+            `(${already.run.id}, started ${ageS}s ago) — wait for it, stop_flow it, ` +
+            `or Clone the flow in the Flows view to run in parallel`,
+        };
+      }
+
       const errors = validateGraph(graph);
       if (errors.length > 0) {
         return { ok: false, error: `flow "${graph.name}" is invalid — ${errors.join('; ')}` };
@@ -462,6 +480,8 @@ export function createFlowService(deps: FlowServiceDeps): FlowService {
     },
 
     getRun: (runId) => live.get(runId)?.run,
+
+    liveFlowIds: () => [...new Set([...live.values()].map((lr) => lr.run.flowId))],
 
     activeSessionKeys() {
       const keys = new Set<string>();

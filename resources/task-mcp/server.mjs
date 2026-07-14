@@ -261,7 +261,7 @@ function resultText(name, res) {
     const digest = res.flows
       .map(
         (f) =>
-          `• ${f.name}${f.pinned ? ' [pinned]' : ''} — ${f.description || '(no description)'}`,
+          `• ${f.name}${f.pinned ? ' [pinned]' : ''}${f.running ? ' [running — cannot start again until it finishes]' : ''} — ${f.description || '(no description)'}`,
       )
       .join('\n');
     return `${digest}\n\n${JSON.stringify(res.flows, null, 2)}`;

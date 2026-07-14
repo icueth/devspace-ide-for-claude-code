@@ -477,3 +477,16 @@ describe('per-node model + notes', () => {
     expect(last.status).toBe('done');
   });
 });
+
+describe('one live run per flow', () => {
+  it('refuses to start a flow that already has a run in flight', async () => {
+    const g = loopGraph({});
+    await start(g);
+
+    const res = await svc.runFlow('/ws/p', g.name, 'again');
+    expect(res.ok).toBe(false);
+    expect(String((res as { error?: string }).error)).toMatch(
+      /already has a run in progress/,
+    );
+  });
+});

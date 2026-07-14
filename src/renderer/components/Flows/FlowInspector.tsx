@@ -1,4 +1,4 @@
-import { MessageSquare, Trash2 } from 'lucide-react';
+import { Copy, MessageSquare, Trash2 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 
 import { Field, Head, inputCls } from '@renderer/components/Flows/FlowInspectorBits';
@@ -16,6 +16,7 @@ interface Props {
   onUpdateNode: (id: string, patch: Partial<FlowNode>) => void;
   onDeleteNode: (id: string) => void;
   onUpdateMeta: (patch: Partial<Pick<FlowGraph, 'name' | 'description'>>) => void;
+  onCloneFlow: () => void;
   onDeleteFlow: () => void;
   onOpenSession: (nodeId: string) => void;
 }
@@ -28,6 +29,7 @@ export function FlowInspector({
   onUpdateNode,
   onDeleteNode,
   onUpdateMeta,
+  onCloneFlow,
   onDeleteFlow,
   onOpenSession,
 }: Props) {
@@ -62,6 +64,7 @@ export function FlowInspector({
           graph={graph}
           run={run}
           onUpdateMeta={onUpdateMeta}
+          onCloneFlow={onCloneFlow}
           onDeleteFlow={onDeleteFlow}
         />
       )}
@@ -73,11 +76,13 @@ function FlowFields({
   graph,
   run,
   onUpdateMeta,
+  onCloneFlow,
   onDeleteFlow,
 }: {
   graph: FlowGraph;
   run: FlowRun | null;
   onUpdateMeta: (patch: Partial<Pick<FlowGraph, 'name' | 'description'>>) => void;
+  onCloneFlow: () => void;
   onDeleteFlow: () => void;
 }) {
   return (
@@ -135,11 +140,22 @@ function FlowFields({
         </Field>
       )}
 
-      <div className="mt-auto flex border-t border-border p-3">
+      <div className="mt-auto flex gap-2 border-t border-border p-3">
+        {/* A flow carries ONE live run at a time — cloning is how the same
+            process runs in parallel (each copy monitored on its own canvas). */}
+        <button
+          type="button"
+          onClick={onCloneFlow}
+          title="Duplicate this flow — run the same process in parallel, monitored separately"
+          className="flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1.5 text-[12px] text-text-muted transition hover:border-accent hover:text-accent"
+        >
+          <Copy size={12} />
+          Clone flow
+        </button>
         <button
           type="button"
           onClick={onDeleteFlow}
-          className="flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1.5 text-[12px] text-semantic-error transition hover:border-semantic-error"
+          className="ml-auto flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1.5 text-[12px] text-semantic-error transition hover:border-semantic-error"
         >
           <Trash2 size={12} />
           Delete flow

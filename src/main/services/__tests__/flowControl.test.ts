@@ -62,6 +62,7 @@ const makeSvc = () => ({
   stopRun: vi.fn(async (): Ack => ({ ok: true })),
   sendToNode: vi.fn(async (): Ack => ({ ok: true })),
   getRun: vi.fn(() => RUN as FlowRun | undefined),
+  liveFlowIds: vi.fn((): string[] => []),
 });
 
 let svc: ReturnType<typeof makeSvc>;
@@ -71,6 +72,14 @@ beforeEach(() => {
 });
 
 describe('routeFlowControl — list', () => {
+  it('marks a flow with a live run so the lead knows it cannot start again', async () => {
+    svc.liveFlowIds.mockReturnValue(['f1']);
+    const res = await routeFlowControl(svc, { op: 'list', repo: '/ws/proj' });
+    expect(res.ok).toBe(true);
+    const flows = res.flows as Array<Record<string, unknown>>;
+    expect(flows[0]).toMatchObject({ id: 'f1', running: true });
+  });
+
   it('returns the flows of a repo with their routing descriptions', async () => {
     const res = await routeFlowControl(svc, { op: 'list', repo: '/ws/proj' });
     expect(res.ok).toBe(true);

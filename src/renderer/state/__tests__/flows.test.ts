@@ -202,6 +202,34 @@ describe('flows store — draft editing', () => {
   });
 });
 
+describe('flows store — clone', () => {
+  it('clones a flow with a fresh id + unique name and persists it immediately', async () => {
+    useFlowsStore.setState({
+      flows: [graph('f1', 'pipeline'), graph('f9', 'pipeline-copy')],
+      selectedFlowId: 'f1',
+      draft: graph('f1', 'pipeline'),
+    });
+
+    useFlowsStore.getState().cloneFlow('f1');
+
+    const s = useFlowsStore.getState();
+    const clone = s.flows.find((f) => f.id !== 'f1' && f.id !== 'f9')!;
+    expect(clone.id).not.toBe('f1');
+    // "pipeline-copy" is taken — the clone steps to "-copy-2".
+    expect(clone.name).toBe('pipeline-copy-2');
+    expect(clone.nodes.map((n) => n.id)).toEqual(['a', 'b']);
+    expect(s.selectedFlowId).toBe(clone.id);
+    expect(s.draft!.id).toBe(clone.id);
+
+    // Persisted without waiting for the debounce — a clone exists to be run/pinned.
+    await vi.runOnlyPendingTimersAsync();
+    expect(api.flows.save).toHaveBeenCalledWith(
+      '/p',
+      expect.objectContaining({ id: clone.id, name: 'pipeline-copy-2' }),
+    );
+  });
+});
+
 describe('flows store — edge editing', () => {
   it('disconnect matches the branch exactly — a gate keeps its other branch', () => {
     const g = graph('f1');

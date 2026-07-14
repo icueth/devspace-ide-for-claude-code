@@ -100,6 +100,9 @@ export function FlowsView({ projectPath }: Props) {
             onUpdateNode={useFlowsStore.getState().updateNode}
             onDeleteNode={useFlowsStore.getState().deleteNode}
             onUpdateMeta={useFlowsStore.getState().updateFlowMeta}
+            onCloneFlow={() => {
+              if (draft) useFlowsStore.getState().cloneFlow(draft.id);
+            }}
             onDeleteFlow={() => {
               if (draft) void useFlowsStore.getState().deleteFlow(draft.id);
             }}

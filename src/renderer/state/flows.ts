@@ -134,6 +134,9 @@ interface FlowsState {
   selectNode: (id: string | null) => void;
   /** No id = a blank starter; an id from FLOW_TEMPLATES = that template. */
   createFlow: (templateId?: string) => void;
+  /** Duplicate a flow — the parallel-work path, since a flow can only carry
+   *  ONE live run at a time (each clone runs and is monitored on its own). */
+  cloneFlow: (id: string) => void;
   deleteFlow: (id: string) => Promise<void>;
   flush: () => Promise<void>;
 
@@ -297,6 +300,38 @@ export const useFlowsStore = create<FlowsState>((set, get) => {
       });
       // Persist immediately: an unsaved flow can't be run from chat, and the
       // whole point of "New flow" is to make it addressable by the lead agent.
+      pendingPath = s.projectPath;
+      void writeDraft();
+    },
+
+    cloneFlow(id) {
+      const s = get();
+      const src =
+        (s.draft?.id === id ? s.draft : null) ?? s.flows.find((f) => f.id === id);
+      if (!src || !s.projectPath) return;
+      if (saveTimer) {
+        clearTimeout(saveTimer);
+        saveTimer = null;
+        void writeDraft();
+      }
+      // Unique name: run_flow resolves by name too, so "-copy", "-copy-2", …
+      const taken = new Set(s.flows.map((f) => f.name));
+      let name = `${src.name}-copy`;
+      for (let i = 2; taken.has(name); i++) name = `${src.name}-copy-${i}`;
+      const flow: FlowGraph = {
+        ...structuredClone(src),
+        id: uid('flow'),
+        name,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      };
+      set({
+        flows: [...s.flows, flow],
+        selectedFlowId: flow.id,
+        draft: flow,
+        selectedNodeId: null,
+      });
+      // Persist immediately — the whole point of a clone is to run/pin it now.
       pendingPath = s.projectPath;
       void writeDraft();
     },
