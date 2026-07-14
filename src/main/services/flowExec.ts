@@ -15,6 +15,7 @@
 import { spawn } from 'node:child_process';
 
 import { resolveClaudeBinary } from '@main/services/ClaudeCliLauncher';
+import { OUTPUT_CAP } from '@main/services/flowSessions';
 import { enrichedPath } from '@main/utils/setupPaths';
 import { createLogger } from '@shared/logger';
 
@@ -125,13 +126,16 @@ export async function startClaudePrintIn(
       finish({ ok: false, text: '', error: `timed out after ${EXEC_TIMEOUT_MS / 60_000}m` });
     }, EXEC_TIMEOUT_MS);
 
+    // Cap at accumulation, not at exit — a chatty child can otherwise buffer
+    // hundreds of MB in the main process across its 15-minute lifetime; only
+    // the tail feeds downstream prompts anyway (same cap as PTY capture).
     let stdout = '';
     let stderr = '';
     child.stdout?.on('data', (d) => {
-      stdout += d.toString();
+      stdout = (stdout + d.toString()).slice(-OUTPUT_CAP);
     });
     child.stderr?.on('data', (d) => {
-      stderr += d.toString();
+      stderr = (stderr + d.toString()).slice(-4_000);
     });
     child.on('error', (err) => finish({ ok: false, text: '', error: err.message }));
     child.on('close', (code) => {

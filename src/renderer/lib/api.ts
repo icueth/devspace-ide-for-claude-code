@@ -152,11 +152,15 @@ export interface DevspaceApi {
   // is why there is no `run` here. `stop`/`send` act on an in-flight run.
   flows: {
     list: (projectPath: string) => Promise<FlowGraph[]>;
-    save: (projectPath: string, graph: FlowGraph) => Promise<FlowGraph>;
+    save: (projectPath: string, graph: FlowGraph) => Promise<void>;
     remove: (projectPath: string, id: string) => Promise<void>;
     runs: (projectPath: string) => Promise<FlowRun[]>;
-    stop: (runId: string) => Promise<void>;
-    send: (runId: string, nodeId: string, text: string) => Promise<void>;
+    stop: (runId: string) => Promise<{ ok: boolean; error?: string }>;
+    send: (
+      runId: string,
+      nodeId: string,
+      text: string,
+    ) => Promise<{ ok: boolean; error?: string }>;
     // Single main → renderer push for both flow-list and run changes.
     onChanged: (cb: (event: FlowChangedEvent) => void) => () => void;
   };

@@ -159,6 +159,14 @@ export const useFlowsStore = create<FlowsState>((set, get) => {
     loading: false,
 
     async loadForProject(projectPath) {
+      // A queued save belongs to the project we're LEAVING — flush it before
+      // repointing the store, or the timer would pair the old pendingPath with
+      // the new draft and write one project's flow into another's flows dir.
+      if (saveTimer) {
+        clearTimeout(saveTimer);
+        saveTimer = null;
+        await writeDraft();
+      }
       set({ projectPath, loading: true });
       const [flows, runs] = await Promise.all([
         api.flows.list(projectPath).catch(() => [] as FlowGraph[]),

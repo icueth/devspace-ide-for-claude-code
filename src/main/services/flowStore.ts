@@ -20,11 +20,24 @@ export function runsDir(projectPath: string): string {
   return path.join(flowsDir(projectPath), 'runs');
 }
 
+// Flow/run ids become file names. Generated ids are short base36, but flow
+// files can arrive from anywhere (a cloned repo, a hand edit) and run ids from
+// any MCP caller — an id containing '/' or '..' would escape .devspace/flows
+// through path.join, so anything outside this charset is rejected at the
+// boundary (CLAUDE.md: validate input at system boundaries).
+const SAFE_ID = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/;
+
+export function isSafeFlowId(id: unknown): id is string {
+  return typeof id === 'string' && SAFE_ID.test(id);
+}
+
 function flowFile(projectPath: string, id: string): string {
+  if (!isSafeFlowId(id)) throw new Error(`invalid flow id: ${String(id)}`);
   return path.join(flowsDir(projectPath), `${id}.flow.json`);
 }
 
 function runFile(projectPath: string, runId: string): string {
+  if (!isSafeFlowId(runId)) throw new Error(`invalid run id: ${String(runId)}`);
   return path.join(runsDir(projectPath), `${runId}.json`);
 }
 
@@ -42,11 +55,7 @@ async function readJson<T>(file: string): Promise<T | null> {
 function isFlowGraph(v: unknown): v is FlowGraph {
   const g = v as Partial<FlowGraph> | null;
   return (
-    !!g &&
-    typeof g.id === 'string' &&
-    g.id.length > 0 &&
-    Array.isArray(g.nodes) &&
-    Array.isArray(g.edges)
+    !!g && isSafeFlowId(g.id) && Array.isArray(g.nodes) && Array.isArray(g.edges)
   );
 }
 
@@ -79,19 +88,60 @@ export async function deleteFlow(projectPath: string, id: string): Promise<void>
   await fs.promises.rm(flowFile(projectPath, id), { force: true });
 }
 
+// A run permanently adds one journal file, so prune on write — without a cap a
+// long-lived project accumulates thousands and every list pays for all of them.
+const RUNS_KEEP = 60;
+
 export async function saveRun(projectPath: string, run: FlowRun): Promise<void> {
   await atomicWriteAsync(runFile(projectPath, run.id), JSON.stringify(run, null, 2));
+  await pruneRuns(projectPath).catch(() => undefined);
+}
+
+async function pruneRuns(projectPath: string): Promise<void> {
+  const dir = runsDir(projectPath);
+  let names: string[];
+  try {
+    names = await fs.promises.readdir(dir);
+  } catch {
+    return;
+  }
+  const files = names.filter((n) => n.endsWith('.json'));
+  if (files.length <= RUNS_KEEP) return;
+  const stated = await statByMtime(dir, files);
+  await Promise.all(
+    stated.slice(RUNS_KEEP).map(({ name }) =>
+      fs.promises.rm(path.join(dir, name), { force: true }),
+    ),
+  );
+}
+
+/** Newest-first by mtime — lets callers pick a tail without parsing every file. */
+async function statByMtime(
+  dir: string,
+  files: string[],
+): Promise<Array<{ name: string; mtime: number }>> {
+  const stated = await Promise.all(
+    files.map(async (name) => ({
+      name,
+      mtime:
+        (await fs.promises.stat(path.join(dir, name)).catch(() => null))
+          ?.mtimeMs ?? 0,
+    })),
+  );
+  return stated.sort((a, b) => b.mtime - a.mtime);
 }
 
 export async function loadRun(
   projectPath: string,
   runId: string,
 ): Promise<FlowRun | null> {
+  if (!isSafeFlowId(runId)) return null;
   const r = await readJson<FlowRun>(runFile(projectPath, runId));
   return r && typeof r.id === 'string' && Array.isArray(r.nodes) ? r : null;
 }
 
-/** Most recent runs first — the renderer only ever shows a short tail. */
+/** Most recent runs first — the renderer only ever shows a short tail, so only
+ *  the newest `limit` journals (by mtime) are parsed at all. */
 export async function loadRecentRuns(
   projectPath: string,
   limit = 20,
@@ -103,13 +153,13 @@ export async function loadRecentRuns(
     return [];
   }
 
+  const newest = (
+    await statByMtime(runsDir(projectPath), names.filter((n) => n.endsWith('.json')))
+  ).slice(0, limit);
   const parsed = await Promise.all(
-    names
-      .filter((n) => n.endsWith('.json'))
-      .map((n) => readJson<FlowRun>(path.join(runsDir(projectPath), n))),
+    newest.map(({ name }) => readJson<FlowRun>(path.join(runsDir(projectPath), name))),
   );
   return parsed
     .filter((r): r is FlowRun => !!r && typeof r.id === 'string' && Array.isArray(r.nodes))
-    .sort((a, b) => (b.startedAt ?? 0) - (a.startedAt ?? 0))
-    .slice(0, limit);
+    .sort((a, b) => (b.startedAt ?? 0) - (a.startedAt ?? 0));
 }

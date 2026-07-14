@@ -262,7 +262,7 @@ function FlowFields({
         <textarea
           rows={3}
           value={graph.description}
-          placeholder="lead ใช้ตัดสินใจเลือก flow — e.g. multi-step feature work with tests"
+          placeholder="When should the lead pick this flow? e.g. multi-step feature work with tests"
           onChange={(e) => onUpdateMeta({ description: e.target.value })}
           className={cn(inputCls, 'min-h-[64px] resize-y leading-relaxed')}
         />

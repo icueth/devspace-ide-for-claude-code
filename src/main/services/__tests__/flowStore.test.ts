@@ -128,4 +128,36 @@ describe('flowStore runs', () => {
     await fs.promises.writeFile(path.join(runsDir(project), 'bad.json'), 'nope');
     expect((await loadRecentRuns(project)).map((r) => r.id)).toEqual(['ok']);
   });
+
+  it('prunes the runs dir so journals cannot accumulate without bound', async () => {
+    for (let i = 0; i < 65; i++) await saveRun(project, run(`r${i}`, i));
+    const files = await fs.promises.readdir(runsDir(project));
+    expect(files.length).toBeLessThanOrEqual(60);
+    // The newest journal always survives the prune.
+    expect(files).toContain('r64.json');
+  });
+});
+
+describe('flowStore id safety', () => {
+  it('rejects a traversal id at save/delete instead of escaping .devspace/flows', async () => {
+    await expect(saveFlow(project, graph('../../escape'))).rejects.toThrow(
+      /invalid flow id/,
+    );
+    await expect(deleteFlow(project, '../../escape')).rejects.toThrow(
+      /invalid flow id/,
+    );
+  });
+
+  it('drops a stored flow whose id would traverse out of the flows dir', async () => {
+    await saveFlow(project, graph('good'));
+    await fs.promises.writeFile(
+      path.join(flowsDir(project), 'evil.flow.json'),
+      JSON.stringify({ ...graph('good'), id: '../../../evil' }),
+    );
+    expect((await loadFlows(project)).map((f) => f.id)).toEqual(['good']);
+  });
+
+  it('treats a traversal run id as absent', async () => {
+    expect(await loadRun(project, '../../outside')).toBeNull();
+  });
 });

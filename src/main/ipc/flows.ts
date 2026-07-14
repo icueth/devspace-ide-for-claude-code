@@ -60,8 +60,8 @@ export function registerFlowsIpc(): void {
   );
 
   // chat→flow bridge: the socket the bundled MCP server relays run_flow /
-  // flow_status / send_flow / stop_flow through. `onMutate` is a no-op for run
-  // transitions (FlowService pushes those itself) — it exists so a socket-side
-  // stop still repaints even if the run was already teardown-complete.
+  // flow_status / send_flow / stop_flow through. `onMutate` is a no-op because
+  // every run transition already reaches the renderer via onRunChanged above,
+  // and no socket op mutates the flow LIST in phase 1 (no create/delete op).
   startFlowControlSocket(svc, () => undefined);
 }

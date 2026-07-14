@@ -198,6 +198,32 @@ describe('flows store — draft editing', () => {
   });
 });
 
+describe('flows store — project switch', () => {
+  it('flushes a pending edit to the OLD project before repointing the store', async () => {
+    useFlowsStore.setState({
+      flows: [graph('f1')],
+      selectedFlowId: 'f1',
+      draft: graph('f1'),
+    });
+    // Edit in /p → debounce armed with pendingPath=/p.
+    useFlowsStore.getState().updateFlowMeta({ name: 'edited-in-p' });
+
+    // Switch to /q before the debounce fires. The queued write must land in
+    // /p with the /p draft — pairing the old path with /q's draft would write
+    // one project's flow into another's flows dir.
+    await useFlowsStore.getState().loadForProject('/q');
+
+    expect(api.flows.save).toHaveBeenCalledTimes(1);
+    const [savedPath, savedGraph] = vi.mocked(api.flows.save).mock.calls[0]!;
+    expect(savedPath).toBe('/p');
+    expect((savedGraph as FlowGraph).name).toBe('edited-in-p');
+
+    // The timer is disarmed — nothing fires later against /q.
+    await vi.runOnlyPendingTimersAsync();
+    expect(api.flows.save).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('flows selectors', () => {
   it('latestRunFor picks the newest run of that flow', () => {
     const runs = [run('old', 'f1', 1), run('new', 'f1', 9), run('other', 'f2', 99)];

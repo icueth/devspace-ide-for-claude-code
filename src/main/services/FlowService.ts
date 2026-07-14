@@ -234,6 +234,14 @@ export function createFlowService(deps: FlowServiceDeps): FlowService {
       runId: lr.run.id,
       prompt,
     });
+    if (lr.run.status !== 'running') {
+      // The run went terminal while the session was spawning (a sibling failed,
+      // or stopRun ran). Same guard the headless path has: don't resurrect the
+      // node under a finished run — and kill the newborn session, or an agent
+      // would keep working invisibly with no run to stop it through.
+      void killFlowSession(lr.run.projectId, node.cliId, lr.run.id, node.id);
+      return;
+    }
     setNode(lr, node.id, { status: 'running', sessionKey: key });
 
     const unsub = captureFlowOutput(key, {
@@ -257,12 +265,19 @@ export function createFlowService(deps: FlowServiceDeps): FlowService {
     const t = now();
     for (const n of lr.run.nodes) {
       if (n.status !== 'running' || !n.sessionKey) continue;
+      const stat = stats.find((s) => s.id === n.sessionKey);
+      if (!stat) {
+        // The PTY entry is gone — tab closed, agent crashed, or the user typed
+        // `exit`. Nothing will ever produce activity again; without this the
+        // node (and the whole run) would sit 'running' forever.
+        failNode(lr, n.nodeId, 'session ended before completion');
+        return; // failNode finished the run — the rest of this tick is moot
+      }
       // Never "done" before the agent has produced anything — a session that
       // has only ever booted is not an idle session, it is a slow one.
       const first = lr.firstActivityAt.get(n.nodeId);
       if (first === undefined) continue;
-      const act = stats.find((s) => s.id === n.sessionKey)?.lastActivityAt;
-      if (act === undefined || t - act < IDLE_DONE_MS) continue;
+      if (t - stat.lastActivityAt < IDLE_DONE_MS) continue;
       completeNode(lr, n.nodeId, n.output ?? '');
     }
 
@@ -289,7 +304,26 @@ export function createFlowService(deps: FlowServiceDeps): FlowService {
     list: (projectPath) => store.loadFlows(projectPath),
     save: (projectPath, graph) => store.saveFlow(projectPath, graph),
     remove: (projectPath, id) => store.deleteFlow(projectPath, id),
-    runs: (projectPath) => store.loadRecentRuns(projectPath),
+
+    async runs(projectPath) {
+      const runs = await store.loadRecentRuns(projectPath);
+      // A journal that says 'running' with no live engine entry is a leftover
+      // of an app quit/crash mid-run (live state is deliberately not restored).
+      // Heal it on read so the canvas and flow_status stop reporting a phantom
+      // run the user has no way to clear.
+      for (const r of runs) {
+        if (r.status !== 'running' || live.has(r.id)) continue;
+        r.status = 'stopped';
+        r.endedAt = r.endedAt ?? now();
+        r.error = 'app restarted mid-run';
+        for (const n of r.nodes) {
+          if (n.status === 'running') n.status = 'failed';
+          else if (n.status === 'queued') n.status = 'skipped';
+        }
+        void store.saveRun(projectPath, r).catch(() => undefined);
+      }
+      return runs;
+    },
 
     async runFlow(projectPath, flowIdOrName, task) {
       const wanted = (flowIdOrName ?? '').trim().toLowerCase();
@@ -352,21 +386,28 @@ export function createFlowService(deps: FlowServiceDeps): FlowService {
       const lr = live.get(runId);
       if (!lr) return { ok: false, error: 'run not found (or already finished)' };
 
-      // An explicit user stop kills everything, including the interactive
-      // sessions (unlike a failure, which leaves them dockable for inspection).
+      // Settle the terminal state SYNCHRONOUSLY, before any await. The tick and
+      // every late child/launch callback guard on status === 'running', so this
+      // single ordering closes two races: a tick firing mid-kill completing a
+      // node and launching its downstream past the kill loop, and a killed
+      // headless child's done-handler flipping the run to 'failed' first.
+      // A killed node did run — 'skipped' would be a lie, so it is 'failed'
+      // with the reason. finishRun turns the still-queued ones into 'skipped'
+      // and reaps the headless children.
       const running = lr.run.nodes.filter((n) => n.status === 'running');
-      for (const h of lr.execs.values()) h.kill();
+      for (const n of running) {
+        setNode(lr, n.nodeId, { status: 'failed', endedAt: now(), error: 'stopped' });
+      }
+      finishRun(lr, 'stopped');
+
+      // An explicit user stop kills the interactive sessions too (unlike a
+      // failure, which leaves them dockable for inspection). Status is already
+      // journaled, so a slow SIGTERM here can't change what the run says.
       for (const n of running) {
         const node = lr.graph.nodes.find((g) => g.id === n.nodeId);
         if (!node || node.mode !== 'interactive') continue;
         await killFlowSession(lr.run.projectId, node.cliId, lr.run.id, node.id);
       }
-      // A killed node did run — 'skipped' would be a lie, so it is 'failed'
-      // with the reason. finishRun turns the still-queued ones into 'skipped'.
-      for (const n of running) {
-        setNode(lr, n.nodeId, { status: 'failed', endedAt: now(), error: 'stopped' });
-      }
-      finishRun(lr, 'stopped');
       return { ok: true };
     },
 
