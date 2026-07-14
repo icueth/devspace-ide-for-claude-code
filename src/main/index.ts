@@ -506,6 +506,21 @@ app.on('before-quit', (event) => {
   exiting = true;
   event.preventDefault();
 
+  // app.exit() below skips Chromium's graceful shutdown — which is where DOM
+  // storage gets its final flush. Without an explicit flush, every renderer
+  // write since the last periodic commit (open projects, dock tabs, flow
+  // pins, layout) silently vanishes and the app "forgets" the last session
+  // on the next boot. Flush FIRST, synchronously, while the windows are
+  // still alive.
+  try {
+    session.defaultSession.flushStorageData();
+    for (const w of BrowserWindow.getAllWindows()) {
+      w.webContents.session.flushStorageData();
+    }
+  } catch {
+    /* best-effort */
+  }
+
   // Mark each dev-server state as 'stopped' BEFORE the PTY pool kills
   // the underlying processes so the resulting onExit handlers
   // short-circuit instead of firing spurious 'crashed' events on quit.
