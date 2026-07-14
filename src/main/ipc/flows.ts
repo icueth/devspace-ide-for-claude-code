@@ -1,23 +1,21 @@
 import { BrowserWindow, ipcMain } from 'electron';
 
-import { createFlowChatService } from '@main/services/FlowChatService';
 import { createFlowService } from '@main/services/FlowService';
-import { startFlowControlSocket } from '@main/services/flowControl';
+import { setSelectedFlow, startFlowControlSocket } from '@main/services/flowControl';
 import { assertInWorkspace } from '@main/utils/pathScope';
-import type { FlowChangedEvent, FlowChatEvent, FlowGraph } from '@shared/flowTypes';
+import type { FlowChangedEvent, FlowGraph, FlowSelectEvent } from '@shared/flowTypes';
 import { IPC } from '@shared/ipc-channels';
 
 // Agent Flow IPC. Graph CRUD for the canvas + run control; FLOW_CHANGED is the
 // single main → renderer push (flow list changed, and/or a run transitioned).
 //
 // There is deliberately NO run channel: runs start from chat only (the control
-// socket / MCP), so the renderer cannot trigger one even by accident — the chat
-// below (FLOW_CHAT_*) is that chat, and it reaches the engine the same way any
-// other claude does: through the flow-control socket's MCP tools.
+// socket / MCP), so the renderer cannot trigger one even by accident. Chat is
+// the user's own claude tab in the dock — it reaches the engine through the
+// flow-control socket's MCP tools like any other claude.
 
-// A broadcast, not a reply: a chat turn outlives its invoke (send returns as
-// soon as the message is queued), and a second window must see the same
-// conversation. Same reason FLOW_CHANGED is a push.
+// A broadcast, not a reply: a second window must see the same run state, and a
+// transition has no invoke to reply to.
 function broadcast(channel: string, payload: unknown): void {
   for (const w of BrowserWindow.getAllWindows()) {
     if (!w.isDestroyed()) w.webContents.send(channel, payload);
@@ -33,10 +31,6 @@ export function registerFlowsIpc(): void {
 
   const svc = createFlowService({
     onRunChanged: (run) => push({ projectPath: run.projectPath, run }),
-  });
-
-  const chat = createFlowChatService({
-    onEvent: (event: FlowChatEvent) => broadcast(IPC.FLOW_CHAT_EVENT, event),
   });
 
   // Re-read the flow list from disk and push it — used after every mutation so
@@ -73,21 +67,14 @@ export function registerFlowsIpc(): void {
       svc.sendToNode(runId, nodeId, text),
   );
 
-  // ── lead chat (phase 2) ───────────────────────────────────────────────────
-  // SEND returns as soon as the user's message is persisted — the lead's reply
-  // arrives later as a FLOW_CHAT_EVENT push (one turn in flight per project).
-  ipcMain.handle(IPC.FLOW_CHAT_HISTORY, async (_e, projectPath: string) => {
-    return chat.history(await assertInWorkspace(projectPath));
-  });
-
-  ipcMain.handle(IPC.FLOW_CHAT_SEND, async (_e, projectPath: string, text: string) => {
-    return chat.send(await assertInWorkspace(projectPath), text);
-  });
-
-  ipcMain.handle(IPC.FLOW_CHAT_CLEAR, async (_e, projectPath: string) => {
-    const dir = await assertInWorkspace(projectPath);
-    await chat.clear(dir);
-    broadcast(IPC.FLOW_CHAT_EVENT, { projectPath: dir } satisfies FlowChatEvent);
+  // ── dock flow selection (phase 3) ─────────────────────────────────────────
+  // The renderer owns the pin (it persists with the CliTab); main keeps a live
+  // map so an MCP `run_flow` with no `flow` arg can resolve it for the calling
+  // session. Fire-and-forget: the renderer re-pushes every pinned tab on boot,
+  // so a dropped push self-heals on the next reload rather than needing a reply.
+  ipcMain.handle(IPC.FLOW_SELECT, async (_e, evt: FlowSelectEvent) => {
+    await assertInWorkspace(evt.projectPath);
+    setSelectedFlow(evt.projectId, evt.tabId, evt.flowId);
   });
 
   // chat→flow bridge: the socket the bundled MCP server relays run_flow /

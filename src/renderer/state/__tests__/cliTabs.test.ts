@@ -39,6 +39,12 @@ vi.mock('@renderer/lib/api', () => ({
       onAutoClosed: () => () => undefined,
       setPinned: () => undefined,
     },
+    // Phase 3: setTabFlow persists the pin AND pushes it to main, which holds
+    // the live lookup an MCP `run_flow` reads.
+    flows: {
+      list: vi.fn(async () => []),
+      select: vi.fn(async () => undefined),
+    },
   },
 }));
 
@@ -355,5 +361,41 @@ describe('cliTabs PTY teardown wiring', () => {
     expect(
       useCliTabsStore.getState().tabsByProject['p1']![0]!.reloadGen,
     ).toBe(2);
+  });
+
+  // The pin has TWO consumers: the persisted tab (survives a reload, and is what
+  // the boot re-push replays) and main's in-memory map (what run_flow reads). A
+  // write that lands in only one of them is the bug this guards.
+  it('setTabFlow persists the pin and pushes it to main', async () => {
+    const { useCliTabsStore } = await import('@renderer/state/cliTabs');
+    const { api } = await import('@renderer/lib/api');
+    const select = vi.mocked(api.flows.select);
+    const store = useCliTabsStore.getState();
+    store.dockProject(meta('p1'));
+    const t1 = useCliTabsStore.getState().tabsByProject['p1']![0]!;
+
+    store.setTabFlow('p1', t1.id, 'flow-a');
+    expect(
+      useCliTabsStore.getState().tabsByProject['p1']![0]!.selectedFlowId,
+    ).toBe('flow-a');
+    expect(select).toHaveBeenCalledWith({
+      projectId: 'p1',
+      projectPath: '/tmp/p1',
+      tabId: t1.id,
+      flowId: 'flow-a',
+    });
+    // Persisted, not just in memory — a reload must still know the pin.
+    const raw = JSON.parse(localStorage.getItem('devspace:cliTabs:v1') as string);
+    expect(raw.tabsByProject.p1[0].selectedFlowId).toBe('flow-a');
+
+    // Unpin: undefined on the tab (not null — `selectedFlowId?: string`), and
+    // main is told, so the next run_flow stops resolving the old flow.
+    store.setTabFlow('p1', t1.id, null);
+    expect(
+      useCliTabsStore.getState().tabsByProject['p1']![0]!.selectedFlowId,
+    ).toBeUndefined();
+    expect(select).toHaveBeenLastCalledWith(
+      expect.objectContaining({ flowId: null }),
+    );
   });
 });

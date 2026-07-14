@@ -166,6 +166,13 @@ export async function launchClaudeCli(
   // run on different credentials at once. Applied on first launch only (tmux
   // ignores the wrapper on -A reattach), so switching a tab's auth needs a reload.
   const authPairs = await resolveAuthEnvPairs(opts.authProfileId);
+  // DEVSPACE_CLI_TAB_ID (injected into both spawn paths below) is IDENTITY, not
+  // selection: it names the dock tab this claude belongs to, and it is static
+  // for the life of the session. The bundled MCP server — spawned by this
+  // claude, so it inherits this env — sends the tab id with each flow op, and
+  // main looks the tab's SELECTED flow up live (flowControl's selectedByTab).
+  // So re-pinning a flow takes effect immediately; it never needs a restart —
+  // which matters because tmux ignores the env wrapper on a `-A` reattach.
   // Clean ANTHROPIC_* slate first so a key in the user's global shell env can't
   // leak into every tab — each tab then gets exactly its profile's creds
   // (subscription = none → login). `env -u` on an unset var is a harmless no-op.
@@ -225,6 +232,7 @@ export async function launchClaudeCli(
         'env',
         ...ANTHROPIC_UNSET,
         `DEVSPACE_PROJECT_ID=${opts.projectId}`,
+        `DEVSPACE_CLI_TAB_ID=${tabId}`,
         `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=${teams}`,
         `CLAUDE_CODE_SPAWN_BACKEND=${backend}`,
         ...authPairs,
@@ -248,7 +256,13 @@ export async function launchClaudeCli(
       // Always `env`-wrap (even subscription) to clear inherited ANTHROPIC_*
       // first, then apply the profile's vars — no tmux wrapper to ride on here.
       command: '/usr/bin/env',
-      args: [...ANTHROPIC_UNSET, ...authPairs, claudeBin, ...claudeArgs],
+      args: [
+        ...ANTHROPIC_UNSET,
+        `DEVSPACE_CLI_TAB_ID=${tabId}`,
+        ...authPairs,
+        claudeBin,
+        ...claudeArgs,
+      ],
       cols: opts.cols,
       rows: opts.rows,
     });

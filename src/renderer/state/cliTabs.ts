@@ -142,6 +142,10 @@ interface CliTabsState extends PersistedShape {
   setActiveTab: (projectId: string, tabId: string) => void;
   renameTab: (projectId: string, tabId: string, label: string) => void;
   reloadTab: (projectId: string, tabId: string) => Promise<void>;
+  // Pin an Agent Flow to a tab (right-click the tab → Use flow), so that tab's
+  // claude can `run_flow` with no `flow` arg. null unpins. Persists with the
+  // tab AND pushes to main, which holds the live lookup the MCP op reads.
+  setTabFlow: (projectId: string, tabId: string, flowId: string | null) => void;
   // Multi-column dock layout. addColumn seeds the new slot with a tab not
   // yet visible in any column (cloning the active pin would duplicate it
   // and blank the original column); the user can then click another chip
@@ -465,6 +469,29 @@ export const useCliTabsStore = create<CliTabsState>((set, get) => {
       });
     },
 
+    setTabFlow(projectId, tabId, flowId) {
+      const projectPath = get().projectsById[projectId]?.path;
+      set((prev) => {
+        const tabs = (prev.tabsByProject[projectId] ?? []).map((t) =>
+          // undefined, not null, when unpinning — `selectedFlowId?: string`, and
+          // a null would survive JSON.stringify into the persisted tab.
+          t.id === tabId ? { ...t, selectedFlowId: flowId ?? undefined } : t,
+        );
+        const next: PersistedShape = {
+          ...prev,
+          tabsByProject: { ...prev.tabsByProject, [projectId]: tabs },
+        };
+        persist(next);
+        return next;
+      });
+      // Main resolves the pin live on every MCP op, so the push is what makes a
+      // re-pin take effect without restarting the tab's claude session.
+      if (!projectPath) return; // undocked project — nothing for main to key on
+      void api.flows
+        ?.select?.({ projectId, projectPath, tabId, flowId })
+        .catch(() => undefined);
+    },
+
     addColumn() {
       set((prev) => {
         if (prev.columns.length >= MAX_COLUMNS) return prev;
@@ -601,6 +628,30 @@ if (typeof window !== 'undefined' && api?.pty?.setPinned) {
       /* preload bridge unavailable — non-fatal */
     }
   });
+}
+
+// Phase 3: re-push every dock-tab → flow pin on boot. The pin persists with the
+// CliTab (renderer = source of truth), but main's lookup is an in-memory map
+// that a restart empties — so without this, a pinned tab's `run_flow` would
+// answer "none pinned" until the user re-picked the flow. Same lifecycle as the
+// pinned/live session pushes: fire once against the rehydrated state; every
+// later change rides setTabFlow's own push.
+if (typeof window !== 'undefined' && api?.flows?.select) {
+  const s = useCliTabsStore.getState();
+  for (const [projectId, tabs] of Object.entries(s.tabsByProject)) {
+    const projectPath = s.projectsById[projectId]?.path;
+    if (!projectPath) continue; // no meta → main can't key it; a re-dock re-pushes
+    for (const tab of tabs) {
+      if (!tab.selectedFlowId) continue;
+      try {
+        void api.flows
+          .select({ projectId, projectPath, tabId: tab.id, flowId: tab.selectedFlowId })
+          .catch(() => undefined);
+      } catch {
+        /* preload bridge unavailable — non-fatal */
+      }
+    }
+  }
 }
 
 // beta.25: push the FULL open-tab session set (every project's every tab, not

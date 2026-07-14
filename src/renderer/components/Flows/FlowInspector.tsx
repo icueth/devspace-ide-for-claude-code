@@ -107,19 +107,19 @@ function FlowFields({
         </p>
       </Field>
 
-      {/* Chat is the ONLY run trigger (product decision) — the canvas designs
-          and monitors. This box exists so the missing Run button reads as
+      {/* Chat is the ONLY run trigger (product decision) — and chat lives in the
+          dock, not here. This box exists so the missing Run button reads as
           intent, not as an unfinished feature. */}
       <div className="mx-3 mt-2 rounded-md border border-border bg-surface-3 p-3">
         <div className="flex items-center gap-1.5 text-[11.5px] font-semibold text-text">
           <MessageSquare size={12} className="text-accent" />
-          Flows run from chat
+          Flows run from your claude tab
         </div>
         <p className="mt-1.5 text-[11px] leading-relaxed text-text-muted">
-          Ask the lead in the chat panel — it picks a flow by description and
-          starts it with its{' '}
-          <code className="font-mono text-accent">run_flow</code> tool. There is no
-          Run button here by design.
+          Runs start from your claude tab in the dock — it picks a flow by
+          description and starts it with{' '}
+          <code className="font-mono text-accent">run_flow</code>. Pin this flow to
+          a tab: right-click the tab → Use flow.
         </p>
       </div>
 

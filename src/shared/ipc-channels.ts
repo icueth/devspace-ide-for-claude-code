@@ -332,13 +332,11 @@ export const IPC = {
   FLOW_STOP: 'flow:stop',
   FLOW_SEND: 'flow:send',
   FLOW_CHANGED: 'flow:changed',
-  // Lead chat (phase 2): the FlowsView chat panel. SEND returns immediately
-  // ({ ok } — one turn in flight per project); the lead's reply arrives as a
-  // FLOW_CHAT_EVENT push when the print-mode turn finishes.
-  FLOW_CHAT_SEND: 'flow:chat-send',
-  FLOW_CHAT_HISTORY: 'flow:chat-history',
-  FLOW_CHAT_CLEAR: 'flow:chat-clear',
-  FLOW_CHAT_EVENT: 'flow:chat-event',
+  // Phase 3: chat moved to the dock — the user's normal claude tab IS the
+  // lead. This renderer → main push pins a flow to one dock tab
+  // (payload: { projectId, projectPath, tabId, flowId | null }) so the MCP
+  // `run_flow` from that session can default to it.
+  FLOW_SELECT: 'flow:select-for-tab',
 } as const;
 
 export type IpcChannel = (typeof IPC)[keyof typeof IPC];

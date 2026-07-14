@@ -95,10 +95,9 @@ import type {
 import type { PreviewChangedEvent, PreviewFileInfo } from '@shared/preview';
 import type {
   FlowChangedEvent,
-  FlowChatEvent,
-  FlowChatMessage,
   FlowGraph,
   FlowRun,
+  FlowSelectEvent,
 } from '@shared/flowTypes';
 
 export interface DevspaceApi {
@@ -169,18 +168,9 @@ export interface DevspaceApi {
     ) => Promise<{ ok: boolean; error?: string }>;
     // Single main → renderer push for both flow-list and run changes.
     onChanged: (cb: (event: FlowChangedEvent) => void) => () => void;
-    // Lead chat (phase 2). `send` resolves as soon as main ACCEPTS the turn
-    // (ok:false = refused, e.g. a turn already in flight for this project); the
-    // reply lands later on the FLOW_CHAT_EVENT push, never as this promise.
-    chat: {
-      send: (
-        projectPath: string,
-        text: string,
-      ) => Promise<{ ok: boolean; error?: string }>;
-      history: (projectPath: string) => Promise<FlowChatMessage[]>;
-      clear: (projectPath: string) => Promise<void>;
-      onChanged: (cb: (event: FlowChatEvent) => void) => () => void;
-    };
+    // Phase 3: pin a flow to one dock tab (right-click the tab → Use flow), so
+    // that tab's claude can `run_flow` with no `flow` arg. Fire-and-forget.
+    select: (evt: FlowSelectEvent) => Promise<void>;
   };
   fs: {
     readDir: (path: string) => Promise<DirEntry[]>;
@@ -721,12 +711,7 @@ function makeStubApi(): DevspaceApi {
       stop: notWired('flows.stop'),
       send: notWired('flows.send'),
       onChanged: () => () => undefined,
-      chat: {
-        send: notWired('flows.chat.send'),
-        history: () => Promise.resolve([]),
-        clear: notWired('flows.chat.clear'),
-        onChanged: () => () => undefined,
-      },
+      select: notWired('flows.select'),
     },
     fs: {
       readDir: notWired('fs.readDir'),

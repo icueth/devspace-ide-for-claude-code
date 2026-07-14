@@ -1,6 +1,16 @@
 import * as Dialog from '@radix-ui/react-dialog';
-import { Columns2, KeyRound, Plus, RotateCcw, Trash2, X } from 'lucide-react';
-import { useCallback, useState } from 'react';
+import {
+  Ban,
+  Check,
+  Columns2,
+  KeyRound,
+  Plus,
+  RotateCcw,
+  Spline,
+  Trash2,
+  X,
+} from 'lucide-react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { api } from '@renderer/lib/api';
 import { cn } from '@renderer/lib/utils';
@@ -12,6 +22,7 @@ import { activate } from '@renderer/state/activation';
 import { useCliTabsStore } from '@renderer/state/cliTabs';
 import { findColumnIdPinning } from '@renderer/state/cliTabsPins';
 import { useWorkspaceStore } from '@renderer/state/workspace';
+import type { FlowGraph } from '@shared/flowTypes';
 import type {
   ClaudeAuthProfile,
   CliProfile,
@@ -51,6 +62,32 @@ export function CliTabBar({
   const undockProject = useCliTabsStore((s) => s.undockProject);
   const reloadTab = useCliTabsStore((s) => s.reloadTab);
   const addColumn = useCliTabsStore((s) => s.addColumn);
+  const setTabFlow = useCliTabsStore((s) => s.setTabFlow);
+
+  // Agent Flow pins. The tab persists only the flow's ID, but the chip badge and
+  // the menu need its NAME — so the bar keeps a small per-project flow cache,
+  // filled lazily: on right-click (the menu needs the whole list anyway) and, at
+  // mount, for the projects that already have a pinned tab.
+  const [flowsByProject, setFlowsByProject] = useState<Record<string, FlowGraph[]>>({});
+  const requestedFlows = useRef(new Set<string>());
+  const loadFlows = useCallback((project: DockedProjectMeta, force = false): void => {
+    if (!force && requestedFlows.current.has(project.id)) return;
+    requestedFlows.current.add(project.id);
+    void api.flows
+      .list(project.path)
+      .then((flows) =>
+        setFlowsByProject((prev) => ({ ...prev, [project.id]: flows })),
+      )
+      .catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
+    for (const project of dockedProjects) {
+      const tabs = tabsByProject[project.id] ?? [];
+      if (tabs.some((t) => t.selectedFlowId)) loadFlows(project);
+    }
+  }, [dockedProjects, tabsByProject, loadFlows]);
+
   // Per-tab auth: the + button opens a profile picker; "Manage…" opens a dialog.
   const [authMenu, setAuthMenu] = useState<{ x: number; y: number } | null>(null);
   const [manageAuthOpen, setManageAuthOpen] = useState(false);
@@ -138,6 +175,10 @@ export function CliTabBar({
   ): void => {
     e.preventDefault();
     setContextMenu({ x: e.clientX, y: e.clientY, projectId, tabId });
+    // force: the user may have designed a flow since the last fetch, and the
+    // menu is the one place a stale list is actively wrong.
+    const project = dockedProjects.find((p) => p.id === projectId);
+    if (project) loadFlows(project, true);
   };
 
   const closeContextMenu = (): void => setContextMenu(null);
@@ -145,6 +186,12 @@ export function CliTabBar({
   const handleReload = (): void => {
     if (!contextMenu) return;
     void reloadTab(contextMenu.projectId, contextMenu.tabId);
+    closeContextMenu();
+  };
+
+  const handlePickFlow = (flowId: string | null): void => {
+    if (!contextMenu) return;
+    setTabFlow(contextMenu.projectId, contextMenu.tabId, flowId);
     closeContextMenu();
   };
 
@@ -207,6 +254,14 @@ export function CliTabBar({
             tab={tab}
             isActive={isActive}
             pinnedElsewhere={pinnedElsewhere}
+            flowLabel={
+              tab.selectedFlowId
+                ? // Fall back to the id: the cache may not have landed yet, and a
+                  // badge that flickers in is better than a pin that looks lost.
+                  (flowsByProject[project.id]?.find((f) => f.id === tab.selectedFlowId)
+                    ?.name ?? tab.selectedFlowId)
+                : undefined
+            }
             workspaceLabel={labelForWorkspace(project.workspaceId)}
             onSelect={() => handleSelect(project.id, tab.id)}
             onClose={() => handleClose(project.id, tab.id)}
@@ -272,6 +327,13 @@ export function CliTabBar({
         <ContextMenu
           x={contextMenu.x}
           y={contextMenu.y}
+          flows={flowsByProject[contextMenu.projectId] ?? []}
+          selectedFlowId={
+            tabsByProject[contextMenu.projectId]?.find(
+              (t) => t.id === contextMenu.tabId,
+            )?.selectedFlowId ?? null
+          }
+          onPickFlow={handlePickFlow}
           onClose={closeContextMenu}
           onReload={handleReload}
           onCloseProject={handleCloseProject}
@@ -562,12 +624,24 @@ function ConfirmDialog({
 interface ContextMenuProps {
   x: number;
   y: number;
+  flows: FlowGraph[];
+  selectedFlowId: string | null;
+  onPickFlow: (flowId: string | null) => void;
   onClose: () => void;
   onReload: () => void;
   onCloseProject: () => void;
 }
 
-function ContextMenu({ x, y, onClose, onReload, onCloseProject }: ContextMenuProps) {
+function ContextMenu({
+  x,
+  y,
+  flows,
+  selectedFlowId,
+  onPickFlow,
+  onClose,
+  onReload,
+  onCloseProject,
+}: ContextMenuProps) {
   return (
     <div
       onMouseDown={onClose}
@@ -579,13 +653,52 @@ function ContextMenu({ x, y, onClose, onReload, onCloseProject }: ContextMenuPro
     >
       <div
         onMouseDown={(e) => e.stopPropagation()}
-        className="absolute min-w-[180px] overflow-hidden rounded-[8px] border border-border bg-surface-2 shadow-[0_8px_28px_rgba(0,0,0,0.45)]"
+        className="absolute max-h-[70vh] min-w-[200px] overflow-y-auto rounded-[8px] border border-border bg-surface-2 shadow-[0_8px_28px_rgba(0,0,0,0.45)]"
         style={{ left: x, top: y, backgroundColor: 'var(--color-surface-2)' }}
       >
         <MenuItem icon={<RotateCcw size={12} />} onClick={onReload}>
           Reload tab
           <span className="ml-auto text-[10px] text-text-muted">respawn claude</span>
         </MenuItem>
+
+        {/* Pin a flow to THIS tab: its claude then runs the flow with a bare
+            run_flow (no `flow` arg). Selection is looked up live in main, so
+            picking here takes effect without restarting the session. */}
+        <div className="h-px bg-border" />
+        <div className="px-3 pb-1 pt-1.5 text-[10px] font-semibold uppercase tracking-wider text-text-muted">
+          Use flow
+        </div>
+        {flows.length === 0 ? (
+          <div className="px-3 pb-2 text-[10.5px] leading-relaxed text-text-dim">
+            No flows in this project yet — design one in the Flows view.
+          </div>
+        ) : (
+          <>
+            {flows.map((f) => {
+              const pinned = f.id === selectedFlowId;
+              return (
+                <MenuItem
+                  key={f.id}
+                  icon={<Spline size={12} className={pinned ? 'text-accent' : ''} />}
+                  // Re-picking the pinned flow unpins it — the row is a toggle,
+                  // which is what a ✓ leads the user to expect.
+                  onClick={() => onPickFlow(pinned ? null : f.id)}
+                >
+                  <span className="min-w-0 truncate">{f.name}</span>
+                  {pinned && <Check size={12} className="ml-auto shrink-0 text-accent" />}
+                </MenuItem>
+              );
+            })}
+            <MenuItem
+              icon={<Ban size={12} />}
+              onClick={() => onPickFlow(null)}
+            >
+              <span className={cn(!selectedFlowId && 'text-text-muted')}>None</span>
+              <span className="ml-auto text-[10px] text-text-muted">unpin</span>
+            </MenuItem>
+          </>
+        )}
+
         <div className="h-px bg-border" />
         <MenuItem
           icon={<Trash2 size={12} />}
@@ -632,6 +745,8 @@ interface TabChipProps {
   // Set only when the chip belongs to a workspace other than the active one
   // (D2). Rendered as a small label so cross-workspace chats are recognisable.
   workspaceLabel?: string;
+  // Name of the Agent Flow pinned to this tab (right-click → Use flow), if any.
+  flowLabel?: string;
   onSelect: () => void;
   onClose: () => void;
   onContextMenu: (e: React.MouseEvent) => void;
@@ -645,6 +760,7 @@ function TabChip({
   isActive,
   pinnedElsewhere,
   workspaceLabel,
+  flowLabel,
   onSelect,
   onClose,
   onContextMenu,
@@ -679,7 +795,9 @@ function TabChip({
         type="button"
         onClick={onSelect}
         className="flex max-w-[180px] items-center gap-2 px-2.5"
-        title={`${workspaceLabel ? `[${workspaceLabel}] ` : ''}${project.name} · ${tab.label}\nRight-click for Reload / Close · Drag to split`}
+        title={`${workspaceLabel ? `[${workspaceLabel}] ` : ''}${project.name} · ${tab.label}${
+          flowLabel ? `\nFlow: ${flowLabel} (run_flow uses it by default)` : ''
+        }\nRight-click for Reload / Use flow / Close · Drag to split`}
       >
         <span
           className={cn(
@@ -707,11 +825,19 @@ function TabChip({
           </span>
           <span
             className={cn(
-              'block max-w-full truncate text-[10px]',
+              'flex max-w-full items-center gap-1 text-[10px]',
               isActive ? 'text-text-secondary' : 'text-text-muted',
             )}
           >
-            {tab.label}
+            <span className="min-w-0 truncate">{tab.label}</span>
+            {/* The pinned flow — the tab's claude runs it on a bare run_flow, so
+                the chip has to say so somewhere. Truncated hard: this is a
+                reminder, not the flow list. */}
+            {flowLabel && (
+              <span className="max-w-[10ch] shrink-0 truncate rounded-[3px] border border-accent/30 bg-accent/10 px-1 text-[9px] leading-[1.35] text-accent">
+                {flowLabel}
+              </span>
+            )}
           </span>
         </span>
       </button>

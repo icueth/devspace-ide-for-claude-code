@@ -13,6 +13,9 @@
 //   DEVSPACE_TASK_SOCK     task control socket (default ~/.devspace/task-control.sock)
 //   DEVSPACE_FLOW_SOCK     flow control socket (default ~/.devspace/flow-control.sock)
 //   DEVSPACE_PROJECT_PATH  default repo when `repo` is omitted
+//   DEVSPACE_CLI_TAB_ID    the dock tab of the claude that spawned us (we
+//                          inherit its env) — sent with each flow op so DevSpace
+//                          can resolve the flow the user pinned to THIS session.
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
@@ -25,6 +28,9 @@ const FLOW_SOCK =
   process.env.DEVSPACE_FLOW_SOCK ||
   path.join(os.homedir(), '.devspace', 'flow-control.sock');
 const DEFAULT_REPO = process.env.DEVSPACE_PROJECT_PATH || '';
+// Empty when this claude wasn't launched from a dock tab (a flow node's own
+// agent, a bare CLI) — then nothing is pinned and `flow` stays mandatory.
+const TAB = process.env.DEVSPACE_CLI_TAB_ID || '';
 
 const idSchema = {
   type: 'object',
@@ -105,12 +111,15 @@ const TOOLS = [
   //     harden this module)? Call list_flows, see whether a flow's description
   //     matches the shape of the work, and if one does, run_flow it with a
   //     well-formed `task`.
+  //   • The user may PIN a flow to this session (right-click the dock tab → Use
+  //     flow); list_flows marks it [pinned]. That is a standing instruction —
+  //     prefer it for procedural work, and just omit `flow` to run it.
   //   • No flow fits? Say so and do the work yourself (or use create_task).
   // Never invent a flow name — only run what list_flows returned.
   {
     name: 'list_flows',
     description:
-      "List the Agent Flows the user has designed for this project: id, name, description, and the node graph (role + CLI + mode per node). Each flow's description says what kind of work it is for — read it to decide whether the user's request matches. Call this BEFORE run_flow, never guess a flow name. If MORE THAN ONE flow plausibly fits (or none clearly does), ask the user which to use — list the candidates with one-line reasons — instead of picking silently. If the user names a flow themselves, use that one.",
+      "List the Agent Flows the user has designed for this project: id, name, description, and the node graph (role + CLI + mode per node). Each flow's description says what kind of work it is for — read it to decide whether the user's request matches. The reply marks the flow pinned to this session — prefer it for procedural work unless the task clearly doesn't fit. Call this BEFORE run_flow, never guess a flow name. If MORE THAN ONE flow plausibly fits (or none clearly does), ask the user which to use — list the candidates with one-line reasons — instead of picking silently. If the user names a flow themselves, use that one.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -128,7 +137,11 @@ const TOOLS = [
     inputSchema: {
       type: 'object',
       properties: {
-        flow: { type: 'string', description: 'Flow name or id (from list_flows).' },
+        flow: {
+          type: 'string',
+          description:
+            'Flow name or id (from list_flows). OMIT it to use the flow the user pinned to this session (right-click the dock tab → Use flow).',
+        },
         task: {
           type: 'string',
           description:
@@ -139,7 +152,7 @@ const TOOLS = [
           description: 'Absolute project path. Defaults to the current project.',
         },
       },
-      required: ['flow', 'task'],
+      required: ['task'],
     },
   },
   {
@@ -207,12 +220,15 @@ const TOOL_OP = {
   merge_task: (a) => ({ op: 'merge', id: a.id }),
   discard_task: (a) => ({ op: 'discard', id: a.id }),
 
-  list_flows: (a) => ({ op: 'list', repo: a.repo || DEFAULT_REPO }),
+  // `tab` rides along so DevSpace can resolve THIS session's pinned flow — to
+  // mark it in the list, and to default to it when run_flow omits `flow`.
+  list_flows: (a) => ({ op: 'list', repo: a.repo || DEFAULT_REPO, tab: TAB }),
   run_flow: (a) => ({
     op: 'run',
     repo: a.repo || DEFAULT_REPO,
     flow: a.flow,
     task: a.task,
+    tab: TAB,
   }),
   flow_status: (a) => ({ op: 'status', runId: a.runId }),
   send_flow: (a) => ({ op: 'send', runId: a.runId, node: a.node, text: a.text }),
@@ -235,7 +251,21 @@ function resultText(name, res) {
   if (res.task) return `Task ${res.task.id} — ${res.task.status} on ${res.task.branch}`;
   if (res.diff !== undefined) return res.diff || '(no changes vs base branch)';
   if (res.tasks) return JSON.stringify(res.tasks, null, 2);
-  if (res.flows) return JSON.stringify(res.flows, null, 2) || '(no flows designed yet)';
+  if (res.flows) {
+    if (!Array.isArray(res.flows) || res.flows.length === 0) {
+      return '(no flows designed yet)';
+    }
+    // A digest line per flow ahead of the raw graph: the routing decision is
+    // made on name + description + [pinned], and burying those in 200 lines of
+    // node JSON is how a lead agent ends up ignoring the pin.
+    const digest = res.flows
+      .map(
+        (f) =>
+          `• ${f.name}${f.pinned ? ' [pinned]' : ''} — ${f.description || '(no description)'}`,
+      )
+      .join('\n');
+    return `${digest}\n\n${JSON.stringify(res.flows, null, 2)}`;
+  }
   if (res.runs) return JSON.stringify(res.runs, null, 2);
   if (res.run) return JSON.stringify(res.run, null, 2);
   if (res.runId) {
@@ -307,7 +337,7 @@ async function handle(msg) {
       return ok(id, {
         protocolVersion: params?.protocolVersion || '2024-11-05',
         capabilities: { tools: {} },
-        serverInfo: { name: 'devspace-tasks', version: '1.2.0' },
+        serverInfo: { name: 'devspace-tasks', version: '1.3.0' },
       });
     case 'notifications/initialized':
       return; // notification — no reply

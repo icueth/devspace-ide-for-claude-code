@@ -2,7 +2,6 @@ import { Plus, Spline } from 'lucide-react';
 import { useEffect } from 'react';
 
 import { FlowCanvas } from '@renderer/components/Flows/FlowCanvas';
-import { FlowChatPanel } from '@renderer/components/Flows/FlowChatPanel';
 import { FlowInspector } from '@renderer/components/Flows/FlowInspector';
 import { FlowRunLog } from '@renderer/components/Flows/FlowRunLog';
 import { openFlowSession } from '@renderer/lib/flowSession';
@@ -68,12 +67,6 @@ export function FlowsView({ projectPath }: Props) {
   return (
     <div className="flex h-full min-h-0">
       <FlowList selectedFlowId={selectedFlowId} />
-
-      {/* Chat sits LEFT of the canvas (mockup order): it is the entry point to
-          the whole feature — you talk first, the canvas shows what happens.
-          It renders with or without a flow; you can ask the lead for work
-          before any flow exists. */}
-      <FlowChatPanel projectPath={projectPath} />
 
       {draft ? (
         <>
@@ -218,8 +211,8 @@ function EmptyState({ hasFlows }: { hasFlows: boolean }) {
         </h2>
         <p className="mt-1.5 text-[11.5px] leading-relaxed text-text-muted">
           A flow is a graph of real CLI agents — each node runs an agent, each
-          edge hands its output to the next. Start from a template, then ask the
-          lead in chat to run it.
+          edge hands its output to the next. Start from a template, then run it
+          from your claude tab in the dock.
         </p>
 
         <div className="mt-4 space-y-1.5 text-left">

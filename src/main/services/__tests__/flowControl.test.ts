@@ -10,7 +10,12 @@ vi.mock('@main/utils/pathScope', () => ({
   }),
 }));
 
-import { routeFlowControl } from '../flowControl';
+// The dock-tab pin is keyed by projectId, which the router derives from the repo
+// path — pinned as 'p1' here so a test can seed the map the same way the
+// FLOW_SELECT IPC does.
+vi.mock('@main/services/ProjectScanner', () => ({ projectIdForPath: () => 'p1' }));
+
+import { resetSelectedFlows, routeFlowControl, setSelectedFlow } from '../flowControl';
 import type { FlowGraph, FlowRun } from '@shared/flowTypes';
 
 const FLOW: FlowGraph = {
@@ -62,6 +67,7 @@ const makeSvc = () => ({
 let svc: ReturnType<typeof makeSvc>;
 beforeEach(() => {
   svc = makeSvc();
+  resetSelectedFlows(); // module-level map — a leaked pin would cross-talk
 });
 
 describe('routeFlowControl — list', () => {
@@ -111,7 +117,6 @@ describe('routeFlowControl — run', () => {
 
   it.each([
     [{ op: 'run', flow: 'f', task: 't' }, 'repo required'],
-    [{ op: 'run', repo: '/ws/p', task: 't' }, 'flow required'],
     [{ op: 'run', repo: '/ws/p', flow: 'f' }, 'task required'],
     [{ op: 'run', repo: '/ws/p', flow: 'f', task: '   ' }, 'task required'],
   ])('rejects a malformed request (%#)', async (req, error) => {
@@ -138,6 +143,99 @@ describe('routeFlowControl — run', () => {
       routeFlowControl(svc, { op: 'run', repo: '/tmp/evil', flow: 'f', task: 't' }),
     ).rejects.toThrow(/outside any open workspace/);
     expect(svc.runFlow).not.toHaveBeenCalled();
+  });
+});
+
+// Phase 3: chat is the user's own claude tab in the dock. That session sends its
+// tab id with every op (DEVSPACE_CLI_TAB_ID → the MCP server's `tab`), which is
+// what lets a bare `run_flow` mean "the flow I pinned to this tab".
+describe('routeFlowControl — the dock-tab flow pin', () => {
+  it('runs the pinned flow when `flow` is omitted', async () => {
+    setSelectedFlow('p1', 'tab-7', 'f1');
+    const res = await routeFlowControl(svc, {
+      op: 'run',
+      repo: '/ws/proj',
+      task: 'add dark mode',
+      tab: 'tab-7',
+    });
+    expect(res).toEqual({ ok: true, runId: 'r1' });
+    expect(svc.runFlow).toHaveBeenCalledWith('/ws/proj', 'f1', 'add dark mode');
+  });
+
+  it('lets an explicit `flow` win over the pin — the agent can always override', async () => {
+    setSelectedFlow('p1', 'tab-7', 'f1');
+    await routeFlowControl(svc, {
+      op: 'run',
+      repo: '/ws/proj',
+      flow: 'other-flow',
+      task: 't',
+      tab: 'tab-7',
+    });
+    expect(svc.runFlow).toHaveBeenCalledWith('/ws/proj', 'other-flow', 't');
+  });
+
+  it('explains how to fix it when nothing is pinned and no flow is given', async () => {
+    const res = await routeFlowControl(svc, {
+      op: 'run',
+      repo: '/ws/proj',
+      task: 't',
+      tab: 'tab-7',
+    });
+    expect(res.ok).toBe(false);
+    expect(res.error).toMatch(/none pinned to this session/);
+    expect(res.error).toMatch(/right-click the dock tab/);
+    expect(svc.runFlow).not.toHaveBeenCalled();
+  });
+
+  it('errors the same way for a session with no tab id at all (claude outside the dock)', async () => {
+    setSelectedFlow('p1', 'tab-7', 'f1');
+    const res = await routeFlowControl(svc, { op: 'run', repo: '/ws/proj', task: 't' });
+    expect(res.ok).toBe(false);
+    expect(res.error).toMatch(/none pinned to this session/);
+  });
+
+  it('never leaks another tab\'s pin', async () => {
+    setSelectedFlow('p1', 'tab-7', 'f1');
+    const res = await routeFlowControl(svc, {
+      op: 'run',
+      repo: '/ws/proj',
+      task: 't',
+      tab: 'tab-OTHER',
+    });
+    expect(res.ok).toBe(false);
+    expect(svc.runFlow).not.toHaveBeenCalled();
+  });
+
+  it('unpins on a null flowId', async () => {
+    setSelectedFlow('p1', 'tab-7', 'f1');
+    setSelectedFlow('p1', 'tab-7', null);
+    const res = await routeFlowControl(svc, {
+      op: 'run',
+      repo: '/ws/proj',
+      task: 't',
+      tab: 'tab-7',
+    });
+    expect(res.ok).toBe(false);
+    expect(svc.runFlow).not.toHaveBeenCalled();
+  });
+
+  it('marks the pinned flow in `list` so the agent can prefer it', async () => {
+    setSelectedFlow('p1', 'tab-7', 'f1');
+    const res = await routeFlowControl(svc, {
+      op: 'list',
+      repo: '/ws/proj',
+      tab: 'tab-7',
+    });
+    expect(res.flows).toMatchObject([{ id: 'f1', pinned: true }]);
+  });
+
+  it('marks nothing when the session has no pin — no `pinned:false` noise', async () => {
+    const res = await routeFlowControl(svc, {
+      op: 'list',
+      repo: '/ws/proj',
+      tab: 'tab-7',
+    });
+    expect(JSON.stringify(res.flows)).not.toContain('pinned');
   });
 });
 

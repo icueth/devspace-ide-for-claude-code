@@ -460,6 +460,11 @@ export interface CliTab {
   // A fresh dock starts as a launcher instead of eagerly spawning Claude.
   // The flag is cleared once the user selects a CLI for this tab.
   awaitingCliChoice?: boolean;
+  // Phase 3 (Agent Flow): the flow PINNED to this tab (right-click → Use
+  // flow). The tab's claude session gets DEVSPACE_CLI_TAB_ID at launch, so
+  // the flow MCP tools can default run_flow to this selection. undefined =
+  // nothing pinned; the lead routes by description as before.
+  selectedFlowId?: string;
 }
 
 // Per-project shell terminal tab. The bottom-panel terminal supports many

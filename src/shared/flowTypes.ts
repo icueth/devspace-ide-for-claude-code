@@ -119,32 +119,14 @@ export interface FlowChangedEvent {
   run?: FlowRun; // present when a run changed
 }
 
-// ── lead chat (phase 2) ──────────────────────────────────────────────────────
-// The FlowsView chat panel talks to a "lead" agent: one claude print-mode turn
-// per user message (TmuxChatRunner), continuity via prompt-stuffed history,
-// flow tools via an explicit --mcp-config. Persisted per project at
-// <projectPath>/.devspace/flows/chat.json — plain curatable JSON.
-
-export type FlowChatRole = 'user' | 'lead';
-
-export interface FlowChatMessage {
-  id: string;
-  role: FlowChatRole;
-  text: string;
-  at: number;
-  // Set on a lead message when its turn started/steered a run — lets the
-  // panel link the bubble to the run it talks about.
-  runId?: string;
-  // The turn errored (claude exited non-zero / timed out); text carries the
-  // human-readable reason.
-  error?: boolean;
-}
-
-// Push payload for IPC.FLOW_CHAT_EVENT.
-export interface FlowChatEvent {
+// ── dock flow selection (phase 3) ────────────────────────────────────────────
+// Chat lives in the dock: the user's normal claude tab is the lead. A flow can
+// be PINNED to one dock tab (right-click the tab → Use flow); the MCP server
+// identifies the calling session via DEVSPACE_CLI_TAB_ID and `run_flow`
+// defaults to the pinned flow. Payload for IPC.FLOW_SELECT.
+export interface FlowSelectEvent {
+  projectId: string;
   projectPath: string;
-  // A finished turn appends the lead's message; 'busy' flags a turn in flight
-  // so every window renders the same typing indicator.
-  message?: FlowChatMessage;
-  busy?: boolean;
+  tabId: string;
+  flowId: string | null; // null = unpin
 }

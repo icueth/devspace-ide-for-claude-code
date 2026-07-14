@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer, webFrame, webUtils } from 'electron';
 
-import type { FlowChangedEvent, FlowChatEvent, FlowGraph } from '@shared/flowTypes';
+import type { FlowChangedEvent, FlowGraph, FlowSelectEvent } from '@shared/flowTypes';
 import { IPC } from '@shared/ipc-channels';
 import type { Task } from '@shared/types';
 
@@ -42,9 +42,9 @@ const api = {
       return () => ipcRenderer.removeListener(IPC.TASK_CHANGED, h);
     },
   },
-  // Agent Flow (phase 1). Graph CRUD + run monitoring. There is deliberately
-  // no `run` binding: runs start from chat (the lead agent's run_flow tool via
-  // the flow-control socket), never from the renderer.
+  // Agent Flow. Graph CRUD + run monitoring. There is deliberately no `run`
+  // binding: runs start from chat (the lead agent's run_flow tool via the
+  // flow-control socket), never from the renderer.
   flows: {
     list: (projectPath: string) => ipcRenderer.invoke(IPC.FLOW_LIST, projectPath),
     save: (projectPath: string, graph: FlowGraph) =>
@@ -60,22 +60,10 @@ const api = {
       ipcRenderer.on(IPC.FLOW_CHANGED, listener);
       return () => ipcRenderer.off(IPC.FLOW_CHANGED, listener);
     },
-    // Lead chat (phase 2). `send` returns as soon as the turn is ACCEPTED — the
-    // lead's reply arrives later on FLOW_CHAT_EVENT, because a print-mode turn
-    // can run for minutes and an invoke that waits would hang the panel.
-    chat: {
-      send: (projectPath: string, text: string) =>
-        ipcRenderer.invoke(IPC.FLOW_CHAT_SEND, projectPath, text),
-      history: (projectPath: string) =>
-        ipcRenderer.invoke(IPC.FLOW_CHAT_HISTORY, projectPath),
-      clear: (projectPath: string) =>
-        ipcRenderer.invoke(IPC.FLOW_CHAT_CLEAR, projectPath),
-      onChanged: (cb: (event: FlowChatEvent) => void) => {
-        const listener = (_e: unknown, ev: FlowChatEvent): void => cb(ev);
-        ipcRenderer.on(IPC.FLOW_CHAT_EVENT, listener);
-        return () => ipcRenderer.off(IPC.FLOW_CHAT_EVENT, listener);
-      },
-    },
+    // Phase 3: pin a flow to one dock tab (right-click the tab → Use flow), so
+    // that tab's claude can `run_flow` with no `flow` arg. Fire-and-forget —
+    // the renderer persists the pin and re-pushes it on boot.
+    select: (evt: FlowSelectEvent) => ipcRenderer.invoke(IPC.FLOW_SELECT, evt),
   },
   // Electron 32+ removed the non-standard `File.path` property from
   // renderer-side File objects when contextIsolation is on. The

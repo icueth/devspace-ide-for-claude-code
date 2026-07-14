@@ -198,7 +198,10 @@ describe('flow MCP tools (stdio → flow socket)', () => {
     }
   });
 
-  function flowRpc(requests: object[]): Promise<Array<Record<string, unknown>>> {
+  function flowRpc(
+    requests: object[],
+    env: Record<string, string> = {},
+  ): Promise<Array<Record<string, unknown>>> {
     return new Promise((resolve, reject) => {
       const child = spawn(process.execPath, [SCRIPT], {
         env: {
@@ -206,6 +209,7 @@ describe('flow MCP tools (stdio → flow socket)', () => {
           DEVSPACE_TASK_SOCK: sockPath,
           DEVSPACE_FLOW_SOCK: flowSock,
           DEVSPACE_PROJECT_PATH: '/fake/repo',
+          ...env,
         },
         stdio: ['pipe', 'pipe', 'inherit'],
       });
@@ -255,6 +259,101 @@ describe('flow MCP tools (stdio → flow socket)', () => {
     // The reply must hand the lead agent the runId AND tell it to monitor.
     expect(call.result.content[0].text).toMatch(/runId r1/);
     expect(call.result.content[0].text).toMatch(/flow_status/);
+  });
+
+  // Phase 3: the server inherits DEVSPACE_CLI_TAB_ID from the dock tab's claude
+  // that spawned it. Without `tab` on the wire, DevSpace cannot tell WHICH
+  // session is calling, and every pinned-flow run would fall back to an error.
+  it('relays its dock tab id with the flow ops', async () => {
+    await flowRpc(
+      [
+        { jsonrpc: '2.0', id: 1, method: 'initialize', params: {} },
+        {
+          jsonrpc: '2.0',
+          id: 2,
+          method: 'tools/call',
+          params: { name: 'list_flows', arguments: {} },
+        },
+        {
+          jsonrpc: '2.0',
+          id: 3,
+          method: 'tools/call',
+          // No `flow`: the pinned one is resolved by DevSpace from `tab`.
+          params: { name: 'run_flow', arguments: { task: 'add dark mode' } },
+        },
+      ],
+      { DEVSPACE_CLI_TAB_ID: 'tab-7' },
+    );
+    expect(flowReceived.find((r) => r.op === 'list')).toMatchObject({ tab: 'tab-7' });
+    expect(flowReceived.find((r) => r.op === 'run')).toMatchObject({
+      op: 'run',
+      task: 'add dark mode',
+      tab: 'tab-7',
+      repo: '/fake/repo',
+    });
+  });
+
+  it('run_flow no longer requires `flow` (a pinned session omits it)', async () => {
+    const out = await flowRpc([
+      { jsonrpc: '2.0', id: 1, method: 'initialize', params: {} },
+      { jsonrpc: '2.0', id: 2, method: 'tools/list' },
+    ]);
+    const tools = out.find((m) => m.id === 2) as {
+      result: { tools: Array<{ name: string; inputSchema: { required?: string[] } }> };
+    };
+    const runFlow = tools.result.tools.find((t) => t.name === 'run_flow')!;
+    expect(runFlow.inputSchema.required).toEqual(['task']);
+  });
+
+  it('marks the pinned flow in the list_flows reply text', async () => {
+    // The pin only helps if the agent SEES it — a `pinned:true` buried in the
+    // node graph JSON is not a routing signal, the digest line is. Own socket
+    // (not a rebind of flowSock) so this reply shape can't race the shared one.
+    const pinnedSock = path.join(
+      os.tmpdir(),
+      `fp-${Date.now()}-${Math.random().toString(36).slice(2)}.sock`,
+    );
+    const pinnedServer = net.createServer((conn) => {
+      conn.on('data', () => {
+        conn.write(
+          `${JSON.stringify({
+            ok: true,
+            flows: [
+              { id: 'f1', name: 'feature-pipeline', description: 'features', pinned: true },
+              { id: 'f2', name: 'bugfix', description: 'bugs' },
+            ],
+          })}\n`,
+        );
+      });
+    });
+    await new Promise<void>((r) => pinnedServer.listen(pinnedSock, r));
+
+    try {
+      const out = await flowRpc(
+        [
+          { jsonrpc: '2.0', id: 1, method: 'initialize', params: {} },
+          {
+            jsonrpc: '2.0',
+            id: 2,
+            method: 'tools/call',
+            params: { name: 'list_flows', arguments: {} },
+          },
+        ],
+        { DEVSPACE_FLOW_SOCK: pinnedSock },
+      );
+      const call = out.find((m) => m.id === 2) as {
+        result: { content: Array<{ text: string }> };
+      };
+      expect(call.result.content[0].text).toMatch(/feature-pipeline \[pinned\]/);
+      expect(call.result.content[0].text).not.toMatch(/bugfix \[pinned\]/);
+    } finally {
+      pinnedServer.close();
+      try {
+        fs.rmSync(pinnedSock, { force: true });
+      } catch {
+        /* ignore */
+      }
+    }
   });
 
   it('list_flows / stop_flow relay their ops to the flow socket', async () => {

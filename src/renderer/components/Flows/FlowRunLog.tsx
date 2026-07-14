@@ -1,7 +1,6 @@
 import { ChevronDown, ChevronUp } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 
-import { fmtTokens } from '@renderer/components/Flows/FlowChatPanel';
 import { cn } from '@renderer/lib/utils';
 import {
   type FlowEventKind,
@@ -12,9 +11,9 @@ import {
 import type { FlowRun } from '@shared/flowTypes';
 
 /**
- * The run log strip: the same derived timeline the chat shows as chips, but as
- * a dense timestamped list. Scoped to the run the canvas is visualizing — the
- * chat is global to the project, the log is about the flow in front of you.
+ * The run log strip: a dense timestamped view of the derived run timeline,
+ * scoped to the run the canvas is visualizing — the log is about the flow in
+ * front of you, not about the project as a whole.
  *
  * Collapsible and local to FlowsView (NOT a global console): it is part of
  * reading the canvas, and it must not follow the user to another view.
@@ -89,8 +88,8 @@ export function FlowRunLog({ run }: Props) {
         >
           {lines.length === 0 ? (
             <p className="pt-1 text-text-dim">
-              Ask the lead in chat to start this flow — every node transition lands
-              here.
+              Ask your claude tab in the dock to start this flow — every node
+              transition lands here.
             </p>
           ) : (
             lines.map((e) => <LogLine key={e.id} evt={e} />)
@@ -115,6 +114,10 @@ function LogLine({ evt }: { evt: FlowRunEvent }) {
       )}
     </div>
   );
+}
+
+function fmtTokens(t: number): string {
+  return t >= 1000 ? `${(t / 1000).toFixed(1)}k tok` : `${t} tok`;
 }
 
 function stamp(at: number): string {
