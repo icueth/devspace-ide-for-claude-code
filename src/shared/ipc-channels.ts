@@ -320,6 +320,18 @@ export const IPC = {
   BG_CLAUDE_LIST: 'bg-claude:list',
   BG_CLAUDE_READ_LOG: 'bg-claude:read-log',
   BG_CLAUDE_KILL: 'bg-claude:kill',
+
+  // Agent Flow (phase 1). Graph CRUD + run monitoring for the FlowsView
+  // canvas. Runs are STARTED from chat only (flow-control socket → MCP
+  // `run_flow`), so there is deliberately no FLOW_RUN invoke channel here.
+  // FLOW_CHANGED is the single main → renderer push: FlowChangedEvent.
+  FLOW_LIST: 'flow:list',
+  FLOW_SAVE: 'flow:save',
+  FLOW_DELETE: 'flow:delete',
+  FLOW_RUNS: 'flow:runs',
+  FLOW_STOP: 'flow:stop',
+  FLOW_SEND: 'flow:send',
+  FLOW_CHANGED: 'flow:changed',
 } as const;
 
 export type IpcChannel = (typeof IPC)[keyof typeof IPC];
