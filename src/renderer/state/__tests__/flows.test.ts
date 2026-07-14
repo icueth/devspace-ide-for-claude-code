@@ -200,6 +200,50 @@ describe('flows store — draft editing', () => {
   });
 });
 
+describe('flows store — edge editing', () => {
+  it('disconnect matches the branch exactly — a gate keeps its other branch', () => {
+    const g = graph('f1');
+    g.nodes.push({
+      id: 'gate1', kind: 'gate', role: 'ok?', rolePrompt: '', condition: 'x',
+      cliId: 'claude', mode: 'headless', x: 600, y: 0,
+    });
+    g.edges = [
+      { from: 'gate1', to: 'b', branch: 'pass', label: 'pass ✓' },
+      { from: 'gate1', to: 'b', branch: 'fail', label: 'fail ✗ retry' },
+    ];
+    useFlowsStore.setState({ flows: [g], selectedFlowId: 'f1', draft: structuredClone(g) });
+
+    useFlowsStore.getState().disconnect('gate1', 'b', 'fail');
+    expect(useFlowsStore.getState().draft!.edges).toEqual([
+      { from: 'gate1', to: 'b', branch: 'pass', label: 'pass ✓' },
+    ]);
+  });
+
+  it('setEdgeBranch flips a gate edge and refuses when the slot is taken', () => {
+    const g = graph('f1');
+    g.nodes.push({
+      id: 'gate1', kind: 'gate', role: 'ok?', rolePrompt: '', condition: 'x',
+      cliId: 'claude', mode: 'headless', x: 600, y: 0,
+    });
+    g.edges = [{ from: 'gate1', to: 'b', branch: 'pass', label: 'pass ✓' }];
+    useFlowsStore.setState({ flows: [g], selectedFlowId: 'f1', draft: structuredClone(g) });
+
+    useFlowsStore.getState().setEdgeBranch(g.edges[0]!, 'fail');
+    expect(useFlowsStore.getState().draft!.edges[0]).toMatchObject({
+      branch: 'fail',
+      label: 'fail ✗ retry',
+    });
+
+    // Occupied slot: flipping back would collapse two edges into one.
+    useFlowsStore.getState().connect('gate1', 'b', 'pass');
+    const before = structuredClone(useFlowsStore.getState().draft!.edges);
+    useFlowsStore
+      .getState()
+      .setEdgeBranch({ from: 'gate1', to: 'b', branch: 'fail' }, 'pass');
+    expect(useFlowsStore.getState().draft!.edges).toEqual(before);
+  });
+});
+
 describe('flows store — project switch', () => {
   it('flushes a pending edit to the OLD project before repointing the store', async () => {
     useFlowsStore.setState({

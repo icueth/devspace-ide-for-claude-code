@@ -1,5 +1,7 @@
+import { createPortal } from 'react-dom';
+
 import { cn } from '@renderer/lib/utils';
-import type { FlowNodeKind } from '@shared/flowTypes';
+import type { FlowEdge, FlowNodeKind } from '@shared/flowTypes';
 
 /** Canvas furniture: the zoom cluster and the right-click menu. */
 
@@ -9,6 +11,7 @@ export interface Menu {
   worldX: number;
   worldY: number;
   nodeId: string | null;
+  edge: FlowEdge | null;
 }
 
 export function ZoomBtn({
@@ -35,14 +38,21 @@ export function ZoomBtn({
 
 export function ContextMenu({
   menu,
+  edgeFromGate,
   onClose,
   onAddNode,
   onDeleteNode,
+  onDeleteEdge,
+  onSetEdgeBranch,
 }: {
   menu: Menu;
+  /** menu.edge leaves a gate — offer the pass/fail branch switch. */
+  edgeFromGate: boolean;
   onClose: () => void;
   onAddNode: (x: number, y: number, kind: FlowNodeKind) => void;
   onDeleteNode: (id: string) => void;
+  onDeleteEdge: (edge: FlowEdge) => void;
+  onSetEdgeBranch: (edge: FlowEdge, branch: FlowEdge['branch']) => void;
 }) {
   const add = (kind: FlowNodeKind) => () => {
     // Drop the card centred on the cursor. Half of an agent card is close
@@ -50,40 +60,98 @@ export function ContextMenu({
     onAddNode(menu.worldX - 104, menu.worldY - 39, kind);
     onClose();
   };
-  return (
+  const edge = menu.edge;
+
+  // Portalled to <body>: the canvas viewport is overflow-hidden and sits below
+  // transformed ancestors (the workbench zoom), which hijack position:fixed —
+  // rendered in place the menu lands outside the clip box and never shows.
+  return createPortal(
     <>
-      <div className="fixed inset-0 z-40" onPointerDown={onClose} />
+      <div
+        className="fixed inset-0 z-40"
+        onPointerDown={onClose}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          onClose();
+        }}
+      />
       <div
         role="menu"
-        style={{ left: menu.clientX, top: menu.clientY }}
+        style={{
+          left: Math.min(menu.clientX, window.innerWidth - 216),
+          top: Math.min(menu.clientY, window.innerHeight - 220),
+        }}
         className="fixed z-50 min-w-[200px] rounded-lg border border-border-emphasis bg-surface-3 p-1 shadow-2xl shadow-black/60"
       >
-        <MenuItem onClick={add('agent')} glyph="⬡">
-          Add Agent
-        </MenuItem>
-        <MenuItem onClick={add('gate')} glyph="◇">
-          Add Gate (condition)
-        </MenuItem>
-        <MenuItem onClick={add('note')} glyph="▤">
-          Add Note
-        </MenuItem>
-        {menu.nodeId && (
+        {edge ? (
           <>
-            <hr className="my-1 border-border" />
+            {edgeFromGate && (
+              <>
+                <MenuItem
+                  glyph="✓"
+                  disabled={edge.branch !== 'fail'}
+                  onClick={() => {
+                    onSetEdgeBranch(edge, 'pass');
+                    onClose();
+                  }}
+                >
+                  Make pass branch
+                </MenuItem>
+                <MenuItem
+                  glyph="✗"
+                  disabled={edge.branch === 'fail'}
+                  onClick={() => {
+                    onSetEdgeBranch(edge, 'fail');
+                    onClose();
+                  }}
+                >
+                  Make fail branch (retry)
+                </MenuItem>
+                <hr className="my-1 border-border" />
+              </>
+            )}
             <MenuItem
               danger
               glyph="✕"
               onClick={() => {
-                onDeleteNode(menu.nodeId!);
+                onDeleteEdge(edge);
                 onClose();
               }}
             >
-              Delete node
+              Delete edge
             </MenuItem>
+          </>
+        ) : (
+          <>
+            <MenuItem onClick={add('agent')} glyph="⬡">
+              Add Agent
+            </MenuItem>
+            <MenuItem onClick={add('gate')} glyph="◇">
+              Add Gate (condition)
+            </MenuItem>
+            <MenuItem onClick={add('note')} glyph="▤">
+              Add Note
+            </MenuItem>
+            {menu.nodeId && (
+              <>
+                <hr className="my-1 border-border" />
+                <MenuItem
+                  danger
+                  glyph="✕"
+                  onClick={() => {
+                    onDeleteNode(menu.nodeId!);
+                    onClose();
+                  }}
+                >
+                  Delete node
+                </MenuItem>
+              </>
+            )}
           </>
         )}
       </div>
-    </>
+    </>,
+    document.body,
   );
 }
 

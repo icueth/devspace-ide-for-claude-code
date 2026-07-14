@@ -91,6 +91,10 @@ export function FlowsView({ projectPath }: Props) {
               onAddNode={useFlowsStore.getState().addNode}
               onConnect={useFlowsStore.getState().connect}
               onDeleteNode={useFlowsStore.getState().deleteNode}
+              onDisconnect={(edge) =>
+                useFlowsStore.getState().disconnect(edge.from, edge.to, edge.branch)
+              }
+              onSetEdgeBranch={useFlowsStore.getState().setEdgeBranch}
               onOpenSession={openSession}
             />
             <FlowRunLog run={run} />

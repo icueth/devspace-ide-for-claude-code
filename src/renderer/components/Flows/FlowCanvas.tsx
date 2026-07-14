@@ -31,13 +31,17 @@ interface Props {
   onAddNode: (x: number, y: number, kind?: FlowNodeKind) => void;
   onConnect: (from: string, to: string, branch?: FlowEdge['branch']) => void;
   onDeleteNode: (id: string) => void;
+  onDisconnect: (edge: FlowEdge) => void;
+  onSetEdgeBranch: (edge: FlowEdge, branch: FlowEdge['branch']) => void;
   onOpenSession: (nodeId: string) => void;
 }
 
 type Drag =
   | { kind: 'pan'; sx: number; sy: number }
   | { kind: 'node'; id: string; ox: number; oy: number }
-  | { kind: 'wire'; from: string; branch?: FlowEdge['branch'] };
+  // `replace` = the wire is an existing edge's target end being re-attached;
+  // a successful drop swaps the old edge for the new one atomically.
+  | { kind: 'wire'; from: string; branch?: FlowEdge['branch']; replace?: FlowEdge };
 
 type Wire = { from: string; branch?: FlowEdge['branch']; x: number; y: number };
 
@@ -52,6 +56,8 @@ export function FlowCanvas({
   onAddNode,
   onConnect,
   onDeleteNode,
+  onDisconnect,
+  onSetEdgeBranch,
   onOpenSession,
 }: Props) {
   const viewportRef = useRef<HTMLDivElement>(null);
@@ -59,6 +65,7 @@ export function FlowCanvas({
   const [pan, setPan] = useState({ x: 40, y: 40 });
   const [menu, setMenu] = useState<Menu | null>(null);
   const [wire, setWire] = useState<Wire | null>(null);
+  const [selectedEdge, setSelectedEdge] = useState<FlowEdge | null>(null);
 
   // Drag lives in a ref: pointermove fires far faster than React can commit,
   // and the handler must read the CURRENT gesture, not a closed-over snapshot.
@@ -98,8 +105,41 @@ export function FlowCanvas({
   // Frame the graph when the flow changes (not on every node edit).
   useLayoutEffect(() => {
     fitView();
+    setSelectedEdge(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [graph.id]);
+
+  // Delete/Backspace removes the selected edge (or node); Escape clears.
+  // Skipped while typing — the inspector's inputs share the window.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const t = document.activeElement as HTMLElement | null;
+      if (
+        t &&
+        (t.tagName === 'INPUT' ||
+          t.tagName === 'TEXTAREA' ||
+          t.tagName === 'SELECT' ||
+          t.isContentEditable)
+      ) {
+        return;
+      }
+      if (e.key === 'Escape') {
+        setMenu(null);
+        setSelectedEdge(null);
+        onSelectNode(null);
+        return;
+      }
+      if (e.key !== 'Delete' && e.key !== 'Backspace') return;
+      if (selectedEdge) {
+        onDisconnect(selectedEdge);
+        setSelectedEdge(null);
+      } else if (selectedNodeId) {
+        onDeleteNode(selectedNodeId);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [selectedEdge, selectedNodeId, onDisconnect, onDeleteNode, onSelectNode]);
 
   // Wheel zoom around the cursor. Registered imperatively because React's
   // onWheel is passive — preventDefault there is a no-op and the whole
@@ -151,7 +191,12 @@ export function FlowCanvas({
       const target = el?.closest('[data-node-id]')?.getAttribute('data-node-id');
       // The store rejects illegal wires (self, note, fail→non-agent) — the
       // canvas only reports the gesture.
-      if (target && target !== d.from) onConnect(d.from, target, d.branch);
+      if (!target || target === d.from) return; // dropped on nothing: keep as-was
+      if (d.replace) {
+        if (target === d.replace.to) return; // dropped back home — unchanged
+        onDisconnect(d.replace);
+      }
+      onConnect(d.from, target, d.branch);
     };
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', onUp);
@@ -159,19 +204,35 @@ export function FlowCanvas({
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
     };
-  }, [clientToWorld, onMoveNode, onConnect]);
+  }, [clientToWorld, onMoveNode, onConnect, onDisconnect]);
 
   const onViewportPointerDown = (e: React.PointerEvent) => {
     setMenu(null);
     if (e.button !== 0) return;
-    const nodeEl = (e.target as HTMLElement).closest('[data-node-id]');
-    if (nodeEl) return; // node/port handlers own the gesture
+    const el = e.target as HTMLElement;
+    if (el.closest('[data-node-id]')) return; // node/port handlers own the gesture
+    if (el.closest('[data-edge-from]')) return; // edge hit path owns selection
     onSelectNode(null);
+    setSelectedEdge(null);
     dragRef.current = {
       kind: 'pan',
       sx: e.clientX - pan.x,
       sy: e.clientY - pan.y,
     };
+  };
+
+  /** The edge under the cursor, resolved from the hit path's data attributes. */
+  const edgeAt = (target: Element): FlowEdge | null => {
+    const el = target.closest('[data-edge-from]');
+    if (!el) return null;
+    const from = el.getAttribute('data-edge-from') ?? '';
+    const to = el.getAttribute('data-edge-to') ?? '';
+    const branch = el.getAttribute('data-edge-branch') || undefined;
+    return (
+      graph.edges.find(
+        (ed) => ed.from === from && ed.to === to && (ed.branch ?? undefined) === branch,
+      ) ?? null
+    );
   };
 
   const onContextMenu = (e: React.MouseEvent) => {
@@ -181,7 +242,16 @@ export function FlowCanvas({
       (e.target as HTMLElement)
         .closest('[data-node-id]')
         ?.getAttribute('data-node-id') ?? null;
-    setMenu({ clientX: e.clientX, clientY: e.clientY, worldX: wx, worldY: wy, nodeId });
+    const edge = nodeId ? null : edgeAt(e.target as Element);
+    if (edge) setSelectedEdge(edge);
+    setMenu({
+      clientX: e.clientX,
+      clientY: e.clientY,
+      worldX: wx,
+      worldY: wy,
+      nodeId,
+      edge,
+    });
   };
 
   return (
@@ -204,7 +274,25 @@ export function FlowCanvas({
           transformOrigin: '0 0',
         }}
       >
-        <FlowEdges graph={graph} statuses={statuses} wire={wire} />
+        <FlowEdges
+          graph={graph}
+          statuses={statuses}
+          wire={wire}
+          selectedEdge={selectedEdge}
+          onSelectEdge={(edge) => {
+            setSelectedEdge(edge);
+            onSelectNode(null);
+          }}
+          onStartRetarget={(edge, at) => {
+            dragRef.current = {
+              kind: 'wire',
+              from: edge.from,
+              branch: edge.branch,
+              replace: edge,
+            };
+            setWire({ from: edge.from, branch: edge.branch, x: at[0], y: at[1] });
+          }}
+        />
 
         {graph.nodes.map((node) => (
           <FlowNodeCard
@@ -218,6 +306,7 @@ export function FlowCanvas({
             onPointerDown={(e) => {
               if (e.button !== 0) return;
               e.stopPropagation();
+              setSelectedEdge(null);
               onSelectNode(node.id);
               const [wx, wy] = clientToWorld(e.clientX, e.clientY);
               dragRef.current = {
@@ -239,9 +328,10 @@ export function FlowCanvas({
       </div>
 
       <div className="pointer-events-none absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full border border-border bg-surface-2/90 px-4 py-1.5 text-[11px] text-text-muted backdrop-blur">
-        <b className="font-medium text-accent">Right-click</b> add agent / gate / note ·{' '}
+        <b className="font-medium text-accent">Right-click</b> add / edit ·{' '}
         <b className="font-medium text-accent">drag a right port</b> to connect ·{' '}
-        <b className="font-medium text-accent">scroll</b> to zoom
+        <b className="font-medium text-accent">click a wire</b> + Delete removes, drag
+        its end re-attaches · <b className="font-medium text-accent">scroll</b> to zoom
       </div>
 
       <div className="absolute bottom-3 right-3 flex items-center gap-px overflow-hidden rounded-md border border-border bg-surface-3">
@@ -268,9 +358,19 @@ export function FlowCanvas({
       {menu && (
         <ContextMenu
           menu={menu}
+          edgeFromGate={
+            !!menu.edge &&
+            (graph.nodes.find((n) => n.id === menu.edge!.from)?.kind ?? 'agent') ===
+              'gate'
+          }
           onClose={() => setMenu(null)}
           onAddNode={onAddNode}
           onDeleteNode={onDeleteNode}
+          onDeleteEdge={(edge) => {
+            onDisconnect(edge);
+            setSelectedEdge(null);
+          }}
+          onSetEdgeBranch={onSetEdgeBranch}
         />
       )}
     </div>

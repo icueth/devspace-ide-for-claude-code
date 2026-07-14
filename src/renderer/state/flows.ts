@@ -143,7 +143,8 @@ interface FlowsState {
   updateNode: (id: string, patch: Partial<FlowNode>) => void;
   deleteNode: (id: string) => void;
   connect: (from: string, to: string, branch?: FlowEdge['branch']) => void;
-  disconnect: (from: string, to: string) => void;
+  disconnect: (from: string, to: string, branch?: FlowEdge['branch']) => void;
+  setEdgeBranch: (edge: FlowEdge, branch: FlowEdge['branch']) => void;
   updateFlowMeta: (patch: Partial<Pick<FlowGraph, 'name' | 'description'>>) => void;
 }
 
@@ -408,11 +409,40 @@ export const useFlowsStore = create<FlowsState>((set, get) => {
       });
     },
 
-    disconnect(from, to) {
+    disconnect(from, to, branch) {
+      // Exact-match on branch: a gate may run pass AND fail edges to the same
+      // node, and deleting one must never take the other with it.
       mutate((g) => ({
         ...g,
-        edges: g.edges.filter((e) => !(e.from === from && e.to === to)),
+        edges: g.edges.filter(
+          (e) => !(e.from === from && e.to === to && e.branch === branch),
+        ),
       }));
+    },
+
+    setEdgeBranch(edge, branch) {
+      mutate((g) => {
+        const src = g.nodes.find((n) => n.id === edge.from);
+        const dst = g.nodes.find((n) => n.id === edge.to);
+        // Same legality rules as connect(): branches only leave a gate, and a
+        // fail branch must land on an agent.
+        if (!src || kindOf(src) !== 'gate') return g;
+        if (branch === 'fail' && kindOf(dst) !== 'agent') return g;
+        // The target slot is taken — switching would collapse two edges.
+        if (g.edges.some((e) => e.from === edge.from && e.to === edge.to && e.branch === branch)) {
+          return g;
+        }
+        const defaults = ['handoff', 'pass ✓', 'fail ✗ retry'];
+        return {
+          ...g,
+          edges: g.edges.map((e) => {
+            if (e.from !== edge.from || e.to !== edge.to || e.branch !== edge.branch) return e;
+            // Default labels follow the branch; hand-written ones stay.
+            const label = !e.label || defaults.includes(e.label) ? edgeLabelFor(branch) : e.label;
+            return { ...e, branch, label };
+          }),
+        };
+      });
     },
 
     updateFlowMeta(patch) {

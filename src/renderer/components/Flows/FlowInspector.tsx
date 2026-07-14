@@ -52,7 +52,7 @@ export function FlowInspector({
           node={node}
           nodeRun={nodeRun}
           authProfiles={authProfiles}
-          cliProfiles={cliProfiles.filter((p) => p.cliId === node.cliId)}
+          cliProfiles={cliProfiles}
           onUpdate={(patch) => onUpdateNode(node.id, patch)}
           onDelete={() => onDeleteNode(node.id)}
           onOpenSession={() => onOpenSession(node.id)}

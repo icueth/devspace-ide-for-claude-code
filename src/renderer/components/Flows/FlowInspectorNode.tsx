@@ -58,19 +58,29 @@ function AgentFields({
         />
       </Field>
 
-      <Field label="CLI provider">
+      {/* One flat picker, dock-style: built-in CLIs plus every custom provider
+          profile as a first-class entry ("codex · MaxPlus"), so choosing a
+          custom setup is one click — not provider first, profile second. */}
+      <Field label="CLI">
         <select
-          value={node.cliId}
+          value={node.cliProfileId ? `${node.cliId}::${node.cliProfileId}` : node.cliId}
           onChange={(e) => {
-            const cliId = e.target.value as CliId;
+            const [cliId, profileId] = e.target.value.split('::') as [
+              CliId,
+              string | undefined,
+            ];
             // Headless is `claude -p` only (see flowTypes / validateGraph):
             // switching to another provider must not leave an unrunnable graph.
-            // `model` is a claude flag too — drop it with the provider.
+            // `model` + auth profile are claude things — drop them with it.
             onUpdate({
               cliId,
-              cliProfileId: undefined,
+              cliProfileId: profileId || undefined,
               ...(cliId !== 'claude'
-                ? { model: undefined, ...(node.mode === 'headless' ? { mode: 'interactive' as const } : {}) }
+                ? {
+                    model: undefined,
+                    authProfileId: undefined,
+                    ...(node.mode === 'headless' ? { mode: 'interactive' as const } : {}),
+                  }
                 : {}),
             });
           }}
@@ -78,13 +88,24 @@ function AgentFields({
         >
           {CLI_IDS.map((id) => (
             <option key={id} value={id}>
-              {id}
+              {id === 'claude' ? 'claude' : `${id} (default)`}
             </option>
           ))}
+          {cliProfiles.length > 0 && (
+            <optgroup label="Custom profiles">
+              {cliProfiles.map((p) => (
+                <option key={p.id} value={`${p.cliId}::${p.id}`}>
+                  {p.cliId} · {p.name}
+                </option>
+              ))}
+            </optgroup>
+          )}
         </select>
       </Field>
 
-      {isClaude ? (
+      {/* The custom-profile choice lives in the CLI picker above; claude keeps
+          its separate credentials select (same split as the dock's + menu). */}
+      {isClaude && (
         <Field label="Auth profile">
           <select
             value={node.authProfileId ?? ''}
@@ -94,21 +115,6 @@ function AgentFields({
             {/* '' = whatever the CLI would use on its own (subscription). */}
             <option value="">Default</option>
             {authProfiles.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}
-              </option>
-            ))}
-          </select>
-        </Field>
-      ) : (
-        <Field label="CLI profile">
-          <select
-            value={node.cliProfileId ?? ''}
-            onChange={(e) => onUpdate({ cliProfileId: e.target.value || undefined })}
-            className={inputCls}
-          >
-            <option value="">{node.cliId} default</option>
-            {cliProfiles.map((p) => (
               <option key={p.id} value={p.id}>
                 {p.name}
               </option>

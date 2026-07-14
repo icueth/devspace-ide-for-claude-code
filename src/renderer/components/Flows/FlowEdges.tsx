@@ -12,9 +12,24 @@ interface Props {
   statuses: Record<string, FlowNodeStatus>;
   /** The wire being dragged, in world coords. */
   wire: { from: string; branch?: FlowEdge['branch']; x: number; y: number } | null;
+  selectedEdge: FlowEdge | null;
+  onSelectEdge: (edge: FlowEdge) => void;
+  /** Grab the selected edge's target end to re-attach it elsewhere. */
+  onStartRetarget: (edge: FlowEdge, at: [number, number]) => void;
 }
 
-export function FlowEdges({ graph, statuses, wire }: Props) {
+function sameEdge(a: FlowEdge | null, b: FlowEdge): boolean {
+  return !!a && a.from === b.from && a.to === b.to && a.branch === b.branch;
+}
+
+export function FlowEdges({
+  graph,
+  statuses,
+  wire,
+  selectedEdge,
+  onSelectEdge,
+  onStartRetarget,
+}: Props) {
   return (
     <svg width={1} height={1} style={{ overflow: 'visible' }} aria-hidden>
       <defs>
@@ -33,6 +48,8 @@ export function FlowEdges({ graph, statuses, wire }: Props) {
         const [x1, y1] = outPort(a, edge.branch);
         const [x2, y2] = inPort(b);
         const [mx, my] = edgeMid(x1, y1, x2, y2);
+        const d = edgePath(x1, y1, x2, y2);
+        const selected = sameEdge(selectedEdge, edge);
 
         // A fail edge is the retry loop — it stays red whether or not anything
         // has failed yet, because it describes the ROUTE, not the state.
@@ -53,10 +70,27 @@ export function FlowEdges({ graph, statuses, wire }: Props) {
 
         return (
           <g key={`${edge.from}-${edge.branch ?? 'x'}->${edge.to}`}>
+            {/* Fat transparent twin: the visible 1.6px stroke is unhittable,
+                so this is what the pointer actually selects/right-clicks. */}
             <path
-              d={edgePath(x1, y1, x2, y2)}
+              d={d}
               fill="none"
-              strokeWidth={1.6}
+              stroke="transparent"
+              strokeWidth={14}
+              style={{ pointerEvents: 'stroke', cursor: 'pointer' }}
+              data-edge-from={edge.from}
+              data-edge-to={edge.to}
+              data-edge-branch={edge.branch ?? ''}
+              onPointerDown={(e) => {
+                if (e.button !== 0) return;
+                e.stopPropagation();
+                onSelectEdge(edge);
+              }}
+            />
+            <path
+              d={d}
+              fill="none"
+              strokeWidth={selected ? 2.6 : 1.6}
               className={cn(
                 isFail
                   ? 'stroke-semantic-error'
@@ -67,6 +101,7 @@ export function FlowEdges({ graph, statuses, wire }: Props) {
                       : isPass
                         ? 'stroke-semantic-success/70'
                         : 'stroke-border-hi',
+                selected && 'stroke-accent',
               )}
               // Fail wires are dashed for good: a dashed line reads as
               // "conditional", and the retry arc must never be mistaken for a
@@ -92,6 +127,23 @@ export function FlowEdges({ graph, statuses, wire }: Props) {
               >
                 {edge.label}
               </text>
+            )}
+            {selected && (
+              // Grab handle on the target end — drag it onto another node to
+              // re-attach the edge (drop on empty space keeps it as-is).
+              <circle
+                cx={x2}
+                cy={y2}
+                r={5.5}
+                strokeWidth={1.5}
+                className="fill-surface-3 stroke-accent"
+                style={{ cursor: 'grab', pointerEvents: 'all' }}
+                onPointerDown={(e) => {
+                  if (e.button !== 0) return;
+                  e.stopPropagation();
+                  onStartRetarget(edge, [x2, y2]);
+                }}
+              />
             )}
           </g>
         );
