@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer, webFrame, webUtils } from 'electron';
 
-import type { FlowChangedEvent, FlowGraph } from '@shared/flowTypes';
+import type { FlowChangedEvent, FlowChatEvent, FlowGraph } from '@shared/flowTypes';
 import { IPC } from '@shared/ipc-channels';
 import type { Task } from '@shared/types';
 
@@ -59,6 +59,22 @@ const api = {
       const listener = (_e: unknown, ev: FlowChangedEvent): void => cb(ev);
       ipcRenderer.on(IPC.FLOW_CHANGED, listener);
       return () => ipcRenderer.off(IPC.FLOW_CHANGED, listener);
+    },
+    // Lead chat (phase 2). `send` returns as soon as the turn is ACCEPTED — the
+    // lead's reply arrives later on FLOW_CHAT_EVENT, because a print-mode turn
+    // can run for minutes and an invoke that waits would hang the panel.
+    chat: {
+      send: (projectPath: string, text: string) =>
+        ipcRenderer.invoke(IPC.FLOW_CHAT_SEND, projectPath, text),
+      history: (projectPath: string) =>
+        ipcRenderer.invoke(IPC.FLOW_CHAT_HISTORY, projectPath),
+      clear: (projectPath: string) =>
+        ipcRenderer.invoke(IPC.FLOW_CHAT_CLEAR, projectPath),
+      onChanged: (cb: (event: FlowChatEvent) => void) => {
+        const listener = (_e: unknown, ev: FlowChatEvent): void => cb(ev);
+        ipcRenderer.on(IPC.FLOW_CHAT_EVENT, listener);
+        return () => ipcRenderer.off(IPC.FLOW_CHAT_EVENT, listener);
+      },
     },
   },
   // Electron 32+ removed the non-standard `File.path` property from

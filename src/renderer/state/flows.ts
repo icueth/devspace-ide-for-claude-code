@@ -1,11 +1,14 @@
 import { create } from 'zustand';
 
+import { edgeLabelFor } from '@renderer/components/Flows/flowGeometry';
 import { api } from '@renderer/lib/api';
+import { FLOW_TEMPLATES } from '@renderer/state/flowTemplates';
 import type {
   FlowChangedEvent,
   FlowEdge,
   FlowGraph,
   FlowNode,
+  FlowNodeKind,
   FlowNodeStatus,
   FlowRun,
 } from '@shared/flowTypes';
@@ -31,8 +34,39 @@ export const NEW_NODE_DEFAULTS = {
   rolePrompt: '',
 };
 
+/**
+ * Defaults for a node added from the canvas, per kind. Gates and notes still
+ * carry cliId/mode/rolePrompt because FlowNode requires them — main never
+ * reads those fields for a non-agent kind, but a partial node would not
+ * round-trip through the JSON schema.
+ */
+export function newNodeDefaults(kind: FlowNodeKind): Omit<FlowNode, 'id' | 'x' | 'y'> {
+  const shell = { cliId: 'claude' as CliId, mode: 'headless' as const, rolePrompt: '' };
+  switch (kind) {
+    case 'gate':
+      return {
+        ...shell,
+        kind: 'gate',
+        role: 'condition?',
+        // Empty on purpose: validateGraph rejects a gate with no condition, so
+        // the inspector's empty field is the prompt to write one.
+        condition: '',
+        maxRetries: 3,
+      };
+    case 'note':
+      return { ...shell, kind: 'note', role: 'note', noteText: 'Note' };
+    default:
+      return { ...shell, kind: 'agent', ...NEW_NODE_DEFAULTS };
+  }
+}
+
 function uid(prefix: string): string {
   return `${prefix}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+/** undefined kind = 'agent' — phase-1 files predate the field. */
+function kindOf(node: FlowNode | undefined): FlowNodeKind {
+  return node?.kind ?? 'agent';
 }
 
 /** The run the canvas visualizes for a flow: the most recently started one. */
@@ -98,16 +132,17 @@ interface FlowsState {
   applyChanged: (evt: FlowChangedEvent) => void;
   selectFlow: (id: string) => void;
   selectNode: (id: string | null) => void;
-  createFlow: () => void;
+  /** No id = a blank starter; an id from FLOW_TEMPLATES = that template. */
+  createFlow: (templateId?: string) => void;
   deleteFlow: (id: string) => Promise<void>;
   flush: () => Promise<void>;
 
   // Draft mutations — all schedule a debounced save.
-  addNode: (x: number, y: number) => void;
+  addNode: (x: number, y: number, kind?: FlowNodeKind) => void;
   moveNode: (id: string, x: number, y: number) => void;
   updateNode: (id: string, patch: Partial<FlowNode>) => void;
   deleteNode: (id: string) => void;
-  connect: (from: string, to: string) => void;
+  connect: (from: string, to: string, branch?: FlowEdge['branch']) => void;
   disconnect: (from: string, to: string) => void;
   updateFlowMeta: (patch: Partial<Pick<FlowGraph, 'name' | 'description'>>) => void;
 }
@@ -242,14 +277,17 @@ export const useFlowsStore = create<FlowsState>((set, get) => {
       set({ selectedNodeId: id });
     },
 
-    createFlow() {
+    createFlow(templateId) {
       const s = get();
       if (saveTimer) {
         clearTimeout(saveTimer);
         saveTimer = null;
         void writeDraft();
       }
-      const flow = starterFlow();
+      const template = templateId
+        ? FLOW_TEMPLATES.find((t) => t.id === templateId)
+        : undefined;
+      const flow = template ? template.build() : starterFlow();
       set({
         flows: [...s.flows, flow],
         selectedFlowId: flow.id,
@@ -296,14 +334,14 @@ export const useFlowsStore = create<FlowsState>((set, get) => {
       await writeDraft();
     },
 
-    addNode(x, y) {
+    addNode(x, y, kind = 'agent') {
       mutate((g) => ({
         ...g,
         nodes: [
           ...g.nodes,
           {
-            id: uid('n'),
-            ...NEW_NODE_DEFAULTS,
+            id: uid(kind === 'agent' ? 'n' : kind),
+            ...newNodeDefaults(kind),
             x: Math.round(x),
             y: Math.round(y),
           },
@@ -340,11 +378,32 @@ export const useFlowsStore = create<FlowsState>((set, get) => {
       if (get().selectedNodeId === id) set({ selectedNodeId: null });
     },
 
-    connect(from, to) {
+    connect(from, to, branch) {
       if (from === to) return; // self-edge = a cycle; validateGraph rejects it
       mutate((g) => {
-        if (g.edges.some((e) => e.from === from && e.to === to)) return g;
-        const edge: FlowEdge = { from, to, label: 'handoff' };
+        const src = g.nodes.find((n) => n.id === from);
+        const dst = g.nodes.find((n) => n.id === to);
+        if (!src || !dst) return g;
+        // Notes are annotations — validateGraph rejects any edge touching one,
+        // so refuse the wire here rather than shipping an unrunnable graph.
+        if (kindOf(src) === 'note' || kindOf(dst) === 'note') return g;
+        // A branch is only meaningful leaving a gate, and a fail branch must
+        // land on an agent (it re-queues its target — you cannot retry a gate).
+        const isGate = kindOf(src) === 'gate';
+        const b = isGate ? (branch ?? 'pass') : undefined;
+        if (b === 'fail' && kindOf(dst) !== 'agent') return g;
+        // Dedupe per (from, to, branch): a gate legitimately points at the same
+        // node on both branches only if the user really wants that, but the
+        // same branch twice is a no-op.
+        if (g.edges.some((e) => e.from === from && e.to === to && e.branch === b)) {
+          return g;
+        }
+        const edge: FlowEdge = {
+          from,
+          to,
+          label: edgeLabelFor(b),
+          ...(b ? { branch: b } : {}),
+        };
         return { ...g, edges: [...g.edges, edge] };
       });
     },

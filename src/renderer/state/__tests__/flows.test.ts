@@ -19,7 +19,9 @@ vi.mock('@renderer/lib/api', () => ({
 }));
 
 const { api } = await import('@renderer/lib/api');
-const { latestRunFor, statusByNode, useFlowsStore } = await import('../flows');
+const { latestRunFor, newNodeDefaults, starterFlow, statusByNode, useFlowsStore } =
+  await import('../flows');
+const { FLOW_TEMPLATES } = await import('../flowTemplates');
 
 const graph = (id: string, name = id): FlowGraph => ({
   id,
@@ -223,6 +225,217 @@ describe('flows store — project switch', () => {
     expect(api.flows.save).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('flows store — node kinds', () => {
+  beforeEach(() => {
+    useFlowsStore.setState({
+      flows: [graph('f1')],
+      selectedFlowId: 'f1',
+      draft: graph('f1'),
+    });
+  });
+
+  it('adds an agent by default (phase-1 behaviour is unchanged)', () => {
+    useFlowsStore.getState().addNode(10, 20);
+    const added = useFlowsStore.getState().draft!.nodes.at(-1)!;
+    expect(added).toMatchObject({ kind: 'agent', cliId: 'claude', mode: 'headless' });
+    expect(useFlowsStore.getState().selectedNodeId).toBe(added.id);
+  });
+
+  it('adds a gate with an empty condition and a default retry budget', () => {
+    useFlowsStore.getState().addNode(10, 20, 'gate');
+    const gate = useFlowsStore.getState().draft!.nodes.at(-1)!;
+    // Empty on purpose: validateGraph rejects a condition-less gate, so the
+    // blank field IS the prompt to write one.
+    expect(gate).toMatchObject({ kind: 'gate', condition: '', maxRetries: 3 });
+  });
+
+  it('adds a note', () => {
+    useFlowsStore.getState().addNode(10, 20, 'note');
+    expect(useFlowsStore.getState().draft!.nodes.at(-1)).toMatchObject({
+      kind: 'note',
+      noteText: 'Note',
+    });
+  });
+
+  it('newNodeDefaults always fills the fields FlowNode requires', () => {
+    for (const kind of ['agent', 'gate', 'note'] as const) {
+      const d = newNodeDefaults(kind);
+      expect(d.cliId).toBe('claude');
+      expect(d.mode).toBeTruthy();
+      expect(d.rolePrompt).toBeDefined();
+      expect(d.role).toBeTruthy();
+    }
+  });
+});
+
+describe('flows store — branch edges', () => {
+  const withGate = (): void => {
+    const g = graph('f1');
+    g.nodes.push({
+      id: 'g',
+      kind: 'gate',
+      role: 'tests pass?',
+      rolePrompt: '',
+      cliId: 'claude',
+      mode: 'headless',
+      condition: 'green',
+      x: 600,
+      y: 0,
+    });
+    g.nodes.push({
+      id: 'note1',
+      kind: 'note',
+      role: 'note',
+      rolePrompt: '',
+      cliId: 'claude',
+      mode: 'headless',
+      noteText: 'hi',
+      x: 0,
+      y: 300,
+    });
+    useFlowsStore.setState({ flows: [g], selectedFlowId: 'f1', draft: g });
+  };
+
+  beforeEach(withGate);
+
+  it('tags a gate edge with its branch and a readable label', () => {
+    useFlowsStore.getState().connect('g', 'a', 'fail');
+    expect(useFlowsStore.getState().draft!.edges).toContainEqual({
+      from: 'g',
+      to: 'a',
+      label: 'fail ✗ retry',
+      branch: 'fail',
+    });
+  });
+
+  it('defaults an unbranded gate edge to the pass branch', () => {
+    useFlowsStore.getState().connect('g', 'b');
+    expect(useFlowsStore.getState().draft!.edges).toContainEqual({
+      from: 'g',
+      to: 'b',
+      label: 'pass ✓',
+      branch: 'pass',
+    });
+  });
+
+  it('never brands an edge that does not leave a gate', () => {
+    useFlowsStore.getState().connect('b', 'a', 'fail');
+    const edge = useFlowsStore.getState().draft!.edges.find((e) => e.from === 'b')!;
+    expect(edge.branch).toBeUndefined();
+    expect(edge.label).toBe('handoff');
+  });
+
+  it('lets a gate point at the same node on BOTH branches, but not twice on one', () => {
+    const s = useFlowsStore.getState();
+    s.connect('g', 'a', 'pass');
+    s.connect('g', 'a', 'fail');
+    s.connect('g', 'a', 'fail'); // duplicate branch — a no-op
+    expect(useFlowsStore.getState().draft!.edges.filter((e) => e.from === 'g')).toHaveLength(2);
+  });
+
+  it('refuses any edge touching a note — validateGraph would reject the graph', () => {
+    const s = useFlowsStore.getState();
+    s.connect('a', 'note1');
+    s.connect('note1', 'b');
+    expect(useFlowsStore.getState().draft!.edges).toHaveLength(1); // just a→b
+  });
+
+  it('refuses a fail edge into a gate — you cannot retry a judgement', () => {
+    // (the only fail-edge target main will accept is an agent)
+    const s = useFlowsStore.getState();
+    s.addNode(900, 0, 'gate');
+    const g2 = useFlowsStore.getState().draft!.nodes.at(-1)!.id;
+    s.connect('g', g2, 'fail');
+    expect(
+      useFlowsStore.getState().draft!.edges.some((e) => e.to === g2),
+    ).toBe(false);
+  });
+});
+
+describe('flows store — templates', () => {
+  beforeEach(() => {
+    useFlowsStore.setState({ projectPath: '/p', flows: [], draft: null });
+  });
+
+  it('createFlow() with no id starts from the blank starter', () => {
+    useFlowsStore.getState().createFlow();
+    expect(useFlowsStore.getState().draft!.name).toBe(starterFlow().name);
+  });
+
+  it('createFlow(templateId) builds that template and selects it', () => {
+    useFlowsStore.getState().createFlow('pipeline');
+
+    const s = useFlowsStore.getState();
+    const draft = s.draft!;
+    expect(s.selectedFlowId).toBe(draft.id);
+    expect(s.flows.map((f) => f.id)).toContain(draft.id);
+    // Persisted immediately: an unsaved flow can't be run from chat.
+    expect(api.flows.save).toHaveBeenCalledWith('/p', expect.objectContaining({ id: draft.id }));
+
+    // The mockup's shape: a gate with a fail edge looping back to an agent.
+    const gate = draft.nodes.find((n) => n.kind === 'gate')!;
+    expect(gate.condition).toBeTruthy();
+    expect(gate.maxRetries).toBe(3);
+    const fail = draft.edges.find((e) => e.branch === 'fail')!;
+    expect(draft.nodes.find((n) => n.id === fail.to)!.kind).toBe('agent');
+  });
+
+  it('an unknown template id falls back to the starter rather than crashing', () => {
+    useFlowsStore.getState().createFlow('nope');
+    expect(useFlowsStore.getState().draft).not.toBeNull();
+  });
+
+  it('every template is structurally legal for validateGraph', () => {
+    for (const t of FLOW_TEMPLATES) {
+      const g = t.build();
+      const byId = new Map(g.nodes.map((n) => [n.id, n]));
+
+      expect(g.name).toBeTruthy();
+      expect(g.description).toBeTruthy();
+
+      for (const e of g.edges) {
+        const from = byId.get(e.from)!;
+        const to = byId.get(e.to)!;
+        expect(from).toBeDefined();
+        expect(to).toBeDefined();
+        // No edge may touch a note.
+        expect(from.kind).not.toBe('note');
+        expect(to.kind).not.toBe('note');
+        // A branch only leaves a gate; a fail branch only lands on an agent.
+        if (e.branch) expect(from.kind).toBe('gate');
+        if (e.branch === 'fail') expect(to.kind ?? 'agent').toBe('agent');
+      }
+      // Gates carry a condition; headless is claude-only.
+      for (const n of g.nodes) {
+        if (n.kind === 'gate') expect(n.condition).toBeTruthy();
+        if (n.mode === 'headless') expect(n.cliId).toBe('claude');
+      }
+      // Acyclic once the fail edges (the retry loops) are removed.
+      expect(hasCycle(g.nodes.map((n) => n.id), g.edges.filter((e) => e.branch !== 'fail'))).toBe(
+        false,
+      );
+    }
+  });
+});
+
+/** Kahn — mirrors main's validateGraph so a bad template fails HERE, not at run. */
+function hasCycle(ids: string[], edges: { from: string; to: string }[]): boolean {
+  const indeg = new Map(ids.map((id) => [id, 0]));
+  for (const e of edges) indeg.set(e.to, (indeg.get(e.to) ?? 0) + 1);
+  const queue = ids.filter((id) => indeg.get(id) === 0);
+  let seen = 0;
+  while (queue.length) {
+    const id = queue.shift()!;
+    seen++;
+    for (const e of edges.filter((x) => x.from === id)) {
+      const d = (indeg.get(e.to) ?? 0) - 1;
+      indeg.set(e.to, d);
+      if (d === 0) queue.push(e.to);
+    }
+  }
+  return seen !== ids.length;
+}
 
 describe('flows selectors', () => {
   it('latestRunFor picks the newest run of that flow', () => {

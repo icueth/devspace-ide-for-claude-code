@@ -2,14 +2,14 @@ import { Plus, Spline } from 'lucide-react';
 import { useEffect } from 'react';
 
 import { FlowCanvas } from '@renderer/components/Flows/FlowCanvas';
+import { FlowChatPanel } from '@renderer/components/Flows/FlowChatPanel';
 import { FlowInspector } from '@renderer/components/Flows/FlowInspector';
+import { FlowRunLog } from '@renderer/components/Flows/FlowRunLog';
 import { openFlowSession } from '@renderer/lib/flowSession';
 import { cn } from '@renderer/lib/utils';
-import {
-  latestRunFor,
-  statusByNode,
-  useFlowsStore,
-} from '@renderer/state/flows';
+import { latestRunFor, statusByNode, useFlowsStore } from '@renderer/state/flows';
+import { FLOW_TEMPLATES } from '@renderer/state/flowTemplates';
+import type { FlowNodeRun } from '@shared/flowTypes';
 
 interface Props {
   projectPath: string;
@@ -43,7 +43,9 @@ export function FlowsView({ projectPath }: Props) {
   const run = draft ? latestRunFor(runs, draft.id) : null;
   const statuses = statusByNode(run);
   const sessionKeys: Record<string, string> = {};
+  const nodeRuns: Record<string, FlowNodeRun> = {};
   for (const n of run?.nodes ?? []) {
+    nodeRuns[n.nodeId] = n;
     if (n.sessionKey) sessionKeys[n.nodeId] = n.sessionKey;
   }
 
@@ -53,7 +55,7 @@ export function FlowsView({ projectPath }: Props) {
   };
 
   const selectedNode = draft?.nodes.find((n) => n.id === selectedNodeId) ?? null;
-  const nodeRun = run?.nodes.find((n) => n.nodeId === selectedNodeId) ?? null;
+  const nodeRun = selectedNodeId ? (nodeRuns[selectedNodeId] ?? null) : null;
 
   if (loading) {
     return (
@@ -66,20 +68,33 @@ export function FlowsView({ projectPath }: Props) {
   return (
     <div className="flex h-full min-h-0">
       <FlowList selectedFlowId={selectedFlowId} />
+
+      {/* Chat sits LEFT of the canvas (mockup order): it is the entry point to
+          the whole feature — you talk first, the canvas shows what happens.
+          It renders with or without a flow; you can ask the lead for work
+          before any flow exists. */}
+      <FlowChatPanel projectPath={projectPath} />
+
       {draft ? (
         <>
-          <FlowCanvas
-            graph={draft}
-            statuses={statuses}
-            sessionKeys={sessionKeys}
-            selectedNodeId={selectedNodeId}
-            onSelectNode={useFlowsStore.getState().selectNode}
-            onMoveNode={useFlowsStore.getState().moveNode}
-            onAddNode={useFlowsStore.getState().addNode}
-            onConnect={useFlowsStore.getState().connect}
-            onDeleteNode={useFlowsStore.getState().deleteNode}
-            onOpenSession={openSession}
-          />
+          {/* Canvas + run log share a column: the log reads the run the canvas
+              is showing, so it must never outlive it. */}
+          <div className="flex min-w-0 flex-1 flex-col">
+            <FlowCanvas
+              graph={draft}
+              statuses={statuses}
+              nodeRuns={nodeRuns}
+              sessionKeys={sessionKeys}
+              selectedNodeId={selectedNodeId}
+              onSelectNode={useFlowsStore.getState().selectNode}
+              onMoveNode={useFlowsStore.getState().moveNode}
+              onAddNode={useFlowsStore.getState().addNode}
+              onConnect={useFlowsStore.getState().connect}
+              onDeleteNode={useFlowsStore.getState().deleteNode}
+              onOpenSession={openSession}
+            />
+            <FlowRunLog run={run} />
+          </div>
           <FlowInspector
             graph={draft}
             node={selectedNode}
@@ -115,14 +130,16 @@ function FlowList({ selectedFlowId }: { selectedFlowId: string | null }) {
         </span>
         <button
           type="button"
-          onClick={createFlow}
-          title="New flow"
+          // Wrapped: onClick would otherwise hand the MouseEvent to templateId.
+          onClick={() => createFlow()}
+          title="New empty flow"
           aria-label="New flow"
           className="flex h-5 w-5 items-center justify-center rounded text-text-muted transition hover:bg-accent/10 hover:text-accent"
         >
           <Plus size={13} />
         </button>
       </div>
+
       <div className="flex-1 overflow-y-auto p-1.5">
         {flows.map((f) => {
           const running = latestRunFor(runs, f.id)?.status === 'running';
@@ -151,7 +168,36 @@ function FlowList({ selectedFlowId }: { selectedFlowId: string | null }) {
           );
         })}
       </div>
+
+      <TemplateRail />
     </nav>
+  );
+}
+
+/** Templates are the real "new flow" path — a blank canvas teaches nothing. */
+function TemplateRail() {
+  const createFlow = useFlowsStore((s) => s.createFlow);
+  return (
+    <div className="shrink-0 border-t border-border p-1.5">
+      <span className="mb-1 block px-1.5 text-[10px] font-semibold uppercase tracking-wider text-text-dim">
+        Templates
+      </span>
+      {FLOW_TEMPLATES.map((t) => (
+        <button
+          key={t.id}
+          type="button"
+          onClick={() => createFlow(t.id)}
+          title={t.blurb}
+          className="mb-1 w-full rounded-md border border-border bg-surface-3 px-2 py-1.5 text-left transition hover:border-accent/40 hover:bg-accent/5"
+        >
+          <div className="truncate font-mono text-[10px] text-text-dim">{t.glyph}</div>
+          <div className="mt-0.5 truncate text-[12px] font-medium text-text">
+            {t.title}
+          </div>
+          <div className="truncate text-[10px] text-text-muted">{t.blurb}</div>
+        </button>
+      ))}
+    </div>
   );
 }
 
@@ -168,16 +214,40 @@ function EmptyState({ hasFlows }: { hasFlows: boolean }) {
         </h2>
         <p className="mt-1.5 text-[11.5px] leading-relaxed text-text-muted">
           A flow is a graph of real CLI agents — each node runs an agent, each
-          edge hands its output to the next. Design it here; the lead agent
-          starts it when you ask for the work in chat.
+          edge hands its output to the next. Start from a template, then ask the
+          lead in chat to run it.
         </p>
+
+        <div className="mt-4 space-y-1.5 text-left">
+          {FLOW_TEMPLATES.map((t) => (
+            <button
+              key={t.id}
+              type="button"
+              onClick={() => createFlow(t.id)}
+              className="flex w-full items-center gap-3 rounded-md border border-border bg-surface-3 px-3 py-2 transition hover:border-accent/40 hover:bg-accent/5"
+            >
+              <span className="shrink-0 font-mono text-[10px] text-text-dim">
+                {t.glyph}
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-[12.5px] font-medium text-text">
+                  {t.title}
+                </span>
+                <span className="block truncate text-[10.5px] text-text-muted">
+                  {t.blurb}
+                </span>
+              </span>
+            </button>
+          ))}
+        </div>
+
         <button
           type="button"
-          onClick={createFlow}
-          className="mt-4 inline-flex items-center gap-1.5 rounded-md border border-accent/30 bg-accent/10 px-3 py-1.5 text-[12.5px] font-medium text-accent transition hover:bg-accent/20"
+          onClick={() => createFlow()}
+          className="mt-3 inline-flex items-center gap-1.5 text-[11.5px] text-text-muted transition hover:text-accent"
         >
-          <Plus size={13} />
-          New flow
+          <Plus size={12} />
+          or start from an empty flow
         </button>
       </div>
     </div>
