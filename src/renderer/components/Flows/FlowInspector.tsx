@@ -1,10 +1,11 @@
-import { Copy, MessageSquare, Trash2 } from 'lucide-react';
+import { Copy, FlaskConical, MessageSquare, Trash2 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 
 import { Field, Head, inputCls } from '@renderer/components/Flows/FlowInspectorBits';
 import { NodeFields } from '@renderer/components/Flows/FlowInspectorNode';
 import { api } from '@renderer/lib/api';
 import { cn } from '@renderer/lib/utils';
+import { useFlowsStore } from '@renderer/state/flows';
 import type { FlowGraph, FlowNode, FlowNodeRun, FlowRun } from '@shared/flowTypes';
 import type { ClaudeAuthProfile, CliProfile } from '@shared/types';
 
@@ -128,6 +129,8 @@ function FlowFields({
         </p>
       </div>
 
+      <TestNodesPanel />
+
       {run && (
         <Field label="Latest run">
           <div className="rounded-md border border-border bg-surface p-2 font-mono text-[10.5px] text-text-muted">
@@ -162,5 +165,52 @@ function FlowFields({
         </button>
       </div>
     </>
+  );
+}
+
+/**
+ * Preflight ("Test nodes"): one tiny probe per distinct CLI/model/profile in
+ * this flow — surfaces a broken value here instead of silently mid-run. This
+ * is deliberately NOT a run button: probes answer "OK", they never see the
+ * flow's briefs; chat remains the only run trigger.
+ */
+function TestNodesPanel() {
+  const testing = useFlowsStore((s) => s.testing);
+  const report = useFlowsStore((s) => s.nodeTests);
+
+  return (
+    <div className="mx-3 mt-2">
+      <button
+        type="button"
+        disabled={testing}
+        onClick={() => void useFlowsStore.getState().testNodes()}
+        title="Probe every node's CLI + model + profile with a one-word call — no flow work runs"
+        className="flex w-full items-center justify-center gap-1.5 rounded-md border border-border px-2.5 py-1.5 text-[12px] text-text-muted transition hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-60"
+      >
+        <FlaskConical size={12} className={cn(testing && 'animate-pulse')} />
+        {testing ? 'Testing nodes…' : 'Test nodes'}
+      </button>
+
+      {report && (
+        <div className="mt-2 space-y-1 rounded-md border border-border bg-surface p-2">
+          {report.graphErrors.map((e) => (
+            <div key={e} className="text-[10.5px] leading-relaxed text-semantic-error">
+              ✗ graph: {e}
+            </div>
+          ))}
+          {report.nodes.map((r) => (
+            <div
+              key={r.nodeId}
+              className={cn(
+                'font-mono text-[10.5px] leading-relaxed',
+                r.ok ? 'text-text-muted' : 'text-semantic-error',
+              )}
+            >
+              {r.ok ? '✓' : '✗'} {r.nodeId}: {r.detail}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }

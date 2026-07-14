@@ -332,6 +332,10 @@ export const IPC = {
   FLOW_STOP: 'flow:stop',
   FLOW_SEND: 'flow:send',
   FLOW_CHANGED: 'flow:changed',
+  // Preflight: probe every node's CLI/model/profile with a tiny one-shot call
+  // so a broken value surfaces on the canvas, not silently mid-run. NOT a run
+  // trigger — chat remains the only way to start a flow.
+  FLOW_TEST: 'flow:test-nodes',
   // Phase 3: chat moved to the dock — the user's normal claude tab IS the
   // lead. This renderer → main push pins a flow to one dock tab
   // (payload: { projectId, projectPath, tabId, flowId | null }) so the MCP

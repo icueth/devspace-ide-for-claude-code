@@ -11,6 +11,7 @@ import type {
   FlowNodeKind,
   FlowNodeStatus,
   FlowRun,
+  FlowTestReport,
 } from '@shared/flowTypes';
 import type { CliId } from '@shared/types';
 
@@ -127,6 +128,10 @@ interface FlowsState {
   selectedNodeId: string | null;
   draft: FlowGraph | null;
   loading: boolean;
+  /** Preflight results for the selected flow ("Test nodes") — cleared whenever
+   *  the draft changes flows. NOT a run: probes validate CLI/model/profile. */
+  nodeTests: FlowTestReport | null;
+  testing: boolean;
 
   loadForProject: (projectPath: string) => Promise<void>;
   applyChanged: (evt: FlowChangedEvent) => void;
@@ -139,6 +144,7 @@ interface FlowsState {
   cloneFlow: (id: string) => void;
   deleteFlow: (id: string) => Promise<void>;
   flush: () => Promise<void>;
+  testNodes: () => Promise<void>;
 
   // Draft mutations — all schedule a debounced save.
   addNode: (x: number, y: number, kind?: FlowNodeKind) => void;
@@ -196,6 +202,33 @@ export const useFlowsStore = create<FlowsState>((set, get) => {
     selectedNodeId: null,
     draft: null,
     loading: false,
+    nodeTests: null,
+    testing: false,
+
+    async testNodes() {
+      const s = get();
+      if (!s.draft || !s.projectPath || s.testing) return;
+      // Probe what is REALLY on disk — flush the debounced edit first, or the
+      // probes would validate values the engine won't actually use.
+      if (saveTimer) {
+        clearTimeout(saveTimer);
+        saveTimer = null;
+        await writeDraft();
+      }
+      set({ testing: true, nodeTests: null });
+      try {
+        const report = await api.flows.testNodes(s.projectPath, get().draft!);
+        set({ nodeTests: report, testing: false });
+      } catch (err) {
+        set({
+          nodeTests: {
+            graphErrors: [err instanceof Error ? err.message : String(err)],
+            nodes: [],
+          },
+          testing: false,
+        });
+      }
+    },
 
     async loadForProject(projectPath) {
       // A queued save belongs to the project we're LEAVING — flush it before
@@ -221,6 +254,7 @@ export const useFlowsStore = create<FlowsState>((set, get) => {
         selectedFlowId: first?.id ?? null,
         draft: first ? structuredClone(first) : null,
         selectedNodeId: null,
+        nodeTests: null,
       });
     },
 
@@ -274,6 +308,7 @@ export const useFlowsStore = create<FlowsState>((set, get) => {
         selectedFlowId: id,
         draft: structuredClone(flow),
         selectedNodeId: null,
+        nodeTests: null,
       });
     },
 
@@ -297,6 +332,7 @@ export const useFlowsStore = create<FlowsState>((set, get) => {
         selectedFlowId: flow.id,
         draft: flow,
         selectedNodeId: null,
+        nodeTests: null,
       });
       // Persist immediately: an unsaved flow can't be run from chat, and the
       // whole point of "New flow" is to make it addressable by the lead agent.
@@ -330,6 +366,7 @@ export const useFlowsStore = create<FlowsState>((set, get) => {
         selectedFlowId: flow.id,
         draft: flow,
         selectedNodeId: null,
+        nodeTests: null,
       });
       // Persist immediately — the whole point of a clone is to run/pin it now.
       pendingPath = s.projectPath;
@@ -353,6 +390,7 @@ export const useFlowsStore = create<FlowsState>((set, get) => {
               selectedFlowId: nextSel?.id ?? null,
               draft: nextSel ? structuredClone(nextSel) : null,
               selectedNodeId: null,
+        nodeTests: null,
             }
           : {}),
       });

@@ -1,6 +1,7 @@
 import { BrowserWindow, ipcMain } from 'electron';
 
 import { createFlowService } from '@main/services/FlowService';
+import { testFlowNodes } from '@main/services/flowPreflight';
 import { setSelectedFlow, startFlowControlSocket } from '@main/services/flowControl';
 import { assertInWorkspace } from '@main/utils/pathScope';
 import type { FlowChangedEvent, FlowGraph, FlowSelectEvent } from '@shared/flowTypes';
@@ -60,6 +61,13 @@ export function registerFlowsIpc(): void {
   });
 
   ipcMain.handle(IPC.FLOW_STOP, async (_e, runId: string) => svc.stopRun(runId));
+
+  // Preflight probes (NOT a run): validates each node's CLI/model/profile with
+  // a one-word call so a broken value surfaces on the canvas, not mid-run.
+  ipcMain.handle(IPC.FLOW_TEST, async (_e, projectPath: string, graph: FlowGraph) => {
+    const dir = await assertInWorkspace(projectPath);
+    return testFlowNodes(dir, graph);
+  });
 
   ipcMain.handle(
     IPC.FLOW_SEND,

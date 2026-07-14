@@ -98,6 +98,7 @@ import type {
   FlowGraph,
   FlowRun,
   FlowSelectEvent,
+  FlowTestReport,
 } from '@shared/flowTypes';
 
 export interface DevspaceApi {
@@ -166,6 +167,8 @@ export interface DevspaceApi {
       nodeId: string,
       text: string,
     ) => Promise<{ ok: boolean; error?: string }>;
+    // Preflight probes for the canvas's "Test nodes" — not a run trigger.
+    testNodes: (projectPath: string, graph: FlowGraph) => Promise<FlowTestReport>;
     // Single main → renderer push for both flow-list and run changes.
     onChanged: (cb: (event: FlowChangedEvent) => void) => () => void;
     // Phase 3: pin a flow to one dock tab (right-click the tab → Use flow), so
@@ -710,6 +713,7 @@ function makeStubApi(): DevspaceApi {
       runs: () => Promise.resolve([]),
       stop: notWired('flows.stop'),
       send: notWired('flows.send'),
+      testNodes: notWired('flows.testNodes'),
       onChanged: () => () => undefined,
       select: notWired('flows.select'),
     },

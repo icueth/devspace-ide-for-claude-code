@@ -55,6 +55,8 @@ const api = {
     stop: (runId: string) => ipcRenderer.invoke(IPC.FLOW_STOP, runId),
     send: (runId: string, nodeId: string, text: string) =>
       ipcRenderer.invoke(IPC.FLOW_SEND, runId, nodeId, text),
+    testNodes: (projectPath: string, graph: unknown) =>
+      ipcRenderer.invoke(IPC.FLOW_TEST, projectPath, graph),
     onChanged: (cb: (event: FlowChangedEvent) => void) => {
       const listener = (_e: unknown, ev: FlowChangedEvent): void => cb(ev);
       ipcRenderer.on(IPC.FLOW_CHANGED, listener);

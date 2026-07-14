@@ -112,6 +112,22 @@ export interface FlowRun {
   error?: string;
 }
 
+// One node's preflight result (IPC.FLOW_TEST): does this node's CLI + model +
+// profile actually work? Probes are tiny one-shot calls ("reply OK") — they
+// validate the runtime, they do NOT execute the flow (chat stays the only
+// run trigger).
+export interface FlowNodeTestResult {
+  nodeId: string;
+  ok: boolean;
+  // "claude · opus — OK (3.1s)" / "codex — exit 1: model_not_found …"
+  detail: string;
+}
+
+export interface FlowTestReport {
+  graphErrors: string[]; // validateGraph findings — structural problems
+  nodes: FlowNodeTestResult[];
+}
+
 // Single main → renderer push payload for IPC.FLOW_CHANGED.
 export interface FlowChangedEvent {
   projectPath: string;
