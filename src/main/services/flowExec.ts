@@ -62,6 +62,10 @@ const ANTHROPIC_VARS = [
  * panes already run on (ClaudeCliLauncher.ts:138-144): the user designed this
  * flow and pointed it at this project.
  *
+ * `model` (phase 2) is the node's `--model`: an argv flag, not ANTHROPIC_MODEL,
+ * because the env var is ignored on a subscription login while the flag works
+ * on both. Absent = the CLI's default model.
+ *
  * Never throws: every failure (no binary, spawn error, non-zero exit, timeout,
  * kill) resolves to `{ ok: false, error }` so the engine maps it to a failed
  * node instead of an unhandled rejection.
@@ -70,6 +74,7 @@ export async function startClaudePrintIn(
   cwd: string,
   prompt: string,
   envPairs: string[] = [],
+  model?: string,
 ): Promise<FlowExecHandle> {
   const claudeBin = await resolveClaudeBinary();
   if (!claudeBin) {
@@ -99,9 +104,12 @@ export async function startClaudePrintIn(
       resolve(r);
     };
 
+    const args = ['-p', '--dangerously-skip-permissions'];
+    if ((model ?? '').trim()) args.push('--model', (model as string).trim());
+
     let child: ReturnType<typeof spawn>;
     try {
-      child = spawn(claudeBin, ['-p', '--dangerously-skip-permissions'], { cwd, env });
+      child = spawn(claudeBin, args, { cwd, env });
     } catch (err) {
       finish({ ok: false, text: '', error: (err as Error).message });
       return;

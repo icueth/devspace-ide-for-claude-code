@@ -103,6 +103,8 @@ export async function launchFlowSession(
         ...base,
         initialPrompt: opts.prompt,
         authProfileId: node.authProfileId,
+        // Per-node `--model` (works on subscription logins, unlike ANTHROPIC_MODEL).
+        model: node.model,
       });
       return key;
     case 'opencode':

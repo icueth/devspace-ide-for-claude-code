@@ -110,6 +110,13 @@ export interface ClaudeLaunchOptions {
   initialPrompt?: string;
   /** Claude auth profile id — selects the credentials (env) for this session. */
   authProfileId?: string;
+  /**
+   * `--model` for this session (flow nodes). An argv flag rather than
+   * ANTHROPIC_MODEL because the env var is ignored on a subscription login —
+   * and because tmux ignores the env wrapper entirely on a `-A` reattach, while
+   * argv rides in the session command. Absent = the CLI's default model.
+   */
+  model?: string;
 }
 
 /**
@@ -146,8 +153,11 @@ export async function launchClaudeCli(
   // via execvp (no shell) so a multi-word prompt needs no quoting; and on a
   // `new-session -A` reattach the trailing command is ignored, so the brief is
   // delivered exactly once — on first launch.
+  // The initialPrompt stays LAST — it is claude's positional arg, so any flag
+  // (like --model) has to precede it.
   const claudeArgs = [
     '--dangerously-skip-permissions',
+    ...(opts.model?.trim() ? ['--model', opts.model.trim()] : []),
     ...(opts.initialPrompt ? [opts.initialPrompt] : []),
   ];
 

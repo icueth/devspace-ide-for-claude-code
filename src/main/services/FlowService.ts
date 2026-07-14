@@ -20,6 +20,18 @@ import {
   startClaudePrintIn,
   type FlowExecHandle,
 } from '@main/services/flowExec';
+import { applyGateResult, startGateEval } from '@main/services/flowGates';
+import {
+  applyStatuses,
+  nodeRun,
+  reopen,
+  setNode,
+  statusMap,
+  teardown,
+  upstreamOutputs,
+  verdictMap,
+  type LiveRun,
+} from '@main/services/flowRunState';
 import {
   captureFlowOutput,
   killFlowSession,
@@ -30,8 +42,8 @@ import {
 import {
   composeNodePrompt,
   finishStatuses,
+  kindOf,
   readyNodes,
-  upstreamOf,
   validateGraph,
   type StatusById,
 } from '@main/services/flowScheduler';
@@ -39,13 +51,7 @@ import * as store from '@main/services/flowStore';
 import { getSessionStats } from '@main/services/PtyPool';
 import { projectIdForPath } from '@main/services/ProjectScanner';
 import { resolveAuthEnvPairs } from '@main/services/ClaudeAuthService';
-import type {
-  FlowGraph,
-  FlowNode,
-  FlowNodeRun,
-  FlowRun,
-  FlowNodeStatus,
-} from '@shared/flowTypes';
+import type { FlowGraph, FlowNode, FlowNodeRun, FlowRun } from '@shared/flowTypes';
 import { createLogger } from '@shared/logger';
 
 const logger = createLogger('FlowService');
@@ -86,19 +92,6 @@ export interface FlowService {
   activeSessionKeys(): Set<string>;
 }
 
-// In-flight bookkeeping for one run. Deliberately NOT persisted: a run does not
-// survive an app restart (phase 1) — the journal on disk is the record, the
-// live handles are the process.
-interface LiveRun {
-  run: FlowRun;
-  graph: FlowGraph;
-  timer: ReturnType<typeof setInterval>;
-  execs: Map<string, FlowExecHandle>; // headless children, for stopRun
-  watchers: Map<string, () => void>; // interactive PTY unsubscribes
-  firstActivityAt: Map<string, number>; // interactive: when the agent first spoke
-  starting: Set<string>; // launch in progress — guards a double-launch across ticks
-}
-
 // ── module-level session registry ───────────────────────────────────────────
 // sessionReconcile lazy-imports this to protect live flow sessions from the
 // boot orphan sweep (an interactive flow node is nobody's open tab, so without
@@ -120,46 +113,6 @@ export function createFlowService(deps: FlowServiceDeps): FlowService {
       logger.warn(`saveRun failed: ${(e as Error).message}`);
     });
     deps.onRunChanged(lr.run);
-  };
-
-  const nodeRun = (lr: LiveRun, nodeId: string): FlowNodeRun | undefined =>
-    lr.run.nodes.find((n) => n.nodeId === nodeId);
-
-  const statusMap = (lr: LiveRun): StatusById =>
-    Object.fromEntries(lr.run.nodes.map((n) => [n.nodeId, n.status]));
-
-  const applyStatuses = (lr: LiveRun, statuses: StatusById): void => {
-    for (const n of lr.run.nodes) {
-      const next = statuses[n.nodeId];
-      if (next && next !== n.status) n.status = next;
-    }
-  };
-
-  const setNode = (
-    lr: LiveRun,
-    nodeId: string,
-    patch: Partial<FlowNodeRun> & { status: FlowNodeStatus },
-  ): void => {
-    const n = nodeRun(lr, nodeId);
-    if (!n) return;
-    Object.assign(n, patch);
-  };
-
-  // Context handed to a node: each upstream node's captured output. Nodes only
-  // ever see their own upstream — that is what an edge means.
-  const upstreamOutputs = (
-    lr: LiveRun,
-    nodeId: string,
-  ): Array<{ role: string; output: string }> =>
-    upstreamOf(lr.graph, nodeId).map((upId) => ({
-      role: lr.graph.nodes.find((n) => n.id === upId)?.role ?? upId,
-      output: nodeRun(lr, upId)?.output ?? '',
-    }));
-
-  const teardown = (lr: LiveRun): void => {
-    clearInterval(lr.timer);
-    for (const un of lr.watchers.values()) un();
-    lr.watchers.clear();
   };
 
   // ── terminal transitions ────────────────────────────────────────────────
@@ -202,17 +155,65 @@ export function createFlowService(deps: FlowServiceDeps): FlowService {
     commit(lr);
   };
 
+  // The slice of the live run a gate verdict may touch (flowGates owns the
+  // decision, this service owns the state).
+  const gateHooks = (lr: LiveRun) => ({
+    nodeRun: (id: string) => nodeRun(lr, id),
+    setNode: (id: string, patch: Partial<FlowNodeRun>) => setNode(lr, id, patch),
+    statusMap: () => statusMap(lr),
+    applyStatuses: (next: StatusById) => applyStatuses(lr, next),
+    reopen: (ids: string[]) => reopen(lr, ids),
+    commit: () => commit(lr),
+    completeNode: (id: string, output: string) => completeNode(lr, id, output),
+    failNode: (id: string, error: string) => failNode(lr, id, error),
+  });
+
   // ── node launch ─────────────────────────────────────────────────────────
   const launchNode = async (lr: LiveRun, node: FlowNode): Promise<void> => {
-    const prompt = composeNodePrompt(lr.run.task, node, upstreamOutputs(lr, node.id));
-    setNode(lr, node.id, { status: 'running', startedAt: now() });
+    // Bumped here, on every launch, so it counts *attempts* for free: a gate
+    // re-queues a node, the tick relaunches it, and the counter follows. A
+    // gate's own attempts counter is its evaluation count (flowGates reads it
+    // to know how much of the retry budget is left).
+    const attempts = (nodeRun(lr, node.id)?.attempts ?? 0) + 1;
+    const upstream = upstreamOutputs(lr, node.id);
+    setNode(lr, node.id, {
+      status: 'running',
+      startedAt: now(),
+      attempts,
+      endedAt: undefined,
+      error: undefined,
+    });
 
-    if (node.mode === 'headless') {
-      // claude -p, cwd = the project, with the node's auth profile.
+    // A gate has no agent: the engine runs the judge itself and routes on the
+    // verdict. Same exec path as a headless node (claude -p in the project).
+    if (kindOf(node) === 'gate') {
       const envPairs = node.authProfileId
         ? await resolveAuthEnvPairs(node.authProfileId)
         : [];
-      const handle = await startClaudePrintIn(lr.run.projectPath, prompt, envPairs);
+      const handle = await startGateEval(lr.run.projectPath, node, upstream, envPairs);
+      lr.execs.set(node.id, handle);
+      commit(lr);
+
+      void handle.done.then((res) => {
+        if (lr.run.status !== 'running') return; // terminal run owns the status
+        applyGateResult(lr.graph, node, res, gateHooks(lr));
+      });
+      return;
+    }
+
+    const prompt = composeNodePrompt(lr.run.task, node, upstream);
+
+    if (node.mode === 'headless') {
+      // claude -p, cwd = the project, with the node's auth profile + model.
+      const envPairs = node.authProfileId
+        ? await resolveAuthEnvPairs(node.authProfileId)
+        : [];
+      const handle = await startClaudePrintIn(
+        lr.run.projectPath,
+        prompt,
+        envPairs,
+        node.model,
+      );
       lr.execs.set(node.id, handle);
       commit(lr);
 
@@ -242,7 +243,17 @@ export function createFlowService(deps: FlowServiceDeps): FlowService {
       void killFlowSession(lr.run.projectId, node.cliId, lr.run.id, node.id);
       return;
     }
-    setNode(lr, node.id, { status: 'running', sessionKey: key });
+    // Output starts empty on EVERY attempt — on a retry the PTY capture would
+    // otherwise append the new attempt onto the rejected one.
+    setNode(lr, node.id, { status: 'running', sessionKey: key, output: '' });
+    lr.firstActivityAt.delete(node.id);
+
+    // Retry of an interactive claude node: the tmux session already exists, and
+    // `new-session -A` reattaches WITHOUT the trailing command — so the agent
+    // would never see the new brief (it would just sit there and be declared
+    // idle-done with stale output). Type it in instead. The other CLIs are typed
+    // into by launchFlowSession anyway, on every launch.
+    if (attempts > 1 && node.cliId === 'claude') sendToFlowSession(key, prompt);
 
     const unsub = captureFlowOutput(key, {
       append: (text) => {
@@ -281,8 +292,10 @@ export function createFlowService(deps: FlowServiceDeps): FlowService {
       completeNode(lr, n.nodeId, n.output ?? '');
     }
 
-    // 2. Launch everything that is ready (fan-out runs concurrently).
-    for (const id of readyNodes(lr.graph, statusMap(lr))) {
+    // 2. Launch everything that is ready (fan-out runs concurrently). Gate
+    //    verdicts route here: a gate's pass edges only release on 'pass', and a
+    //    fail edge never gates anything (it re-queues, see flowGates).
+    for (const id of readyNodes(lr.graph, statusMap(lr), verdictMap(lr))) {
       if (lr.starting.has(id)) continue;
       const node = lr.graph.nodes.find((n) => n.id === id);
       if (!node) continue;
@@ -356,7 +369,11 @@ export function createFlowService(deps: FlowServiceDeps): FlowService {
         projectId: projectIdForPath(projectPath),
         task: task.trim(),
         status: 'running',
-        nodes: graph.nodes.map((n) => ({ nodeId: n.id, status: 'queued' as const })),
+        // Notes are annotations, not steps: they get no journal entry at all
+        // (an entry would sit 'queued' forever and the run would never close).
+        nodes: graph.nodes
+          .filter((n) => kindOf(n) !== 'note')
+          .map((n) => ({ nodeId: n.id, status: 'queued' as const })),
         startedAt: now(),
       };
 
