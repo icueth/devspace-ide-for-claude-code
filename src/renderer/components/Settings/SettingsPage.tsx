@@ -109,14 +109,8 @@ export function SettingsPage({ onClose, initialTab = 'account' }: SettingsPagePr
           <ArrowLeft size={11} />
           Back
         </button>
-        <span
-          className="flex h-6 w-6 items-center justify-center rounded-[7px] text-white"
-          style={{
-            background: 'linear-gradient(135deg, var(--color-accent), #a855f7)',
-            boxShadow: '0 0 12px rgba(76,141,255,0.3)',
-          }}
-        >
-          <SettingsIcon size={12} strokeWidth={2.5} />
+        <span className="flex h-6 w-6 items-center justify-center rounded-[6px] border border-accent/25 bg-accent/10 text-accent">
+          <SettingsIcon size={12} strokeWidth={2.25} />
         </span>
         <h2 className="text-[13px] font-semibold text-text">Claude · Settings</h2>
         <span className="text-[10.5px] text-text-muted">
@@ -256,7 +250,7 @@ function TabSwitch({ tab, onChange }: { tab: Tab; onChange: (t: Tab) => void }) 
           className={cn(
             'flex h-[24px] items-center gap-1 rounded-[5px] px-2.5 text-[11px] transition',
             tab === t.id
-              ? 'bg-surface-3 text-text shadow-[0_0_0_1px_rgba(76,141,255,0.25)]'
+              ? 'bg-surface-4 text-text shadow-[0_0_0_1px_rgb(var(--color-accent-rgb)/0.25)]'
               : 'text-text-muted hover:text-text',
           )}
         >
@@ -417,7 +411,7 @@ function FilesSettings() {
                         className={cn(
                           'flex items-center gap-2 px-3 py-1.5 text-left text-[11.5px] transition',
                           isActive
-                            ? 'bg-[rgba(76,141,255,0.18)] text-text'
+                            ? 'bg-accent/15 text-text'
                             : 'text-text-secondary hover:bg-surface-3 hover:text-text',
                         )}
                       >
@@ -488,7 +482,7 @@ function FilesSettings() {
                 : {
                     background:
                       'linear-gradient(135deg, var(--color-accent), var(--color-accent-3))',
-                    boxShadow: '0 2px 8px rgba(76,141,255,0.25)',
+                    boxShadow: '0 2px 8px rgb(var(--color-accent-rgb) / 0.22)',
                   }
             }
           >

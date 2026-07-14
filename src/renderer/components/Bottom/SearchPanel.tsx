@@ -363,7 +363,7 @@ function HighlightedLine({ match }: HighlightedLineProps) {
         <span
           key={`h${i}`}
           className="rounded bg-accent/25 text-text"
-          style={{ boxShadow: 'inset 0 -1px 0 rgba(76,141,255,0.5)' }}
+          style={{ boxShadow: 'inset 0 -1px 0 rgb(var(--color-accent-rgb) / 0.5)' }}
         >
           {text.slice(start, end)}
         </span>,

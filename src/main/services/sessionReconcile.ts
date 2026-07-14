@@ -16,18 +16,27 @@ export interface CliTmuxSession {
   attached: boolean;
 }
 
-// devspace-cli-<proj>-<tab>  → <proj>:claude-cli:<tab>
-// devspace-cli-<proj>        → <proj>:claude-cli:default
+// devspace-{cli|oc|cx|gm|ag}-<proj>-<tab> → the matching PtyPool key.
 // project ids (hex) and tab ids (base36) never contain '-', so the LAST '-'
 // after the prefix splits project from tab unambiguously. Returns null for
 // non-cli session names (shells, chat-runs) so the caller skips them.
 export function tmuxNameToKey(name: string, sessionPrefix: string): string | null {
-  const p = `${sessionPrefix}-cli-`;
-  if (!name.startsWith(p)) return null;
-  const rest = name.slice(p.length);
+  const kinds = {
+    cli: 'claude-cli',
+    oc: 'opencode-cli',
+    cx: 'codex-cli',
+    gm: 'gemini-cli',
+    ag: 'antigravity-cli',
+  } as const;
+  const match = Object.entries(kinds).find(([prefix]) =>
+    name.startsWith(`${sessionPrefix}-${prefix}-`),
+  );
+  if (!match) return null;
+  const [tmuxPrefix, kind] = match;
+  const rest = name.slice(`${sessionPrefix}-${tmuxPrefix}-`.length);
   const dash = rest.lastIndexOf('-');
-  if (dash < 0) return `${rest}:claude-cli:default`;
-  return `${rest.slice(0, dash)}:claude-cli:${rest.slice(dash + 1)}`;
+  if (dash < 0) return `${rest}:${kind}:default`;
+  return `${rest.slice(0, dash)}:${kind}:${rest.slice(dash + 1)}`;
 }
 
 // Pure, safety-critical selection: a session is an orphan ONLY when it is not

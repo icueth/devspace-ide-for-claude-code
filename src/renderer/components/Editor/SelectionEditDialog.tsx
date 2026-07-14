@@ -223,7 +223,7 @@ export function SelectionEditDialog({ open, request, onCancel, onAccept }: Props
                 className="inline-flex h-[28px] items-center gap-1.5 rounded-[7px] px-3 text-[11.5px] font-medium text-white transition hover:brightness-110"
                 style={{
                   background:
-                    'linear-gradient(135deg, var(--color-accent), #a855f7)',
+                    'var(--color-accent-3)',
                   boxShadow: '0 2px 8px var(--color-accent-glow)',
                 }}
               >
@@ -237,7 +237,7 @@ export function SelectionEditDialog({ open, request, onCancel, onAccept }: Props
                 className="inline-flex h-[28px] items-center gap-1.5 rounded-[7px] px-3 text-[11.5px] font-medium text-white transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40"
                 style={{
                   background:
-                    'linear-gradient(135deg, var(--color-accent), #a855f7)',
+                    'var(--color-accent-3)',
                   boxShadow: '0 2px 8px var(--color-accent-glow)',
                 }}
               >

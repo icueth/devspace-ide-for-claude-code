@@ -265,8 +265,9 @@ export function computePinnedSessionIds(
   for (const col of state.columns) {
     if (!col.pin) continue;
     const tabs = state.tabsByProject[col.pin.projectId];
-    if (!tabs?.some((t) => t.id === col.pin!.tabId)) continue;
-    out.add(claudeCliSessionId(col.pin.projectId, col.pin.tabId));
+    const tab = tabs?.find((t) => t.id === col.pin!.tabId);
+    if (!tab || tab.awaitingCliChoice) continue;
+    out.add(cliSessionId(tab.cliId ?? 'claude', col.pin.projectId, col.pin.tabId));
   }
   return [...out];
 }
@@ -279,7 +280,11 @@ export function computeAllSessionIds(
 ): string[] {
   const out = new Set<string>();
   for (const [projectId, tabs] of Object.entries(state.tabsByProject)) {
-    for (const t of tabs) out.add(claudeCliSessionId(projectId, t.id));
+    for (const t of tabs) {
+      if (!t.awaitingCliChoice) {
+        out.add(cliSessionId(t.cliId ?? 'claude', projectId, t.id));
+      }
+    }
   }
   return [...out];
 }

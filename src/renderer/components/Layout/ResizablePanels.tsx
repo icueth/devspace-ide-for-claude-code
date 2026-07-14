@@ -32,7 +32,7 @@ export function SidebarSection({ children }: { children: ReactNode }) {
   return (
     <aside
       style={{ width }}
-      className="no-drag relative flex shrink-0 flex-col border-r border-border bg-surface-sidebar"
+      className="no-drag relative flex shrink-0 flex-col border-r border-border bg-surface-sidebar shadow-[8px_0_24px_rgba(0,0,0,0.08)]"
     >
       {children}
     </aside>
@@ -51,7 +51,7 @@ export function DockSection({
     <section
       style={full ? undefined : { width }}
       className={cn(
-        'no-drag relative flex flex-col border-l border-border bg-surface',
+        'no-drag relative flex flex-col border-l border-border bg-surface shadow-[-8px_0_24px_rgba(0,0,0,0.08)]',
         full ? 'min-w-0 flex-1' : 'shrink-0',
       )}
     >

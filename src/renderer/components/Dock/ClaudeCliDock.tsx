@@ -1,14 +1,15 @@
-import { Plus, X } from 'lucide-react';
+import { Plus, SquareTerminal, X } from 'lucide-react';
 import { lazy, memo, Suspense, useEffect, useRef, useState } from 'react';
 
 import { CliTabBar, MAX_COLUMNS } from '@renderer/components/Dock/CliTabBar';
+import { api } from '@renderer/lib/api';
 import { cn } from '@renderer/lib/utils';
 import { useRenderTrace } from '@renderer/lib/renderTrace';
 import { activate } from '@renderer/state/activation';
 import { useCliTabsStore } from '@renderer/state/cliTabs';
 import { pickAutoPinTab } from '@renderer/state/cliTabsPins';
 import { useWorkspaceStore } from '@renderer/state/workspace';
-import type { DockedProjectMeta } from '@shared/types';
+import type { CliProfile, DockedProjectMeta } from '@shared/types';
 
 // xterm is ~200KB and only matters once the first project is opened.
 const ClaudeCliPane = lazy(() =>
@@ -40,11 +41,22 @@ export const ClaudeCliDock = memo(function ClaudeCliDock() {
   const removeColumn = useCliTabsStore((s) => s.removeColumn);
   const setColumnPin = useCliTabsStore((s) => s.setColumnPin);
   const splitForTab = useCliTabsStore((s) => s.splitForTab);
+  const chooseTabCli = useCliTabsStore((s) => s.chooseTabCli);
 
   // Toggled by TabChip's drag handlers so the drop zones only appear while
   // the user is mid-drag. Bare CSS dnd would over-invalidate too aggressively
   // and steal space from the panes when nothing is happening.
   const [isDragActive, setIsDragActive] = useState(false);
+  const [launcherProfiles, setLauncherProfiles] = useState<CliProfile[]>([]);
+
+  useEffect(() => {
+    void Promise.all([
+      api.cli.listProfiles('opencode'),
+      api.cli.listProfiles('codex'),
+    ])
+      .then(([opencode, codex]) => setLauncherProfiles([...opencode, ...codex]))
+      .catch(() => setLauncherProfiles([]));
+  }, []);
 
   // Initial restore: dock every project the workspace says is opened. The
   // re-open flow (sidebar click after Close project) is handled inside
@@ -100,6 +112,29 @@ export const ClaudeCliDock = memo(function ClaudeCliDock() {
       lastMirroredActiveRef.current = null;
     }
   }, [activeProjectId, setActiveDockedProject]);
+
+  // A persisted active pin is the strongest signal of where the user was
+  // working when the app closed. Restore its owning workspace/project once
+  // boot hydration has supplied an active workspace, without moving tabs or
+  // creating a new session.
+  const bootActivationDoneRef = useRef(false);
+  useEffect(() => {
+    if (bootActivationDoneRef.current || !activeProjectId) return;
+    const s = useCliTabsStore.getState();
+    const col = s.columns.find((c) => c.id === s.activeColumnId);
+    if (!col?.pin) return;
+    const tabExists = s.tabsByProject[col.pin.projectId]?.some(
+      (tab) => tab.id === col.pin!.tabId,
+    );
+    if (!tabExists) return;
+    bootActivationDoneRef.current = true;
+    void activate({
+      source: 'boot',
+      projectId: col.pin.projectId,
+      tabId: col.pin.tabId,
+      columnId: col.id,
+    });
+  }, [activeProjectId]);
 
   const dockedProjects = dockedOrder
     .map((id) => projectsById[id])
@@ -175,6 +210,17 @@ export const ClaudeCliDock = memo(function ClaudeCliDock() {
 
   return (
     <div className="flex h-full w-full flex-col">
+      <div className="flex h-9 shrink-0 items-center gap-2 border-b border-border bg-surface-2 pl-10 pr-3">
+        <SquareTerminal size={13} className="text-accent" />
+        <span className="text-[11px] font-semibold text-text">Agent sessions</span>
+        <span className="rounded bg-surface-4 px-1.5 py-0.5 font-mono text-[9px] text-text-muted">
+          {dockedProjects.length} projects · {colCount} columns
+        </span>
+        <span className="ml-auto flex items-center gap-1.5 text-[9.5px] text-text-muted">
+          <span className="h-1.5 w-1.5 rounded-full bg-semantic-success" />
+          persistent PTY
+        </span>
+      </div>
       <CliTabBar
         dockedProjects={dockedProjects}
         activeDockedProjectId={activeDockedProjectId}
@@ -193,7 +239,7 @@ export const ClaudeCliDock = memo(function ClaudeCliDock() {
                 idx > 0 && 'border-l border-border',
                 col.id === activeColumnId &&
                   colCount > 1 &&
-                  'bg-[rgba(76,141,255,0.025)]',
+                  'bg-accent/[0.025]',
               )}
             />
           ))}
@@ -220,7 +266,7 @@ export const ClaudeCliDock = memo(function ClaudeCliDock() {
                     className={cn(
                       'flex h-[18px] w-[18px] items-center justify-center rounded-full border text-[9px] font-bold transition',
                       col.id === activeColumnId
-                        ? 'border-[rgba(76,141,255,0.55)] bg-[rgba(76,141,255,0.18)] text-[#bcd1ff] shadow-[0_0_8px_rgba(76,141,255,0.35)]'
+                        ? 'border-accent/55 bg-accent/15 text-accent-2 shadow-[0_0_8px_rgb(var(--color-accent-rgb)/0.25)]'
                         : 'border-border bg-surface-2/85 text-text-muted hover:bg-surface-3 hover:text-text',
                     )}
                   >
@@ -293,8 +339,8 @@ export const ClaudeCliDock = memo(function ClaudeCliDock() {
                 }}
                 className={cn(
                   'pointer-events-auto flex flex-1 items-center justify-center rounded-[10px]',
-                  'border-2 border-dashed border-[rgba(76,141,255,0.45)] bg-[rgba(76,141,255,0.06)] text-[11px] text-[#bcd1ff]',
-                  'transition hover:border-[rgba(76,141,255,0.85)] hover:bg-[rgba(76,141,255,0.16)]',
+                  'border-2 border-dashed border-accent/45 bg-accent/[0.06] text-[11px] text-accent-2',
+                  'transition hover:border-accent/85 hover:bg-accent/15',
                 )}
               >
                 Drop here → column {idx + 1}
@@ -390,8 +436,46 @@ export const ClaudeCliDock = memo(function ClaudeCliDock() {
                 className={baseClass}
                 style={baseStyle}
               >
-                <Suspense fallback={null}>
-                  <ClaudeCliPane
+                {tab.awaitingCliChoice ? (
+                  <div className="flex h-full items-center justify-center bg-surface-1 p-6">
+                    <div className="w-full max-w-[460px]">
+                      <div className="mb-1 text-[13px] font-semibold text-text">Start an agent session</div>
+                      <div className="mb-4 text-[11px] text-text-muted">Choose the CLI for {p.name}. No terminal starts until you choose.</div>
+                      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                        {(['claude', 'codex', 'opencode', 'gemini', 'antigravity'] as const).map((cli) => (
+                          <button
+                            key={cli}
+                            type="button"
+                            onClick={() => chooseTabCli(p.id, tab.id, cli)}
+                            className="flex h-10 items-center justify-center gap-2 rounded-[6px] border border-border bg-surface-2 px-3 text-[11px] font-medium capitalize text-text-secondary transition hover:border-accent/60 hover:bg-surface-3 hover:text-text"
+                          >
+                            <SquareTerminal size={13} />
+                            {cli === 'opencode' ? 'OpenCode' : cli}
+                          </button>
+                        ))}
+                        {launcherProfiles.map((profile) => (
+                          <button
+                            key={profile.id}
+                            type="button"
+                            onClick={() =>
+                              chooseTabCli(p.id, tab.id, profile.cliId, profile.id)
+                            }
+                            className="flex h-10 min-w-0 items-center gap-2 rounded-[6px] border border-border bg-surface-2 px-3 text-left text-[11px] text-text-secondary transition hover:border-accent/60 hover:bg-surface-3 hover:text-text"
+                            title={`${profile.name} (${profile.provider.model})`}
+                          >
+                            <SquareTerminal size={13} className="shrink-0" />
+                            <span className="min-w-0 flex-1 truncate">{profile.name}</span>
+                            <span className="shrink-0 text-[9px] uppercase text-text-dim">
+                              {profile.cliId}
+                            </span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <Suspense fallback={null}>
+                    <ClaudeCliPane
                     projectId={p.id}
                     projectPath={p.path}
                     tabId={tab.id}
@@ -399,8 +483,9 @@ export const ClaudeCliDock = memo(function ClaudeCliDock() {
                     authProfileId={tab.authProfileId}
                     cliId={tab.cliId}
                     cliProfileId={tab.cliProfileId}
-                  />
-                </Suspense>
+                    />
+                  </Suspense>
+                )}
               </div>
             );
           });

@@ -60,6 +60,26 @@ describe('cliTabs dock column pins', () => {
     delete (globalThis as { localStorage?: unknown }).localStorage;
   });
 
+  it('restores a custom Codex launcher choice after a module restart', async () => {
+    let module = await import('@renderer/state/cliTabs');
+    module.useCliTabsStore.getState().dockProject(meta('p1'));
+    const tab = module.useCliTabsStore.getState().tabsByProject['p1']![0]!;
+    module.useCliTabsStore
+      .getState()
+      .chooseTabCli('p1', tab.id, 'codex', 'codex-profile-1');
+
+    vi.resetModules();
+    module = await import('@renderer/state/cliTabs');
+    const restored = module.useCliTabsStore.getState();
+    expect(restored.dockedOrder).toEqual(['p1']);
+    expect(restored.tabsByProject['p1']![0]).toMatchObject({
+      id: tab.id,
+      cliId: 'codex',
+      cliProfileId: 'codex-profile-1',
+    });
+    expect(restored.tabsByProject['p1']![0]!.awaitingCliChoice).toBeUndefined();
+  });
+
   it('setColumnPin swaps with the donor column instead of blanking it', async () => {
     const { useCliTabsStore } = await import('@renderer/state/cliTabs');
     const store = useCliTabsStore.getState();
@@ -250,6 +270,7 @@ describe('cliTabs dock column pins', () => {
 
     store.dockProject(meta('p1'));
     const t1 = useCliTabsStore.getState().tabsByProject['p1']![0]!;
+    store.chooseTabCli('p1', t1.id, 'claude');
     const t2 = store.addTab('p1')!;
     expect(computePinnedSessionIds(useCliTabsStore.getState())).toContain(
       activeSessionId(),
@@ -320,6 +341,7 @@ describe('cliTabs PTY teardown wiring', () => {
     const store = useCliTabsStore.getState();
     store.dockProject(meta('p1'));
     const t1 = useCliTabsStore.getState().tabsByProject['p1']![0]!;
+    store.chooseTabCli('p1', t1.id, 'claude');
 
     await store.reloadTab('p1', t1.id);
     expect(restart).toHaveBeenCalledWith('p1', t1.id);

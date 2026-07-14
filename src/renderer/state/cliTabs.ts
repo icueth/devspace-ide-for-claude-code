@@ -5,6 +5,7 @@ import {
   addColumnState,
   arraysEqualUnordered,
   claudeCliSessionId,
+  cliSessionId,
   computeAllSessionIds,
   computePinnedSessionIds,
   pinForActiveSelection,
@@ -30,6 +31,10 @@ export { claudeCliSessionId, computePinnedSessionIds };
 const LS_KEY = 'devspace:cliTabs:v1';
 
 const MAX_COLUMNS = 3;
+
+function cliKind(cliId?: CliId): `${CliId}-cli` {
+  return `${cliId ?? 'claude'}-cli`;
+}
 
 interface PersistedShape {
   tabsByProject: Record<string, CliTab[]>;
@@ -114,6 +119,12 @@ interface CliTabsState extends PersistedShape {
     projectId: string,
     opts?: { authProfileId?: string; cliId?: CliId; cliProfileId?: string },
   ) => CliTab | null;
+  chooseTabCli: (
+    projectId: string,
+    tabId: string,
+    cliId: CliId,
+    cliProfileId?: string,
+  ) => void;
   removeTab: (projectId: string, tabId: string) => void;
   setActiveTab: (projectId: string, tabId: string) => void;
   renameTab: (projectId: string, tabId: string, label: string) => void;
@@ -184,7 +195,9 @@ export const useCliTabsStore = create<CliTabsState>((set, get) => {
       }
 
       const seedTab =
-        existing && existing.length > 0 ? existing[0]! : makeTab(project.id, 'Claude 1');
+        existing && existing.length > 0
+          ? existing[0]!
+          : { ...makeTab(project.id, 'Choose agent'), awaitingCliChoice: true };
       const tabs = existing && existing.length > 0 ? existing : [seedTab];
 
       set((prev) => {
@@ -214,8 +227,9 @@ export const useCliTabsStore = create<CliTabsState>((set, get) => {
       // for every tab plus the legacy per-project shell — a detach-only
       // kill leaks claude + MCP children in detached tmux sessions.
       for (const tab of tabs) {
+        if (tab.awaitingCliChoice) continue;
         void api.pty
-          .killSessionTree(projectId, tab.id, 'claude-cli')
+          .killSessionTree(projectId, tab.id, cliKind(tab.cliId))
           .catch(() => undefined);
       }
       void api.pty
@@ -328,8 +342,48 @@ export const useCliTabsStore = create<CliTabsState>((set, get) => {
       return tab;
     },
 
+    chooseTabCli(projectId, tabId, cliId, cliProfileId) {
+      set((prev) => {
+        const tabs = prev.tabsByProject[projectId] ?? [];
+        if (!tabs.some((tab) => tab.id === tabId && tab.awaitingCliChoice)) {
+          return prev;
+        }
+        const cliLabel =
+          cliId === 'opencode'
+            ? 'OpenCode'
+            : cliId === 'codex'
+              ? 'Codex'
+              : cliId === 'gemini'
+                ? 'Gemini'
+                : cliId === 'antigravity'
+                  ? 'Antigravity'
+                  : 'Claude';
+        const next: PersistedShape = {
+          ...prev,
+          tabsByProject: {
+            ...prev.tabsByProject,
+            [projectId]: tabs.map((tab) =>
+              tab.id === tabId
+                ? {
+                    ...tab,
+                    label: `${cliLabel} 1`,
+                    cliId: cliId === 'claude' ? undefined : cliId,
+                    cliProfileId,
+                    awaitingCliChoice: undefined,
+                  }
+                : tab,
+            ),
+          },
+        };
+        persist(next);
+        return next;
+      });
+    },
+
     removeTab(projectId, tabId) {
       const s = get();
+      const removed = s.tabsByProject[projectId]?.find((t) => t.id === tabId);
+      const kind = cliKind(removed?.cliId);
       const tabs = (s.tabsByProject[projectId] ?? []).filter((t) => t.id !== tabId);
       // Closing the last tab undocks the project entirely — matches the
       // user's mental model: "ปิดทิ้ง" should remove the chip, not respawn.
@@ -339,13 +393,13 @@ export const useCliTabsStore = create<CliTabsState>((set, get) => {
       // headless in a detached session.
       if (tabs.length === 0) {
         void api.pty
-          .killSessionTree(projectId, tabId, 'claude-cli')
+          .killSessionTree(projectId, tabId, kind)
           .catch(() => undefined);
         get().undockProject(projectId);
         return;
       }
       void api.pty
-        .killSessionTree(projectId, tabId, 'claude-cli')
+        .killSessionTree(projectId, tabId, kind)
         .catch(() => undefined);
       set((prev) => {
         const next = removeTabState(prev, projectId, tabId);
@@ -436,8 +490,14 @@ export const useCliTabsStore = create<CliTabsState>((set, get) => {
       // effect's `new-session -A` creates a FRESH claude — picking up new
       // .mcp.json/env is the whole point of "Reload tab". A plain kill only
       // detached, so the remount silently reattached to the old claude.
+      const tab = get().tabsByProject[projectId]?.find((t) => t.id === tabId);
+      if (!tab || tab.awaitingCliChoice) return;
       try {
-        await api.pty.restartClaude(projectId, tabId);
+        if ((tab.cliId ?? 'claude') === 'claude') {
+          await api.pty.restartClaude(projectId, tabId);
+        } else {
+          await api.pty.killSessionTree(projectId, tabId, cliKind(tab.cliId));
+        }
       } catch {
         /* best-effort — still bump reloadGen so the pane remounts */
       }
@@ -464,17 +524,19 @@ export const useCliTabsStore = create<CliTabsState>((set, get) => {
 
     getActiveSessionId(projectId) {
       const tab = get().getActiveTab(projectId);
-      return tab ? claudeCliSessionId(projectId, tab.id) : null;
+      return tab && !tab.awaitingCliChoice
+        ? cliSessionId(tab.cliId ?? 'claude', projectId, tab.id)
+        : null;
     },
   };
 });
 
-const CLAUDE_CLI_ID_RE = /^(.+):claude-cli:([^:]+)$/;
+const CLI_ID_RE = /^(.+):(?:claude|opencode|codex|gemini|antigravity)-cli:([^:]+)$/;
 if (typeof window !== 'undefined' && api?.pty?.onAutoClosed) {
   api.pty.onAutoClosed(({ ids }) => {
     const store = useCliTabsStore.getState();
     for (const id of ids) {
-      const m = CLAUDE_CLI_ID_RE.exec(id);
+      const m = CLI_ID_RE.exec(id);
       if (!m) continue;
       store.removeTab(m[1]!, m[2]!);
     }

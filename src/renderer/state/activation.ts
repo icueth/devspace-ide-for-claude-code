@@ -51,7 +51,7 @@ export async function activate(intent: ActivationIntent): Promise<void> {
     if (!after.projects.some((p) => p.id === projectId)) return;
     // D1: collapse splits so a column still pinned to the workspace we just
     // left can't keep rendering a stale pane.
-    if (intent.tabId) {
+    if (intent.tabId && intent.source !== 'boot') {
       useCliTabsStore.getState().focusSingleProject(projectId, intent.tabId);
     }
   }

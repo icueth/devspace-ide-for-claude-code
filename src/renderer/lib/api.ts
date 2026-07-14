@@ -30,6 +30,7 @@ import type {
   Project,
   PtyCreateOptions,
   PtySession,
+  PtySessionKind,
   DesignSeedingReseedResult,
   DesignSeedingStatus,
   SearchOptions,
@@ -193,7 +194,7 @@ export interface DevspaceApi {
     killSessionTree: (
       projectId: string,
       tabId: string,
-      kind: 'claude-cli' | 'shell',
+      kind: PtySessionKind,
     ) => Promise<void>;
     // Restart one claude-cli tab with a brand-new claude process (picks up
     // fresh .mcp.json / env). `kill` alone only detaches and the remounted

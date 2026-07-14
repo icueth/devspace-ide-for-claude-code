@@ -75,8 +75,8 @@ export function CliTabBar({
   // clicking such a chip switches the whole workspace (handleSelect → router).
   const activeWsId = useWorkspaceStore((s) => s.active?.id);
   const knownWorkspaces = useWorkspaceStore((s) => s.known);
-  const labelForWorkspace = (wsId: string): string | undefined =>
-    wsId === activeWsId
+  const labelForWorkspace = (wsId?: string): string | undefined =>
+    !wsId || wsId === activeWsId
       ? undefined
       : (knownWorkspaces.find((w) => w.id === wsId)?.name ?? '⋯');
 
@@ -198,8 +198,7 @@ export function CliTabBar({
   return (
     <>
       <div
-        className="flex h-[44px] shrink-0 items-stretch gap-1 overflow-x-auto border-b border-border px-2 py-1"
-        style={{ background: 'var(--color-surface-2)' }}
+        className="flex h-10 shrink-0 items-stretch gap-1 overflow-x-auto border-b border-border bg-surface px-2 py-1"
       >
         {chips.map(({ project, tab, isActive, pinnedElsewhere }) => (
           <TabChip
@@ -670,18 +669,11 @@ function TabChip({
       className={cn(
         'group flex h-full shrink-0 items-stretch rounded-[6px] border text-[11px] transition',
         isActive
-          ? 'border-[rgba(76,141,255,0.4)] bg-surface-3 text-text'
+          ? 'border-accent/40 bg-accent/10 text-text'
           : pinnedElsewhere
-            ? 'border-[rgba(76,141,255,0.2)] bg-surface-2 text-text-secondary hover:border-border-hi hover:bg-surface-3 hover:text-text'
+            ? 'border-accent/20 bg-surface-2 text-text-secondary hover:border-border-hi hover:bg-surface-3 hover:text-text'
             : 'border-border bg-surface-2 text-text-secondary hover:border-border-hi hover:bg-surface-3 hover:text-text',
       )}
-      style={
-        isActive
-          ? {
-              boxShadow: '0 0 0 1px rgba(76,141,255,0.15) inset',
-            }
-          : undefined
-      }
     >
       <button
         type="button"
@@ -693,32 +685,29 @@ function TabChip({
           className={cn(
             'h-[6px] w-[6px] shrink-0 rounded-full transition',
             isActive
-              ? 'bg-[#4c8dff]'
+              ? 'bg-accent'
               : pinnedElsewhere
-                ? 'bg-[#4c8dff]/55'
+                ? 'bg-accent/55'
                 : 'bg-text-muted/40',
           )}
         />
         <span className="flex min-w-0 flex-col items-start leading-[1.15]">
-          {workspaceLabel && (
-            <span
-              className="max-w-full truncate text-[8.5px] font-medium uppercase tracking-wide text-accent-2/70"
-              title={`Workspace: ${workspaceLabel}`}
-            >
-              {workspaceLabel}
-            </span>
-          )}
           <span
             className={cn(
-              'truncate text-[10.5px] font-semibold',
+              'block max-w-full truncate text-[10.5px] font-semibold',
               isActive ? 'text-text' : 'text-text-secondary',
             )}
           >
+            {workspaceLabel && (
+              <span className="text-[9px] font-medium text-accent-2/70">
+                {workspaceLabel} /{' '}
+              </span>
+            )}
             {project.name}
           </span>
           <span
             className={cn(
-              'truncate text-[10px]',
+              'block max-w-full truncate text-[10px]',
               isActive ? 'text-text-secondary' : 'text-text-muted',
             )}
           >

@@ -181,7 +181,7 @@ export function RawTerminalView({ sessionId, isActive }: RawTerminalViewProps) {
           // so it visually sits BETWEEN turns rather than under the prompt.
           el.style.pointerEvents = 'none';
           el.style.background =
-            'linear-gradient(90deg, transparent, rgba(76,141,255,0.35) 20%, rgba(168,85,247,0.35) 80%, transparent)';
+            'linear-gradient(90deg, transparent, rgb(var(--color-accent-rgb) / 0.38) 20%, rgb(var(--color-accent-rgb) / 0.18) 80%, transparent)';
           el.style.height = '1px';
           el.style.transform = 'translateY(-1px)';
           el.style.opacity = '0.55';

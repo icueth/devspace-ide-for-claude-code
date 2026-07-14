@@ -178,13 +178,7 @@ export function ClaudeCliPane({
 
   return (
     <div className="flex h-full flex-col">
-      <div
-        className="flex h-10 shrink-0 items-center gap-2.5 border-b border-border px-3"
-        style={{
-          background:
-            'linear-gradient(180deg, var(--color-surface-3), var(--color-surface-2))',
-        }}
-      >
+      <div className="flex h-10 shrink-0 items-center gap-2.5 border-b border-border bg-surface-2 px-3">
         <div
           className="flex h-6 w-6 shrink-0 items-center justify-center rounded-[7px] text-[11px] font-bold text-white"
           style={{ background: meta.bg, boxShadow: meta.glow }}
@@ -295,8 +289,8 @@ function ContextChips({ shortCwd, branch, ahead, dirty }: ContextChipsProps) {
       </Chip>
       <Chip
         style={{
-          background: 'rgba(76,141,255,0.08)',
-          border: '1px solid rgba(76,141,255,0.2)',
+          background: 'rgb(var(--color-accent-rgb) / 0.08)',
+          border: '1px solid rgb(var(--color-accent-rgb) / 0.2)',
           color: 'var(--color-accent-2)',
         }}
       >
@@ -396,23 +390,14 @@ function QuickActions({ onSend, disabled }: QuickActionsProps) {
             className={cn(
               'inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-[7px] border px-2.5 py-1 text-[11px] transition',
               a.primary
-                ? 'border-[rgba(76,141,255,0.3)] text-text'
+                ? 'border-accent/30 bg-accent/10 text-text'
                 : 'border-border bg-surface-3 text-text-secondary hover:border-border-hi hover:bg-surface-4 hover:text-text',
               disabled && 'pointer-events-none opacity-40',
             )}
-            style={
-              a.primary
-                ? {
-                    background:
-                      'linear-gradient(135deg, rgba(76,141,255,0.2), rgba(168,85,247,0.12))',
-                  }
-                : undefined
-            }
             title={`Send ${a.cmd} to Claude`}
           >
             <span
-              className="font-mono text-[10px] text-[color:var(--color-accent-2)]"
-              style={{ color: '#a855f7' }}
+              className="font-mono text-[10px] text-accent-2"
             >
               /
             </span>
@@ -488,10 +473,7 @@ function GoalDialog({
             onClick={() => onSubmit(text)}
             disabled={!text.trim()}
             className="inline-flex h-[26px] items-center rounded-[7px] px-3 text-[11px] font-medium text-white transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40"
-            style={{
-              background:
-                'linear-gradient(135deg, var(--color-accent), #a855f7)',
-            }}
+            style={{ background: 'var(--color-accent-3)' }}
           >
             Set goal
           </button>

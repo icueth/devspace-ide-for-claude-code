@@ -229,6 +229,42 @@ interface WorkspaceState {
   setAllExpanded: (v: boolean) => void;
 }
 
+/**
+ * Open-folder policy: the location's root owns the initial dock focus. Reuse
+ * an existing tab/column when possible; only a genuinely new root should get
+ * a new launcher tab. Kept separate from normal workspace switching, which
+ * restores that workspace's last active project instead.
+ */
+export function activateOpenedLocationRoot(): void {
+  const ws = useWorkspaceStore.getState();
+  const root =
+    ws.projects.find((project) => project.isWorkspaceRoot) ??
+    ws.projects.find((project) => project.path === ws.active?.path);
+  if (!root) return;
+
+  const cli = useCliTabsStore.getState();
+  const tabs = cli.tabsByProject[root.id] ?? [];
+  if (tabs.length > 0) {
+    const tabId =
+      cli.activeTabIdByProject[root.id] &&
+      tabs.some((tab) => tab.id === cli.activeTabIdByProject[root.id])
+        ? cli.activeTabIdByProject[root.id]!
+        : tabs[0]!.id;
+    const owner = cli.columns.find(
+      (column) =>
+        column.pin?.projectId === root.id && column.pin.tabId === tabId,
+    );
+    if (owner) cli.setActiveColumn(owner.id);
+    cli.setActiveTab(root.id, tabId);
+    ws.setActiveProject(root.id);
+    return;
+  }
+
+  // setActiveProject docks the root idempotently and creates its launcher
+  // only when no persisted tab exists.
+  ws.setActiveProject(root.id);
+}
+
 type WorkspaceSet = (
   partial:
     | Partial<WorkspaceState>
@@ -329,6 +365,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     if (!ws) return;
     set({ active: ws, known: [...get().known.filter((w) => w.id !== ws.id), ws] });
     await get().setActive(ws.id);
+    activateOpenedLocationRoot();
   },
 
   async openPath(path: string) {
@@ -336,6 +373,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     const ws = await api.workspace.open(path);
     set({ active: ws, known: [...get().known.filter((w) => w.id !== ws.id), ws] });
     await get().setActive(ws.id);
+    activateOpenedLocationRoot();
   },
 
   async setActive(id: string) {

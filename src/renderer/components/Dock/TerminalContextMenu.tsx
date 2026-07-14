@@ -94,7 +94,7 @@ export function TerminalContextMenu({
                 ? 'cursor-not-allowed text-text-muted opacity-60'
                 : item.danger
                   ? 'text-[#fca5a5] hover:bg-[rgba(239,68,68,0.18)] hover:text-[#fee2e2]'
-                  : 'text-text-secondary hover:bg-[rgba(76,141,255,0.18)] hover:text-text',
+                  : 'text-text-secondary hover:bg-accent/15 hover:text-text',
             )}
           >
             <span className="truncate">{item.label}</span>

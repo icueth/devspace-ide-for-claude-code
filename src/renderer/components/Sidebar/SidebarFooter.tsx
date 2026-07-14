@@ -1,4 +1,4 @@
-import { FilePlus2, GitBranch, Settings } from 'lucide-react';
+import { FilePlus2, GitBranch } from 'lucide-react';
 
 import { usePromptStore } from '@renderer/state/prompt';
 import { useGitStore } from '@renderer/state/git';
@@ -8,7 +8,7 @@ import { cn } from '@renderer/lib/utils';
 
 interface Props {
   projectPath: string;
-  onOpenSettings: () => void;
+  onOpenGit: () => void;
 }
 
 /**
@@ -16,7 +16,7 @@ interface Props {
  * user reaches for constantly (new file + branch picker) plus a settings
  * pass-through — no more hunting through menus.
  */
-export function SidebarFooter({ projectPath, onOpenSettings }: Props) {
+export function SidebarFooter({ projectPath, onOpenGit }: Props) {
   const askPrompt = usePromptStore((s) => s.ask);
   const activeProjectId = useWorkspaceStore((s) => s.activeProjectId);
   const gitSnapshot = useGitStore((s) =>
@@ -44,11 +44,7 @@ export function SidebarFooter({ projectPath, onOpenSettings }: Props) {
 
   return (
     <div
-      className="relative z-[1] flex shrink-0 items-center gap-1.5 border-t border-border-subtle px-2.5 py-2"
-      style={{
-        background:
-          'linear-gradient(180deg, var(--color-surface-2), var(--color-surface-3))',
-      }}
+      className="relative z-[1] flex shrink-0 items-center gap-1.5 border-t border-border bg-surface-2 px-2.5 py-2"
     >
       <FooterBtn onClick={createFile} primary title="New file">
         <FilePlus2 size={11} strokeWidth={2.5} />
@@ -56,16 +52,11 @@ export function SidebarFooter({ projectPath, onOpenSettings }: Props) {
       </FooterBtn>
       <FooterBtn
         title={branch ? `Branch · ${branch}` : 'No git'}
-        className="flex-1 min-w-0"
+        className="min-w-0 flex-1"
+        onClick={onOpenGit}
       >
         <GitBranch size={11} />
         <span className="truncate">{branch ?? '(no git)'}</span>
-      </FooterBtn>
-      <FooterBtn
-        title="Claude settings (~/.claude)"
-        onClick={onOpenSettings}
-      >
-        <Settings size={11} />
       </FooterBtn>
     </div>
   );
@@ -89,7 +80,7 @@ function FooterBtn({
       onClick={onClick}
       title={title}
       className={cn(
-        'inline-flex items-center justify-center gap-1.5 rounded-[7px] border px-2.5 py-[5px] text-[10.5px] font-medium transition',
+        'inline-flex h-7 items-center justify-center gap-1.5 rounded-[6px] border px-2.5 text-[10.5px] font-medium transition',
         primary
           ? 'border-transparent text-white hover:brightness-110'
           : 'border-border-subtle bg-surface-3 text-text-secondary hover:border-border-hi hover:bg-surface-4 hover:text-text',
@@ -98,9 +89,8 @@ function FooterBtn({
       style={
         primary
           ? {
-              background:
-                'linear-gradient(135deg, var(--color-accent), var(--color-accent-3))',
-              boxShadow: '0 2px 8px rgba(76,141,255,0.2)',
+              background: 'var(--color-accent-3)',
+              boxShadow: '0 2px 8px var(--color-accent-glow)',
             }
           : undefined
       }

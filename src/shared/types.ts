@@ -457,6 +457,9 @@ export interface CliTab {
   // For a non-claude tab: the CliProfile (custom provider) it launches with.
   // undefined = the CLI's own default config/auth.
   cliProfileId?: string;
+  // A fresh dock starts as a launcher instead of eagerly spawning Claude.
+  // The flag is cleared once the user selects a CLI for this tab.
+  awaitingCliChoice?: boolean;
 }
 
 // Per-project shell terminal tab. The bottom-panel terminal supports many
@@ -1213,4 +1216,3 @@ export interface Task {
   createdAt: number;
   error?: string;
 }
-

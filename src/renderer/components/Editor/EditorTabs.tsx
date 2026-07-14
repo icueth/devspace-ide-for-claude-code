@@ -33,13 +33,7 @@ export function EditorTabs({ pane }: EditorTabsProps) {
   if (tabs.length === 0) return null;
 
   return (
-    <div
-      className="flex h-9 items-stretch overflow-x-auto border-b border-border"
-      style={{
-        background:
-          'linear-gradient(180deg, var(--color-surface-2), var(--color-surface))',
-      }}
-    >
+    <div className="flex h-10 items-center gap-1 overflow-x-auto border-b border-border bg-surface-2 px-1.5">
       {tabs.map((tab, idx) => {
         const isActive = tab.path === activeTabPath;
         const isDirty = tab.kind === 'text' && tab.content !== tab.savedContent;
@@ -75,19 +69,15 @@ export function EditorTabs({ pane }: EditorTabsProps) {
                   }
                 }}
                 className={cn(
-                  'group relative flex shrink-0 items-center gap-2 border-r border-border-subtle px-3.5 text-[12px] transition',
+                  'group relative flex h-8 shrink-0 items-center gap-2 rounded-[6px] border px-2.5 text-[11.5px] transition',
                   isActive
-                    ? 'bg-surface text-text'
-                    : 'text-text-muted hover:bg-white/[0.02] hover:text-text-secondary',
+                    ? 'border-border-emphasis bg-surface-4 text-text shadow-sm'
+                    : 'border-transparent text-text-muted hover:border-border-subtle hover:bg-surface-3 hover:text-text-secondary',
                 )}
               >
                 {isActive && (
                   <span
-                    className="absolute inset-x-0 top-0 h-[2px] rounded-b-sm"
-                    style={{
-                      background:
-                        'linear-gradient(90deg, var(--color-accent), #a855f7)',
-                    }}
+                    className="absolute inset-x-2 bottom-0 h-0.5 rounded-t bg-accent"
                   />
                 )}
                 <span
@@ -104,8 +94,7 @@ export function EditorTabs({ pane }: EditorTabsProps) {
                   <span
                     className="h-1.5 w-1.5 shrink-0 rounded-full"
                     style={{
-                      background:
-                        'linear-gradient(135deg, var(--color-accent), #a855f7)',
+                    background: 'var(--color-accent)',
                     }}
                     aria-label="unsaved"
                   />

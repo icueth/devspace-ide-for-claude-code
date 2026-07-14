@@ -6,9 +6,7 @@ import {
   Maximize2,
   Minimize2,
   PanelLeftClose,
-  PanelLeftOpen,
   PanelRightClose,
-  PanelRightOpen,
   Search,
   Terminal as TerminalIcon,
   Workflow,
@@ -16,7 +14,10 @@ import {
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { AgentsRail } from '@renderer/components/Agents/AgentsRail';
-import { BottomPanel } from '@renderer/components/Bottom/BottomPanel';
+import {
+  BottomPanel,
+  type BottomPanelTab,
+} from '@renderer/components/Bottom/BottomPanel';
 import { RouteErrorBoundary } from '@renderer/components/Layout/RouteErrorBoundary';
 import { GoToLineDialog } from '@renderer/components/CommandPalette/GoToLineDialog';
 import { PromptDialog } from '@renderer/components/CommandPalette/PromptDialog';
@@ -27,6 +28,18 @@ import { ClaudeCliDock } from '@renderer/components/Dock/ClaudeCliDock';
 import { EditorArea } from '@renderer/components/Editor/EditorArea';
 import { Resizer } from '@renderer/components/Layout/Resizer';
 import { DockSection, SidebarSection } from '@renderer/components/Layout/ResizablePanels';
+import {
+  WorkbenchRail,
+  type WorkbenchDestination,
+} from '@renderer/components/Layout/WorkbenchRail';
+import {
+  resolveEditorDestination,
+  resolveShellDestination,
+} from '@renderer/components/Layout/workbenchRouting';
+import {
+  nextBottomPanelTabRequest,
+  type BottomPanelTabRequest,
+} from '@renderer/components/Bottom/bottomPanelRequest';
 import { SettingsPage } from '@renderer/components/Settings/SettingsPage';
 import { SetupBanner } from '@renderer/components/Settings/SetupBanner';
 import { FileTree } from '@renderer/components/Sidebar/FileTree';
@@ -113,6 +126,17 @@ function AppInner() {
   // v2 — left sidebar surface: project tree vs flat worktree-isolated task list.
   const sidebarMode = useSidebarStore((s) => s.mode);
   const setSidebarMode = useSidebarStore((s) => s.setMode);
+  const dockedSessionProjectCount = useCliTabsStore((s) => s.dockedOrder.length);
+  const [workbenchDestination, setWorkbenchDestinationState] =
+    useState<WorkbenchDestination>(() => readWorkbenchDestination(sidebarMode));
+  const setWorkbenchDestination = useCallback((destination: WorkbenchDestination) => {
+    setWorkbenchDestinationState(destination);
+    try {
+      localStorage.setItem('devspace:workbench-destination:v1', destination);
+    } catch {
+      /* persistence is best-effort */
+    }
+  }, []);
   // v0.30.5 / v0.38 — switching to a tab anchored to a different project
   // moves the sidebar (FileTree + ProjectList highlight + git store + chat
   // dock) to that project, via workspace.followTab (which also records the
@@ -125,6 +149,9 @@ function AppInner() {
   // REVERTED every sidebar/Welcome/dock-chip project click while a foreign
   // project's tab was focused — the "clicking a project does nothing" bug.
   const activeTabPathRaw = useEditorStore((s) => s.activeTabPath);
+  const activeTabKind = useEditorStore(
+    (s) => s.tabs.find((tab) => tab.path === s.activeTabPath)?.kind ?? null,
+  );
   useEffect(() => {
     if (activeTabPathRaw === lastFollowedTabPath) return;
     lastFollowedTabPath = activeTabPathRaw;
@@ -138,9 +165,13 @@ function AppInner() {
   // has to guess whether an active-column change came from the user or a
   // background repair (defensive auto-pin, idle-pty undock), which is what made
   // the old approach perpetually leaky.
-  const [bottomInitialTab, setBottomInitialTab] = useState<'terminal' | 'git' | 'search'>(
-    'terminal',
-  );
+  const [bottomTabRequest, setBottomTabRequest] = useState<BottomPanelTabRequest>({
+    tab: 'terminal',
+    requestId: 0,
+  });
+  const requestBottomTab = useCallback((tab: BottomPanelTab) => {
+    setBottomTabRequest((current) => nextBottomPanelTabRequest(current, tab));
+  }, []);
   const [quickOpen, setQuickOpen] = useState(false);
   const [spotlightOpen, setSpotlightOpen] = useState(false);
   const [goToLine, setGoToLine] = useState(false);
@@ -156,6 +187,7 @@ function AppInner() {
     | 'memory'
     | 'skills'
   >('account');
+  const compactShell = useCompactShell();
 
   useEffect(() => {
     // Defense-in-depth: validate the tab value against an allowlist before
@@ -178,6 +210,7 @@ function AppInner() {
       if (detail?.tab && (ALLOWED_TABS as Set<string>).has(detail.tab)) {
         setSettingsInitialTab(detail.tab as AllowedTab);
       }
+      setWorkbenchDestination('settings');
       setSettingsOpen(true);
     };
     window.addEventListener('devspace:open-settings', handler);
@@ -185,12 +218,29 @@ function AppInner() {
   }, []);
   const dockFull = useLayoutStore((s) => s.dockFull);
   const toggleDockFull = useLayoutStore((s) => s.toggleDockFull);
+  const setDockFull = useLayoutStore((s) => s.setDockFull);
   const adjustSidebarWidth = useLayoutStore((s) => s.adjustSidebarWidth);
   const adjustDockWidth = useLayoutStore((s) => s.adjustDockWidth);
   const adjustBottomHeight = useLayoutStore((s) => s.adjustBottomHeight);
   const toggleBottom = useLayoutStore((s) => s.toggleBottom);
   const persistLayout = useLayoutStore((s) => s.persist);
   const teamMode = useLayoutStore((s) => s.teamMode);
+
+  useEffect(() => {
+    const next = resolveShellDestination({
+      current: workbenchDestination,
+      settingsOpen,
+      dockFull,
+      sidebarMode,
+    });
+    if (next !== workbenchDestination) setWorkbenchDestination(next);
+  }, [dockFull, settingsOpen, sidebarMode, workbenchDestination]);
+
+  useEffect(() => {
+    if (settingsOpen || dockFull || sidebarMode === 'tasks') return;
+    const next = resolveEditorDestination(workbenchDestination, activeTabKind);
+    if (next !== workbenchDestination) setWorkbenchDestination(next);
+  }, [activeTabKind, dockFull, settingsOpen, sidebarMode, workbenchDestination]);
 
   useEffect(() => {
     api.app
@@ -321,7 +371,7 @@ function AppInner() {
       const k = e.key.toLowerCase();
       if (e.shiftKey && k === 'f') {
         e.preventDefault();
-        setBottomInitialTab('search');
+        requestBottomTab('search');
         setBottomOpen(true);
         return;
       }
@@ -426,7 +476,7 @@ function AppInner() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [setBottomOpen, askPrompt]);
+  }, [setBottomOpen, requestBottomTab, askPrompt]);
 
   // v0.30.8 — Command registry for Spotlight (Cmd+K). Built fresh per
   // active-project change so commands close over the right paths/IDs but
@@ -609,39 +659,64 @@ function AppInner() {
     return cmds;
   }, [activeProject, openCodeflow, openLivePreview, openHtmlPreview, askPrompt]);
 
-  const dockVisible = openedProjectIds.length > 0;
+  // The dock owns cross-workspace sessions independently from the workspace's
+  // currently-open project list. On restart those lists can hydrate at
+  // different times, so using openedProjectIds here briefly (or permanently)
+  // hid persisted Codex/OpenCode sessions even though their tabs were intact.
+  const dockVisible = dockedSessionProjectCount > 0;
   const showBottom = bottomOpen && activeProject;
+  const navigateWorkbench = (destination: WorkbenchDestination) => {
+    setWorkbenchDestination(destination);
+    if (destination === 'settings') {
+      setDockFull(false);
+      setSettingsOpen(true);
+      return;
+    }
+
+    setSettingsOpen(false);
+    switch (destination) {
+      case 'workspace':
+        setDockFull(false);
+        setSidebarMode('projects');
+        if (leftCollapsed) toggleLeftSidebar();
+        break;
+      case 'tasks':
+        setDockFull(false);
+        setSidebarMode('tasks');
+        if (leftCollapsed) toggleLeftSidebar();
+        break;
+      case 'sessions':
+        if (rightCollapsed) toggleRightSidebar();
+        setDockFull(true);
+        break;
+      case 'codeflow':
+        setDockFull(false);
+        setSidebarMode('projects');
+        if (activeProject) openCodeflow(activeProject.path, activeProject.name);
+        break;
+      case 'git':
+        setDockFull(false);
+        setSidebarMode('projects');
+        requestBottomTab('git');
+        setBottomOpen(true);
+        break;
+    }
+  };
 
   return (
     <div className="flex h-full flex-col">
       <header
-        className="drag-region flex h-10 shrink-0 items-center justify-between border-b border-border px-4"
-        style={{
-          background:
-            'linear-gradient(180deg, var(--color-surface-2) 0%, var(--color-surface) 100%)',
-        }}
+        className="drag-region flex h-10 shrink-0 items-center justify-between border-b border-border bg-surface-2 px-3"
       >
-        <div className="flex items-center gap-3 pl-24">
-          <div
-            className="h-[18px] w-[18px] rounded-[5px]"
-            style={{
-              background: 'linear-gradient(135deg, var(--color-accent), #a855f7)',
-              boxShadow: '0 0 12px var(--color-accent-glow)',
-            }}
-            aria-hidden
-          />
+        <div className="flex min-w-0 items-center gap-2.5 pl-24">
           <span className="text-[12.5px] font-semibold text-text">devspace</span>
           <UpdateBadge fallbackVersion={version || '?'} />
           {activeProject && (
-            <span
-              className="ml-2 flex items-center gap-1.5 rounded-[7px] border border-border-subtle bg-surface-3 px-2.5 py-[3px] text-[11.5px] text-text-secondary"
-              title={activeProject.path}
-            >
+            <span className="ml-1 flex min-w-0 items-center gap-1.5 text-[11px] text-text-muted" title={activeProject.path}>
               <span
                 className="h-1.5 w-1.5 shrink-0 rounded-full bg-semantic-success"
-                style={{ boxShadow: '0 0 6px #22c55e' }}
               />
-              <span className="truncate">{activeProject.name}</span>
+              <span className="max-w-40 truncate font-mono">{activeProject.name}</span>
             </span>
           )}
         </div>
@@ -651,28 +726,12 @@ function AppInner() {
               right action group so it reads first ("search → then actions"). */}
           <button
             onClick={() => setSpotlightOpen(true)}
-            className="inline-flex h-[26px] items-center gap-1.5 rounded-[7px] border border-border-subtle bg-surface-3 px-2.5 text-[11px] text-text-secondary transition hover:border-border-hi hover:bg-surface-4 hover:text-text"
+            className="hidden h-7 w-56 items-center gap-1.5 rounded-[7px] border border-border bg-surface-3 px-2.5 text-[11px] text-text-muted transition hover:border-border-hi hover:bg-surface-4 hover:text-text lg:inline-flex"
             title="Search files, commands, settings… (⌘K)"
           >
             <Search size={11} />
             <span>Search</span>
             <kbd className="ml-1 rounded bg-surface-4/60 px-1 text-[9.5px] text-text-muted">⌘K</kbd>
-          </button>
-          <button
-            onClick={() => {
-              if (activeProject) openCodeflow(activeProject.path, activeProject.name);
-            }}
-            disabled={!activeProject}
-            className={cn(
-              'inline-flex h-[26px] items-center gap-1.5 rounded-[7px] border px-2.5 text-[11px] transition',
-              !activeProject
-                ? 'cursor-not-allowed border-border-subtle bg-surface-3 text-text-muted opacity-40'
-                : 'border-border-subtle bg-surface-3 text-text-secondary hover:border-border-hi hover:bg-surface-4 hover:text-text',
-            )}
-            title="Codeflow — codebase visualization + Claude-generated architecture docs"
-          >
-            <Workflow size={11} />
-            <span>Codeflow</span>
           </button>
           <button
             onClick={() => {
@@ -688,12 +747,19 @@ function AppInner() {
             title="Live Preview — auto-detect dev server and view the running app inline"
           >
             <Globe size={11} />
-            <span>Live Preview</span>
+            <span className="hidden xl:inline">Live Preview</span>
           </button>
           {dockVisible && (
             <button
               onClick={() => {
                 toggleDockFull();
+                setWorkbenchDestination(
+                  dockFull
+                    ? sidebarMode === 'tasks'
+                      ? 'tasks'
+                      : 'workspace'
+                    : 'sessions',
+                );
                 persistLayout();
               }}
               className={cn(
@@ -739,41 +805,18 @@ function AppInner() {
       />
 
       <main className="flex flex-1 overflow-hidden">
-        {teamMode !== 'focus' && leftCollapsed && (
-          // Collapsed rail — thin 36px column with just an expand button.
-          // We keep the rail visible (not fully hidden) so users can
-          // always find their way back. CSS transition smooths the
-          // width change when the user toggles via the keyboard
-          // shortcut or button.
-          <aside
-            aria-label="Sidebar (collapsed)"
-            className="no-drag relative flex w-9 shrink-0 flex-col items-center border-r border-border bg-surface-sidebar transition-[width] duration-150"
-          >
-            <button
-              type="button"
-              onClick={toggleLeftSidebar}
-              title="Expand sidebar (⌘\\)"
-              className="mt-2 flex h-7 w-7 items-center justify-center rounded-[6px] text-text-muted transition hover:bg-surface-3 hover:text-text"
-            >
-              <PanelLeftOpen size={13} />
-            </button>
-          </aside>
-        )}
-        {teamMode !== 'focus' && !leftCollapsed && (
-        <SidebarSection>
-          {/* Subtle top sheen */}
-          <div
-            className="pointer-events-none absolute left-0 right-0 top-0 h-[100px]"
-            style={{
-              background: 'linear-gradient(180deg, rgba(76,141,255,0.04), transparent)',
-            }}
+        {teamMode !== 'focus' && (
+          <WorkbenchRail
+            active={workbenchDestination}
+            hasProject={!!activeProject}
+            hasSessions={dockVisible}
+            onNavigate={navigateWorkbench}
           />
-
+        )}
+        {!settingsOpen && !dockFull && teamMode !== 'focus' && !leftCollapsed && (
+        <SidebarSection>
           <div
-            className="relative z-[1] flex shrink-0 items-center gap-2 border-b border-border px-3 py-3"
-            style={{
-              background: 'linear-gradient(180deg, rgba(168,85,247,0.04), transparent)',
-            }}
+            className="relative z-[1] flex h-12 shrink-0 items-center gap-2 border-b border-border bg-surface-2 px-3"
           >
             <div className="min-w-0 flex-1">
               <WorkspacePicker />
@@ -786,24 +829,6 @@ function AppInner() {
             >
               <PanelLeftClose size={12} />
             </button>
-          </div>
-
-          <div className="relative z-[1] flex shrink-0 items-center gap-1 border-b border-border-subtle px-2 py-1.5">
-            {(['projects', 'tasks'] as const).map((m) => (
-              <button
-                key={m}
-                type="button"
-                onClick={() => setSidebarMode(m)}
-                className={cn(
-                  'flex-1 rounded-[5px] px-2 py-1 text-[11px] capitalize transition',
-                  sidebarMode === m
-                    ? 'bg-surface-3 text-text'
-                    : 'text-text-muted hover:bg-surface-2 hover:text-text',
-                )}
-              >
-                {m}
-              </button>
-            ))}
           </div>
 
           {sidebarMode === 'tasks' ? (
@@ -848,7 +873,7 @@ function AppInner() {
           {activeProject && (
             <SidebarFooter
               projectPath={activeProject.path}
-              onOpenSettings={() => setSettingsOpen(true)}
+              onOpenGit={() => navigateWorkbench('git')}
             />
           )}
             </>
@@ -856,7 +881,7 @@ function AppInner() {
         </SidebarSection>
         )}
 
-        {teamMode !== 'focus' && !leftCollapsed && (
+        {!settingsOpen && !dockFull && teamMode !== 'focus' && !leftCollapsed && (
           <Resizer
             direction="horizontal"
             onResize={adjustSidebarWidth}
@@ -904,9 +929,21 @@ function AppInner() {
                           <BottomPanel
                             projectId={p.id}
                             projectPath={p.path}
-                            initialTab={
-                              p.id === activeProject.id ? bottomInitialTab : undefined
+                            tabRequest={
+                              p.id === activeProject.id ? bottomTabRequest : undefined
                             }
+                            onActiveTabChange={(tab) => {
+                              if (tab === 'git') {
+                                setWorkbenchDestination('git');
+                              } else if (workbenchDestination === 'git') {
+                                setWorkbenchDestination('workspace');
+                              }
+                            }}
+                            onClose={() => {
+                              if (workbenchDestination === 'git') {
+                                setWorkbenchDestination('workspace');
+                              }
+                            }}
                             isVisible={p.id === activeProject.id}
                           />
                         </div>
@@ -922,64 +959,40 @@ function AppInner() {
           )
         )}
 
-        {!settingsOpen && dockVisible && (
+        {!settingsOpen &&
+          dockVisible &&
+          !rightCollapsed &&
+          (!compactShell || dockFull) && (
           <>
-            {/*
-              v0.14: when the right sidebar is collapsed AND we're not in
-              an explicit full/focus mode, render a thin rail instead of
-              the full ClaudeCliDock. The dockFull / teamMode==='focus'
-              affordances WIN over collapse — they're explicit overrides
-              the user set themselves, so we don't second-guess them.
-            */}
-            {rightCollapsed && !dockFull && teamMode !== 'focus' ? (
-              <aside
-                aria-label="CLI dock (collapsed)"
-                className="no-drag relative flex w-9 shrink-0 flex-col items-center border-l border-border bg-surface transition-[width] duration-150"
-              >
+            {!dockFull && teamMode !== 'focus' && (
+              <Resizer
+                direction="horizontal"
+                onResize={(dx) => adjustDockWidth(-dx)}
+                onResizeEnd={persistLayout}
+              />
+            )}
+            <DockSection full={dockFull || teamMode === 'focus'}>
+              {!dockFull && teamMode !== 'focus' && (
                 <button
                   type="button"
                   onClick={toggleRightSidebar}
-                  title="Expand CLI dock (⌘⇧\\)"
-                  className="mt-2 flex h-7 w-7 items-center justify-center rounded-[6px] text-text-muted transition hover:bg-surface-3 hover:text-text"
+                  title="Collapse CLI dock (⌘⇧\\)"
+                  className="absolute left-2 top-2 z-[3] flex h-6 w-6 items-center justify-center rounded-[5px] bg-surface-3/80 text-text-muted backdrop-blur transition hover:bg-surface-4 hover:text-text"
                 >
-                  <PanelRightOpen size={13} />
+                  <PanelRightClose size={12} />
                 </button>
-              </aside>
-            ) : (
-              <>
-                {!dockFull && teamMode !== 'focus' && (
-                  <Resizer
-                    direction="horizontal"
-                    onResize={(dx) => adjustDockWidth(-dx)}
-                    onResizeEnd={persistLayout}
-                  />
-                )}
-                <DockSection full={dockFull || teamMode === 'focus'}>
-                  {/*
-                    Collapse affordance — only shown when the user could
-                    actually collapse. In dockFull / focus mode the dock
-                    is the main work area, so collapsing it would hide
-                    the user's entire workspace. We hide the button there.
-                  */}
-                  {!dockFull && teamMode !== 'focus' && (
-                    <button
-                      type="button"
-                      onClick={toggleRightSidebar}
-                      title="Collapse CLI dock (⌘⇧\\)"
-                      className="absolute left-2 top-2 z-[3] flex h-6 w-6 items-center justify-center rounded-[5px] bg-surface-3/80 text-text-muted backdrop-blur transition hover:bg-surface-4 hover:text-text"
-                    >
-                      <PanelRightClose size={12} />
-                    </button>
-                  )}
-                  <ClaudeCliDock />
-                </DockSection>
-              </>
-            )}
+              )}
+              <ClaudeCliDock />
+            </DockSection>
           </>
         )}
 
         {/* Agents rail — tmux pane navigator for native Claude agent teams */}
-        {!settingsOpen && dockVisible && teamMode !== 'off' && activeProject && (
+        {!settingsOpen &&
+          dockVisible &&
+          (!compactShell || dockFull) &&
+          teamMode !== 'off' &&
+          activeProject && (
           <AgentsRail slim={teamMode === 'focus'} />
         )}
       </main>
@@ -1004,6 +1017,45 @@ function AppInner() {
       <ResourceToastHost />
     </div>
   );
+}
+
+function useCompactShell() {
+  const [compact, setCompact] = useState(() =>
+    typeof window === 'undefined'
+      ? false
+      : window.matchMedia('(max-width: 1100px)').matches,
+  );
+
+  useEffect(() => {
+    const query = window.matchMedia('(max-width: 1100px)');
+    const update = () => setCompact(query.matches);
+    query.addEventListener('change', update);
+    update();
+    return () => query.removeEventListener('change', update);
+  }, []);
+
+  return compact;
+}
+
+function readWorkbenchDestination(
+  sidebarMode: 'projects' | 'tasks',
+): WorkbenchDestination {
+  try {
+    const saved = localStorage.getItem('devspace:workbench-destination:v1');
+    if (
+      saved === 'workspace' ||
+      saved === 'tasks' ||
+      saved === 'sessions' ||
+      saved === 'codeflow' ||
+      saved === 'git' ||
+      saved === 'settings'
+    ) {
+      return saved;
+    }
+  } catch {
+    /* use the current sidebar as the fallback */
+  }
+  return sidebarMode === 'tasks' ? 'tasks' : 'workspace';
 }
 
 function PromptHost() {

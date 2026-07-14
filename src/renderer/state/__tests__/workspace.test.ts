@@ -4,11 +4,70 @@ import { useCliTabsStore } from '../cliTabs';
 import { useEditorStore } from '../editor';
 import {
   __resetProjectMruForTests,
+  activateOpenedLocationRoot,
   deriveProjectIdFromTab,
   markTreeOpen,
   pickEditorTabForProject,
   useWorkspaceStore,
 } from '../workspace';
+
+describe('activateOpenedLocationRoot', () => {
+  const root = {
+    id: 'root',
+    name: 'root',
+    path: '/ws/root',
+    workspaceId: 'ws',
+    vcs: 'git' as const,
+    detectedRuntime: [],
+    isWorkspaceRoot: true,
+  };
+
+  beforeEach(() => {
+    useWorkspaceStore.setState({
+      active: { id: 'ws', name: 'ws', path: root.path, lastOpened: 0 },
+      projects: [root],
+      activeProjectId: null,
+      openedProjectIds: [],
+    });
+    useCliTabsStore.setState({
+      tabsByProject: {},
+      activeTabIdByProject: {},
+      projectsById: {},
+      dockedOrder: [],
+      activeDockedProjectId: null,
+      columns: [{ id: 'col-0', pin: null }],
+      activeColumnId: 'col-0',
+    });
+  });
+
+  it('creates a launcher dock for a newly opened root', () => {
+    activateOpenedLocationRoot();
+    const cli = useCliTabsStore.getState();
+    expect(useWorkspaceStore.getState().activeProjectId).toBe('root');
+    expect(cli.tabsByProject.root).toHaveLength(1);
+    expect(cli.tabsByProject.root![0]!.awaitingCliChoice).toBe(true);
+  });
+
+  it('focuses the existing owner column instead of replacing the active dock', () => {
+    const cli = useCliTabsStore.getState();
+    cli.dockProject(root);
+    const rootTab = useCliTabsStore.getState().tabsByProject.root![0]!;
+    cli.setColumnPin('col-0', { projectId: 'root', tabId: rootTab.id });
+    cli.addColumn();
+    const otherColumn = useCliTabsStore.getState().activeColumnId;
+    expect(otherColumn).not.toBe('col-0');
+
+    activateOpenedLocationRoot();
+
+    const restored = useCliTabsStore.getState();
+    expect(restored.activeColumnId).toBe('col-0');
+    expect(restored.columns).toHaveLength(2);
+    expect(restored.columns[0]!.pin).toEqual({
+      projectId: 'root',
+      tabId: rootTab.id,
+    });
+  });
+});
 
 describe('deriveProjectIdFromTab', () => {
   const projects = [

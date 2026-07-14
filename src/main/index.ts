@@ -81,6 +81,26 @@ declare const __APP_VERSION__: string;
 
 const isDev = !app.isPackaged;
 
+// Every packaged build shares the same Chromium profile and tmux socket. Two
+// main processes would therefore race on Local Storage (dock metadata) while
+// attaching to the same CLI sessions. Keep multi-window support inside the
+// primary process, but route a second app launch back to that process.
+const hasSingleInstanceLock = !app.isPackaged || app.requestSingleInstanceLock();
+if (!hasSingleInstanceLock) {
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    const win = BrowserWindow.getAllWindows()[0];
+    if (!win) {
+      void createWindow();
+      return;
+    }
+    if (win.isMinimized()) win.restore();
+    win.show();
+    win.focus();
+  });
+}
+
 async function createWindow(): Promise<void> {
   const preloadPath = path.join(__dirname, '../preload/index.cjs');
 
@@ -321,7 +341,7 @@ function clearStaleRendererCachesOnUpgrade(): void {
   }
 }
 
-app.whenReady().then(async () => {
+if (hasSingleInstanceLock) app.whenReady().then(async () => {
   // Stale V8 code cache from a previous build can wedge the renderer in a
   // compile loop (frozen UI) — clear it before the first window loads.
   clearStaleRendererCachesOnUpgrade();

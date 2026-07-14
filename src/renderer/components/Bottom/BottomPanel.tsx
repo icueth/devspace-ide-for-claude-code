@@ -23,7 +23,9 @@ const TerminalTabs = lazy(() =>
 interface BottomPanelProps {
   projectId: string;
   projectPath: string;
-  initialTab?: Tab;
+  tabRequest?: { tab: BottomPanelTab; requestId: number };
+  onActiveTabChange?: (tab: BottomPanelTab) => void;
+  onClose?: () => void;
   // When false the entire panel is hidden (display:none) — used by App.tsx
   // to keep one BottomPanel per docked project mounted at all times so dev
   // servers stay visually live across project switches without the buffer
@@ -39,23 +41,25 @@ interface BottomPanelProps {
   isVisible?: boolean;
 }
 
-type Tab = 'terminal' | 'git' | 'search';
+export type BottomPanelTab = 'terminal' | 'git' | 'search';
 
 export const BottomPanel = memo(function BottomPanel({
   projectId,
   projectPath,
-  initialTab,
+  tabRequest,
+  onActiveTabChange,
+  onClose,
   isVisible = true,
 }: BottomPanelProps) {
   useRenderTrace('BottomPanel');
-  const [active, setActive] = useState<Tab>(initialTab ?? 'terminal');
+  const [active, setActive] = useState<BottomPanelTab>(tabRequest?.tab ?? 'terminal');
   const setBottomOpen = useLayoutStore((s) => s.setBottomOpen);
-  const [mountedTabs, setMountedTabs] = useState<Set<Tab>>(
-    () => new Set<Tab>(isVisible ? [initialTab ?? 'terminal'] : []),
+  const [mountedTabs, setMountedTabs] = useState<Set<BottomPanelTab>>(
+    () => new Set<BottomPanelTab>(isVisible ? [tabRequest?.tab ?? 'terminal'] : []),
   );
 
   // Hidden panels mount nothing; the first time this panel becomes visible,
-  // mount whatever tab is active (covers initialTab='git'/'search' too).
+  // mount whatever tab is active (covers requested git/search tabs too).
   // Idempotent with activate() below.
   useEffect(() => {
     if (!isVisible) return;
@@ -74,11 +78,13 @@ export const BottomPanel = memo(function BottomPanel({
   );
 
   useEffect(() => {
-    if (initialTab) {
-      setActive(initialTab);
-      setMountedTabs((prev) => (prev.has(initialTab) ? prev : new Set(prev).add(initialTab)));
-    }
-  }, [initialTab]);
+    if (!tabRequest) return;
+    setActive(tabRequest.tab);
+    setMountedTabs((prev) =>
+      prev.has(tabRequest.tab) ? prev : new Set(prev).add(tabRequest.tab),
+    );
+    onActiveTabChange?.(tabRequest.tab);
+  }, [tabRequest]);
 
   // Seed at least one shell tab the first time we render this project's
   // panel — uses the legacy 'default' tab id so any pre-existing PTY keyed
@@ -97,9 +103,10 @@ export const BottomPanel = memo(function BottomPanel({
     return tabs[0]?.id ?? null;
   }, [activeShellTabId, tabs]);
 
-  const activate = (tab: Tab) => {
+  const activate = (tab: BottomPanelTab) => {
     setActive(tab);
     setMountedTabs((prev) => (prev.has(tab) ? prev : new Set(prev).add(tab)));
+    onActiveTabChange?.(tab);
   };
 
   return (
@@ -108,8 +115,7 @@ export const BottomPanel = memo(function BottomPanel({
       style={{ display: isVisible ? 'flex' : 'none' }}
     >
       <div
-        className="flex h-9 shrink-0 items-center justify-between border-b border-border px-1"
-        style={{ background: 'var(--color-surface-2)' }}
+        className="flex h-10 shrink-0 items-center justify-between border-b border-border bg-surface-2 px-1.5"
       >
         <div className="flex items-stretch">
           <TabButton
@@ -133,7 +139,10 @@ export const BottomPanel = memo(function BottomPanel({
           />
         </div>
         <button
-          onClick={() => setBottomOpen(false)}
+          onClick={() => {
+            setBottomOpen(false);
+            onClose?.();
+          }}
           className="flex h-6 w-6 items-center justify-center rounded hover:bg-surface-raised"
           title="Close panel"
         >
@@ -233,14 +242,15 @@ function TabButton({ active, onClick, icon, label, count }: TabButtonProps) {
     <button
       onClick={onClick}
       className={cn(
-        'relative flex items-center gap-1.5 px-3.5 text-[11.5px] transition',
-        active ? 'text-text' : 'text-text-muted hover:text-text-secondary',
+        'relative flex h-7 items-center gap-1.5 rounded-[6px] border px-2.5 text-[11px] transition',
+        active
+          ? 'border-border-emphasis bg-surface-4 text-text shadow-sm'
+          : 'border-transparent text-text-muted hover:bg-surface-3 hover:text-text-secondary',
       )}
     >
       {active && (
         <span
-          className="absolute inset-x-2 bottom-0 h-[2px] rounded-t-sm"
-          style={{ background: 'linear-gradient(90deg, var(--color-accent), #a855f7)' }}
+          className="absolute inset-x-2 bottom-0 h-0.5 rounded-t bg-accent"
         />
       )}
       <span className={active ? 'text-accent-2' : 'text-text-muted'}>{icon}</span>

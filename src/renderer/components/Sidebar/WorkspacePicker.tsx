@@ -4,12 +4,7 @@ import { ChevronDown, FolderOpen, FolderPlus, RefreshCw } from 'lucide-react';
 import { cn } from '@renderer/lib/utils';
 import { useWorkspaceStore } from '@renderer/state/workspace';
 
-/**
- * Workspace card — the prominent header block of the sidebar. Clicking opens
- * a dropdown of recent workspaces + "Open folder…". The card style matches
- * the polish v0.2.0 design language: gradient logo, pill metadata, subtle
- * hover lift.
- */
+/** Compact workspace context control for the workbench sidebar. */
 export function WorkspacePicker() {
   const active = useWorkspaceStore((s) => s.active);
   const known = useWorkspaceStore((s) => s.known);
@@ -27,45 +22,22 @@ export function WorkspacePicker() {
       <DropdownMenu.Trigger asChild>
         <button
           className={cn(
-            'no-drag group relative flex w-full items-center gap-2.5 overflow-hidden rounded-[12px] border border-border-subtle px-3 py-2.5 text-left',
-            'transition-all duration-200',
-            'hover:border-border-hi hover:shadow-lg focus:outline-none focus:border-accent',
+            'no-drag group flex h-9 w-full items-center gap-2 overflow-hidden rounded-[6px] border border-border bg-surface-3 px-2 text-left',
+            'transition hover:border-border-hi hover:bg-surface-4 focus:border-accent focus:outline-none',
           )}
-          style={{
-            background:
-              'linear-gradient(135deg, var(--color-surface-3), var(--color-surface-4))',
-          }}
         >
-          <div
-            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[10px] text-[13px] font-bold text-white"
-            style={{
-              background:
-                'linear-gradient(135deg, var(--color-accent) 0%, #a855f7 60%, #ec4899 100%)',
-              boxShadow:
-                '0 6px 14px rgba(76,141,255,0.3), inset 0 1px 0 rgba(255,255,255,0.18)',
-            }}
-          >
+          <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-[5px] border border-accent/25 bg-accent/10 text-[9px] font-bold text-accent">
             {initials}
           </div>
           <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-0.5 text-[12.5px] font-semibold text-text">
-              <span className="text-accent-2 opacity-70">~</span>
+            <div className="flex items-center gap-0.5 text-[11px] font-semibold text-text">
               <span className="truncate">{active ? shortenPath(active.path) : 'Select workspace…'}</span>
             </div>
-            <div className="mt-0.5 flex items-center gap-1.5 text-[10.5px] text-text-muted">
+            <div className="flex items-center gap-1 text-[9px] text-text-muted">
               {active ? (
                 <>
-                  <span
-                    className="rounded-full border px-1.5 py-[1px] text-[10px] font-medium"
-                    style={{
-                      background: 'rgba(76,141,255,0.15)',
-                      color: 'var(--color-accent-2)',
-                      borderColor: 'rgba(76,141,255,0.25)',
-                    }}
-                  >
-                    {projectCount} projects
-                  </span>
-                  <span>· synced</span>
+                  <span>{projectCount} projects</span>
+                  <span className="text-semantic-success">synced</span>
                 </>
               ) : (
                 <span>tap to choose</span>
@@ -166,6 +138,6 @@ function shortenPath(full: string): string {
   // Collapse home prefix for display — keeps card compact.
   const home = /^\/Users\/[^/]+/;
   const short = full.replace(home, '');
-  if (short.length <= 24) return short;
-  return short.slice(0, 22) + '…';
+  if (short.length <= 28) return short;
+  return short.slice(0, 26) + '…';
 }

@@ -22,6 +22,20 @@ describe('tmuxNameToKey', () => {
       'k9qxhz:claude-cli:agent',
     );
   });
+  it('maps every supported non-Claude CLI prefix', () => {
+    expect(tmuxNameToKey('devspace-oc-p1-tab1', 'devspace')).toBe(
+      'p1:opencode-cli:tab1',
+    );
+    expect(tmuxNameToKey('devspace-cx-p1-tab1', 'devspace')).toBe(
+      'p1:codex-cli:tab1',
+    );
+    expect(tmuxNameToKey('devspace-gm-p1-tab1', 'devspace')).toBe(
+      'p1:gemini-cli:tab1',
+    );
+    expect(tmuxNameToKey('devspace-ag-p1-tab1', 'devspace')).toBe(
+      'p1:antigravity-cli:tab1',
+    );
+  });
   it('returns null for non-cli sessions (shells, chat-runs)', () => {
     expect(tmuxNameToKey('devspace-shell-abc123', 'devspace')).toBeNull();
     expect(tmuxNameToKey('devspace-chatrun-xyz', 'devspace')).toBeNull();

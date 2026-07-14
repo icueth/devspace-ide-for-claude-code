@@ -229,7 +229,7 @@ function Toolbar({ name, htmlPath, onRefresh, onReveal, loading }: ToolbarProps)
       }}
     >
       <span
-        className="inline-flex h-[26px] max-w-[320px] items-center gap-1.5 rounded-[6px] border border-accent/30 bg-[rgba(76,141,255,0.12)] px-2 text-[10.5px] font-medium text-accent"
+        className="inline-flex h-[26px] max-w-[320px] items-center gap-1.5 rounded-[6px] border border-accent/30 bg-accent/10 px-2 text-[10.5px] font-medium text-accent"
         title={htmlPath}
       >
         <span className="truncate font-mono">{name}</span>

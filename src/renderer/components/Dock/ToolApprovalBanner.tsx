@@ -119,20 +119,16 @@ export function ToolApprovalBanner({
       aria-hidden={!visible}
     >
       <div
-        className="pointer-events-auto flex w-full max-w-[680px] items-center gap-2 rounded-[10px] border border-[rgba(76,141,255,0.4)] bg-surface-2/95 px-3 py-2 shadow-xl backdrop-blur-sm"
+        className="pointer-events-auto flex w-full max-w-[680px] items-center gap-2 rounded-[8px] border border-accent/40 bg-surface-2/95 px-3 py-2 shadow-xl backdrop-blur-sm"
         style={{
           boxShadow:
-            '0 8px 28px rgba(0,0,0,0.45), 0 0 0 1px rgba(76,141,255,0.15)',
+            '0 8px 28px rgba(0,0,0,0.45), 0 0 0 1px rgb(var(--color-accent-rgb) / 0.15)',
         }}
         role="dialog"
         aria-label="Approve Claude tool call"
       >
         <div
-          className="flex h-6 w-6 shrink-0 items-center justify-center rounded-[7px] text-[11px] font-bold text-white"
-          style={{
-            background:
-              'linear-gradient(135deg, var(--color-accent), #a855f7)',
-          }}
+          className="flex h-6 w-6 shrink-0 items-center justify-center rounded-[6px] bg-accent-3 text-[11px] font-bold text-white"
         >
           <Shield size={12} />
         </div>
@@ -156,10 +152,7 @@ export function ToolApprovalBanner({
           onClick={() => respond('y')}
           title="Send y — approve this single call"
           className="inline-flex h-[26px] shrink-0 items-center gap-1 rounded-[7px] px-2.5 text-[11px] font-medium text-white transition hover:brightness-110"
-          style={{
-            background:
-              'linear-gradient(135deg, var(--color-accent), #a855f7)',
-          }}
+          style={{ background: 'var(--color-accent-3)' }}
         >
           <Check size={11} />
           Allow

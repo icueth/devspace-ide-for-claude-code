@@ -26,9 +26,9 @@ export default {
           hi: 'var(--color-border-hi)',
         },
         accent: {
-          DEFAULT: 'var(--color-accent)',
-          2: 'var(--color-accent-2)',
-          3: 'var(--color-accent-3)',
+          DEFAULT: 'rgb(var(--color-accent-rgb) / <alpha-value>)',
+          2: 'rgb(var(--color-accent-2-rgb) / <alpha-value>)',
+          3: 'rgb(var(--color-accent-3-rgb) / <alpha-value>)',
         },
         text: {
           DEFAULT: 'var(--color-text)',
