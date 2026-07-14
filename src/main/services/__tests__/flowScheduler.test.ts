@@ -233,6 +233,44 @@ describe('validateGraph — gates and notes', () => {
     expect(validateGraph(g).some((e) => /must target an agent node/.test(e))).toBe(true);
   });
 
+  // The retry has to change what the gate sees. A fail target that does not feed
+  // back into the gate leaves the gate re-judging the identical evidence (its
+  // other upstreams stay done) — the budget burns down on an unchanged answer —
+  // and the target itself, having no upstream of its own, is launched at run
+  // start with nothing to react to.
+  it('rejects a fail edge whose target does not loop back into the gate', () => {
+    const g = graph(
+      [node('code'), gate('g'), node('fixer'), node('review')],
+      [
+        { from: 'code', to: 'g' },
+        { from: 'g', to: 'review', branch: 'pass' },
+        { from: 'g', to: 'fixer', branch: 'fail' }, // fixer feeds nothing back
+      ],
+    );
+    expect(validateGraph(g).some((e) => /must loop back into the gate's inputs/.test(e))).toBe(
+      true,
+    );
+  });
+
+  it('accepts a fail target that reaches the gate transitively', () => {
+    // code → test → g, and the gate loops back to code: the retried work reaches
+    // the gate again through the tester. This is the mockup's pipeline.
+    expect(validateGraph(loop())).toEqual([]);
+
+    // …and a dedicated fixer is fine too, as long as its output flows back in.
+    const g = graph(
+      [node('code'), node('test'), gate('g'), node('fixer'), node('review')],
+      [
+        { from: 'code', to: 'test' },
+        { from: 'test', to: 'g' },
+        { from: 'fixer', to: 'test' }, // ← the loop back
+        { from: 'g', to: 'review', branch: 'pass' },
+        { from: 'g', to: 'fixer', branch: 'fail' },
+      ],
+    );
+    expect(validateGraph(g)).toEqual([]);
+  });
+
   it('rejects any edge touching a note, in either direction', () => {
     const g = graph([node('a'), note('n')], [{ from: 'a', to: 'n' }]);
     expect(validateGraph(g).some((e) => /may not carry edges/.test(e))).toBe(true);
@@ -351,8 +389,18 @@ describe('parseGateVerdict', () => {
     expect(parseGateVerdict('\n\nFAIL\nthe suite still has 3 failures — PASS later')).toBe('fail');
   });
 
-  it('takes the first token when the line says both', () => {
-    expect(parseGateVerdict('PASS — it did not FAIL any test')).toBe('pass');
+  // The judge echoing the question is the single most common way it disobeys the
+  // one-word rule — and the answer is always at the END of that echo. Taking the
+  // FIRST token instead reads every one of these as a PASS, which is the one
+  // mistake a gate must never make: it ships work the judge just rejected.
+  it('takes the LAST verdict on a line that says both — the echo ends with the answer', () => {
+    expect(parseGateVerdict('PASS or FAIL: FAIL')).toBe('fail');
+    expect(parseGateVerdict('Not PASS — FAIL')).toBe('fail');
+    expect(parseGateVerdict('PASS — it did not FAIL any test')).toBe('fail');
+  });
+
+  it('still reads an echo that ends in PASS as a pass', () => {
+    expect(parseGateVerdict('PASS or FAIL: PASS')).toBe('pass');
   });
 
   it('is case-insensitive and tolerates punctuation', () => {
@@ -364,9 +412,16 @@ describe('parseGateVerdict', () => {
     expect(parseGateVerdict('PASSPORT checks out')).toBeNull();
   });
 
+  it('falls back to a later line that is NOTHING but the verdict', () => {
+    expect(parseGateVerdict('Here is my verdict.\nFAIL\nthe suite is red')).toBe('fail');
+    expect(parseGateVerdict('I think it looks fine\nPASS')).toBe('pass');
+  });
+
   it('returns null for anything unparseable — the caller fails the gate', () => {
     expect(parseGateVerdict('')).toBeNull();
-    expect(parseGateVerdict('I think it looks fine\nPASS')).toBeNull();
+    expect(parseGateVerdict('It broadly looks fine to me.')).toBeNull();
+    // A later line that merely MENTIONS a verdict is not a verdict.
+    expect(parseGateVerdict('hmm\nmost of the tests PASS now')).toBeNull();
   });
 });
 

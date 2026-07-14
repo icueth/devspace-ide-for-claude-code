@@ -22,6 +22,8 @@ const { api } = await import('@renderer/lib/api');
 const { latestRunFor, newNodeDefaults, starterFlow, statusByNode, useFlowsStore } =
   await import('../flows');
 const { FLOW_TEMPLATES } = await import('../flowTemplates');
+// The templates are checked against main's real validator (pure graph logic).
+const { validateGraph } = await import('@main/services/flowScheduler');
 
 const graph = (id: string, name = id): FlowGraph => ({
   id,
@@ -430,56 +432,21 @@ describe('flows store — templates', () => {
     expect(useFlowsStore.getState().draft).not.toBeNull();
   });
 
-  it('every template is structurally legal for validateGraph', () => {
+  // Against the REAL validator, not a copy of its rules: a template that main
+  // would refuse to run is a broken button, and it must fail HERE rather than in
+  // the user's chat. (validateGraph is pure graph logic — no electron, no fs.)
+  it('every template passes main\'s validateGraph', () => {
     for (const t of FLOW_TEMPLATES) {
       const g = t.build();
-      const byId = new Map(g.nodes.map((n) => [n.id, n]));
-
       expect(g.name).toBeTruthy();
       expect(g.description).toBeTruthy();
-
-      for (const e of g.edges) {
-        const from = byId.get(e.from)!;
-        const to = byId.get(e.to)!;
-        expect(from).toBeDefined();
-        expect(to).toBeDefined();
-        // No edge may touch a note.
-        expect(from.kind).not.toBe('note');
-        expect(to.kind).not.toBe('note');
-        // A branch only leaves a gate; a fail branch only lands on an agent.
-        if (e.branch) expect(from.kind).toBe('gate');
-        if (e.branch === 'fail') expect(to.kind ?? 'agent').toBe('agent');
-      }
-      // Gates carry a condition; headless is claude-only.
-      for (const n of g.nodes) {
-        if (n.kind === 'gate') expect(n.condition).toBeTruthy();
-        if (n.mode === 'headless') expect(n.cliId).toBe('claude');
-      }
-      // Acyclic once the fail edges (the retry loops) are removed.
-      expect(hasCycle(g.nodes.map((n) => n.id), g.edges.filter((e) => e.branch !== 'fail'))).toBe(
-        false,
-      );
+      expect({ name: g.name, errors: validateGraph(g) }).toEqual({
+        name: g.name,
+        errors: [],
+      });
     }
   });
 });
-
-/** Kahn — mirrors main's validateGraph so a bad template fails HERE, not at run. */
-function hasCycle(ids: string[], edges: { from: string; to: string }[]): boolean {
-  const indeg = new Map(ids.map((id) => [id, 0]));
-  for (const e of edges) indeg.set(e.to, (indeg.get(e.to) ?? 0) + 1);
-  const queue = ids.filter((id) => indeg.get(id) === 0);
-  let seen = 0;
-  while (queue.length) {
-    const id = queue.shift()!;
-    seen++;
-    for (const e of edges.filter((x) => x.from === id)) {
-      const d = (indeg.get(e.to) ?? 0) - 1;
-      indeg.set(e.to, d);
-      if (d === 0) queue.push(e.to);
-    }
-  }
-  return seen !== ids.length;
-}
 
 describe('flows selectors', () => {
   it('latestRunFor picks the newest run of that flow', () => {

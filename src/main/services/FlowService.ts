@@ -23,8 +23,10 @@ import {
 import { applyGateResult, startGateEval } from '@main/services/flowGates';
 import {
   applyStatuses,
+  gateFails,
   nodeRun,
   reopen,
+  setGateFails,
   setNode,
   statusMap,
   teardown,
@@ -162,6 +164,8 @@ export function createFlowService(deps: FlowServiceDeps): FlowService {
     setNode: (id: string, patch: Partial<FlowNodeRun>) => setNode(lr, id, patch),
     statusMap: () => statusMap(lr),
     applyStatuses: (next: StatusById) => applyStatuses(lr, next),
+    gateFails: (id: string) => gateFails(lr, id),
+    setGateFails: (id: string, n: number) => setGateFails(lr, id, n),
     reopen: (ids: string[]) => reopen(lr, ids),
     commit: () => commit(lr),
     completeNode: (id: string, output: string) => completeNode(lr, id, output),
@@ -229,6 +233,20 @@ export function createFlowService(deps: FlowServiceDeps): FlowService {
 
     // Interactive: a dockable CLI session. Completion is the idle heuristic in
     // tick(); output is accumulated from the PTY stream as it appears.
+    //
+    // A RETRY gets a brand-new session. The old one cannot be re-briefed: tmux
+    // `new-session -A` reattaches without the trailing command, so the brief
+    // could only be *typed* into the running TUI — and a brief is multi-line, so
+    // every newline lands as an Enter and the agent starts working on the first
+    // fragment ("You are the ..."). Killing first makes the relaunch a plain
+    // first launch again: claude takes the brief as its positional argument, the
+    // other CLIs get it typed once their TUI has drawn (flowSessions).
+    const previous = nodeRun(lr, node.id);
+    if (attempts > 1 || previous?.sessionKey) {
+      await killFlowSession(lr.run.projectId, node.cliId, lr.run.id, node.id);
+      setNode(lr, node.id, { sessionKey: undefined });
+    }
+
     const key = await launchFlowSession(node, {
       projectId: lr.run.projectId,
       projectPath: lr.run.projectPath,
@@ -247,13 +265,6 @@ export function createFlowService(deps: FlowServiceDeps): FlowService {
     // otherwise append the new attempt onto the rejected one.
     setNode(lr, node.id, { status: 'running', sessionKey: key, output: '' });
     lr.firstActivityAt.delete(node.id);
-
-    // Retry of an interactive claude node: the tmux session already exists, and
-    // `new-session -A` reattaches WITHOUT the trailing command — so the agent
-    // would never see the new brief (it would just sit there and be declared
-    // idle-done with stale output). Type it in instead. The other CLIs are typed
-    // into by launchFlowSession anyway, on every launch.
-    if (attempts > 1 && node.cliId === 'claude') sendToFlowSession(key, prompt);
 
     const unsub = captureFlowOutput(key, {
       append: (text) => {
@@ -306,11 +317,16 @@ export function createFlowService(deps: FlowServiceDeps): FlowService {
       });
     }
 
-    // 3. Nothing left in flight and nothing left to start → the run is done.
-    const open = lr.run.nodes.some(
-      (n) => n.status === 'queued' || n.status === 'running',
-    );
-    if (!open) finishRun(lr, 'done');
+    // 3. Nothing in flight and nothing that could ever start → the run is done.
+    //    "Could ever start" is readyNodes, not "is queued": readiness only moves
+    //    when something completes, so a queued node with nothing running is
+    //    either ready NOW or blocked forever (its branch was never taken — a
+    //    gate's pass edge that FAILed away, a sibling of a skipped subtree).
+    //    Waiting for the queue to drain instead would hang the run on it, and
+    //    finishStatuses says the honest thing about those nodes: skipped.
+    const running = lr.run.nodes.some((n) => n.status === 'running');
+    const ready = readyNodes(lr.graph, statusMap(lr), verdictMap(lr));
+    if (!running && ready.length === 0) finishRun(lr, 'done');
   };
 
   const svc: FlowService = {
@@ -391,6 +407,7 @@ export function createFlowService(deps: FlowServiceDeps): FlowService {
         watchers: new Map(),
         firstActivityAt: new Map(),
         starting: new Set(),
+        gateFails: new Map(),
       };
       live.set(run.id, lr);
       logger.info(`run ${run.id} started: ${graph.name} (${graph.nodes.length} nodes)`);

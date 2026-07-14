@@ -68,7 +68,13 @@ export interface GateHooks {
   setNode(nodeId: string, patch: Partial<FlowNodeRun>): void;
   statusMap(): StatusById;
   applyStatuses(next: StatusById): void;
-  /** Drop per-launch bookkeeping (starting-guard, exec handle, PTY watcher). */
+  /** How many FAIL verdicts this gate has already returned in this run. */
+  gateFails(gateId: string): number;
+  setGateFails(gateId: string, n: number): void;
+  /**
+   * Drop per-launch bookkeeping (starting-guard, exec handle, PTY watcher) — and,
+   * for a re-queued gate, its spent retry budget (flowRunState.reopen).
+   */
   reopen(nodeIds: string[]): void;
   commit(): void;
   completeNode(nodeId: string, output: string): void;
@@ -129,10 +135,12 @@ export function applyGateResult(
     return;
   }
 
-  // attempts is bumped at launch, so it counts evaluations: the first FAIL has
-  // attempts === 1 and has used zero retries.
+  // The budget is spent by THIS gate's own rejections. Not by its launches
+  // (FlowNodeRun.attempts): a gate inside another gate's loop body is re-launched
+  // every time the outer loop turns, and counting those would starve it of the
+  // retries the user actually gave it. The first FAIL has used zero.
   const max = maxRetriesOf(node);
-  const used = (h.nodeRun(node.id)?.attempts ?? 1) - 1;
+  const used = h.gateFails(node.id);
   if (used >= max) {
     h.failNode(
       node.id,
@@ -163,6 +171,11 @@ export function applyGateResult(
     });
   }
   h.reopen([node.id, ...requeued]);
+  // reopen() just cleared this gate's own counter along with every other
+  // re-queued gate's (the subtree reset gives an INNER gate a fresh budget).
+  // Re-assert ours from the value read before the reset — a gate must not hand
+  // itself an unbounded budget by resetting its own loop.
+  h.setGateFails(node.id, used + 1);
 
   logger.info(
     `gate "${node.role || node.id}" → FAIL (retry ${used + 1}/${max}) — re-queued: ${requeued.join(', ') || '(none)'}`,

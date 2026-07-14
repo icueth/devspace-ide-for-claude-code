@@ -38,6 +38,23 @@ export function maxRetriesOf(n: FlowNode): number {
 
 const isFail = (e: FlowEdge): boolean => e.branch === 'fail';
 
+/** Is `dst` forward-reachable from `src` along non-fail edges? (BFS, cycle-safe.) */
+function reaches(edges: FlowEdge[], src: string, dst: string): boolean {
+  const seen = new Set<string>([src]);
+  const queue = [src];
+  while (queue.length > 0) {
+    const id = queue.shift() as string;
+    if (id === dst && id !== src) return true;
+    for (const e of edges) {
+      if (e.from !== id || isFail(e) || seen.has(e.to)) continue;
+      if (e.to === dst) return true;
+      seen.add(e.to);
+      queue.push(e.to);
+    }
+  }
+  return false;
+}
+
 /**
  * Structural validation of a user-drawn graph. Returns human-readable errors
  * (empty = valid) — the control socket relays them verbatim to the chat agent,
@@ -108,6 +125,17 @@ export function validateGraph(g: FlowGraph): string[] {
     if (isFail(e) && to && kindOf(to) !== 'agent') {
       errors.push(
         `fail edge ${e.from} → ${e.to} must target an agent node — a retry re-runs work, and only agents do work`,
+      );
+    }
+    // …and the retried work has to come BACK to the gate, or the loop is not a
+    // loop: the gate would be re-queued while its upstreams stay done, so it
+    // would re-judge the very evidence it just rejected (a tight re-judge loop
+    // that burns the retry budget on an unchanged answer). A fail target that
+    // sits outside the gate's evidence chain is also launched at run start with
+    // nothing to react to — the same drawing mistake, seen from the other end.
+    if (isFail(e) && from && to && kindOf(to) === 'agent' && !reaches(edges, e.to, e.from)) {
+      errors.push(
+        `fail edge from "${from.role || from.id}" must loop back into the gate's inputs — its target's work has to reach the gate again`,
       );
     }
   }
@@ -318,7 +346,8 @@ export function composeGatePrompt(
   parts.push(
     '',
     '## Answer format — this is parsed by a machine',
-    'Your FIRST line must be exactly one word: PASS or FAIL.',
+    'Your ENTIRE FIRST line must be exactly one word: PASS or FAIL. Nothing else on it.',
+    'Do NOT restate the question and do NOT write both words together ("PASS or FAIL:" is not an answer) — a line containing both is read as the LAST word on it.',
     'PASS only if the evidence clearly satisfies the condition. If it is unclear, unproven, or the evidence does not actually show it, answer FAIL.',
     'Then, on the following lines, state briefly WHY — and on a FAIL, exactly what must be fixed. That text is handed to the agents who will retry the work.',
   );
@@ -326,20 +355,42 @@ export function composeGatePrompt(
   return parts.join('\n');
 }
 
+const VERDICT_TOKEN = /\b(PASS|FAIL)\b/gi;
+/** A line that is nothing BUT a verdict ("FAIL", "PASS."). */
+const VERDICT_ONLY = /^(PASS|FAIL)[.!:]?$/i;
+
 /**
- * The judge's verdict, read from the first non-empty line of its output: the
- * first PASS/FAIL token wins. Anything else is `null` — an unparseable verdict
- * is NOT a silent pass or a silent retry, it fails the gate node (and so the
- * run), because we cannot know which branch the user's flow should take.
+ * The judge's verdict. Read from the first non-empty line, which the prompt
+ * demands be the bare word — but judges disobey, so:
+ *
+ *   • all PASS/FAIL tokens on that line are collected, and the LAST one wins.
+ *     When they agree ("PASS") that is trivially the verdict; when they do not,
+ *     the line is an echo of the question and the answer is at the end of it —
+ *     "PASS or FAIL: FAIL", "Not PASS — FAIL". Reading the FIRST token instead
+ *     (the phase-2 bug) turns every one of those into a PASS, which is the one
+ *     mistake a gate must never make: it ships work the judge rejected.
+ *   • if the first line carries no verdict at all, a LATER line that is nothing
+ *     but the verdict is accepted (a judge that opened with a preamble).
+ *
+ * Anything else is `null` — an unparseable verdict is NOT a silent pass and NOT
+ * a silent retry, it fails the gate node (and so the run), because we cannot
+ * know which branch of the user's flow to take.
  */
 export function parseGateVerdict(text: string): Verdict | null {
-  const first = (text ?? '')
+  const lines = (text ?? '')
     .split('\n')
     .map((l) => l.trim())
-    .find((l) => l.length > 0);
-  if (!first) return null;
+    .filter((l) => l.length > 0);
+  if (lines.length === 0) return null;
 
-  const m = /\b(PASS|FAIL)\b/i.exec(first);
-  if (!m) return null;
-  return m[1].toLowerCase() === 'pass' ? 'pass' : 'fail';
+  const tokens = [...lines[0].matchAll(VERDICT_TOKEN)].map((m) => m[1].toUpperCase());
+  if (tokens.length > 0) {
+    return tokens[tokens.length - 1] === 'PASS' ? 'pass' : 'fail';
+  }
+
+  for (const line of lines.slice(1)) {
+    const m = VERDICT_ONLY.exec(line);
+    if (m) return m[1].toUpperCase() === 'PASS' ? 'pass' : 'fail';
+  }
+  return null;
 }

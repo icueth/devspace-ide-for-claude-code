@@ -25,6 +25,12 @@ interface FlowChatState {
   /** Last send rejection ("lead is busy") — cleared on the next attempt. */
   error: string | null;
   loading: boolean;
+  /**
+   * The optimistic bubble this window is waiting for main to echo back. It is
+   * the ONLY user message that may be reconciled by text: everything else is
+   * matched on id, so the same sentence sent twice lands twice.
+   */
+  pendingUser: { id: string; text: string } | null;
 
   loadHistory: (projectPath: string) => Promise<void>;
   /** Resolves false when main refused the turn; the panel restores the draft. */
@@ -39,6 +45,7 @@ export const useFlowChatStore = create<FlowChatState>((set, get) => ({
   busy: false,
   error: null,
   loading: false,
+  pendingUser: null,
 
   async loadHistory(projectPath) {
     set({ projectPath, loading: true, error: null });
@@ -69,7 +76,12 @@ export const useFlowChatStore = create<FlowChatState>((set, get) => ({
       text: body,
       at: Date.now(),
     };
-    set({ messages: [...get().messages, optimistic], busy: true, error: null });
+    set({
+      messages: [...get().messages, optimistic],
+      busy: true,
+      error: null,
+      pendingUser: { id: optimistic.id, text: body },
+    });
 
     let res: { ok: boolean; error?: string };
     try {
@@ -85,6 +97,7 @@ export const useFlowChatStore = create<FlowChatState>((set, get) => ({
       messages: s.messages.filter((m) => m.id !== optimistic.id),
       busy: false,
       error: res.error ?? 'The lead could not start a turn.',
+      pendingUser: s.pendingUser?.id === optimistic.id ? null : s.pendingUser,
     }));
     return false;
   },
@@ -92,7 +105,7 @@ export const useFlowChatStore = create<FlowChatState>((set, get) => ({
   async clear() {
     const { projectPath } = get();
     if (!projectPath) return;
-    set({ messages: [], error: null });
+    set({ messages: [], error: null, pendingUser: null });
     try {
       await api.flows.chat.clear(projectPath);
     } catch (err) {
@@ -115,15 +128,19 @@ export const useFlowChatStore = create<FlowChatState>((set, get) => ({
 
     if (evt.message) {
       const msg = evt.message;
-      // Main's copy is authoritative. The optimistic user bubble carries a
-      // renderer-side id, so an echoed user message would duplicate it —
-      // reconcile on (role, text) for user turns and on id for lead turns.
-      const dupe = s.messages.some(
-        (m) =>
-          m.id === msg.id ||
-          (msg.role === 'user' && m.role === 'user' && m.text === msg.text),
-      );
-      if (!dupe) next.messages = [...s.messages, msg];
+      const pending = s.pendingUser;
+      // Main's copy is authoritative, and it carries the durable id — but THIS
+      // window already drew the same message optimistically under an id of its
+      // own. Swap that one bubble for main's and stop there. Reconciling on
+      // (role, text) across the whole transcript instead (the phase-2 rule) also
+      // swallows a message a user genuinely sent twice — "again" typed twice
+      // simply never appeared in the other window.
+      if (msg.role === 'user' && pending && pending.text === msg.text) {
+        next.messages = s.messages.map((m) => (m.id === pending.id ? msg : m));
+        next.pendingUser = null;
+      } else if (!s.messages.some((m) => m.id === msg.id)) {
+        next.messages = [...s.messages, msg];
+      }
       // A lead reply ends the turn even if main forgot to clear busy.
       if (msg.role === 'lead') next.busy = false;
     }

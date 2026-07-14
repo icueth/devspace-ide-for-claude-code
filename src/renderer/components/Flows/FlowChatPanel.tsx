@@ -77,12 +77,15 @@ export function FlowChatPanel({ projectPath }: Props) {
         <span className="shrink-0 rounded border border-border px-1.5 py-0.5 font-mono text-[9px] text-text-dim">
           claude -p
         </span>
+        {/* Not while a turn is in flight: the lead is mid-answer, and clearing
+            under it throws away the question its reply belongs to. */}
         <button
           type="button"
           onClick={() => void useFlowChatStore.getState().clear()}
-          title="Clear the transcript"
+          disabled={busy}
+          title={busy ? 'The lead is working — wait for the reply' : 'Clear the transcript'}
           aria-label="Clear chat history"
-          className="flex h-5 w-5 items-center justify-center rounded text-text-muted transition hover:bg-accent/10 hover:text-accent"
+          className="flex h-5 w-5 items-center justify-center rounded text-text-muted transition hover:bg-accent/10 hover:text-accent disabled:cursor-not-allowed disabled:text-text-dim disabled:hover:bg-transparent disabled:hover:text-text-dim"
         >
           <Eraser size={12} />
         </button>

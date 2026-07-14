@@ -1,4 +1,5 @@
 import { SquareArrowOutUpRight, Trash2 } from 'lucide-react';
+import { useEffect, useState } from 'react';
 
 import {
   Field,
@@ -230,26 +231,7 @@ function GateFields({ node, nodeRun, onUpdate, onDelete }: Props) {
         </p>
       </Field>
 
-      <Field label="Max retries">
-        <input
-          type="number"
-          min={1}
-          max={10}
-          value={node.maxRetries ?? 3}
-          onChange={(e) => {
-            // Clamp here, not on blur: an out-of-range value would be persisted
-            // and main would have to defend against it.
-            const n = Math.round(Number(e.target.value));
-            if (!Number.isFinite(n)) return;
-            onUpdate({ maxRetries: Math.min(10, Math.max(1, n)) });
-          }}
-          className={inputCls}
-        />
-        <p className="mt-1.5 text-[10.5px] leading-relaxed text-text-dim">
-          How many times the fail branch may re-queue its target before the run
-          fails. The fail edge is the only legal cycle in a flow.
-        </p>
-      </Field>
+      <MaxRetriesField node={node} onUpdate={onUpdate} />
 
       <ModelField value={node.model} onChange={(model) => onUpdate({ model })} />
 
@@ -281,6 +263,66 @@ function GateFields({ node, nodeRun, onUpdate, onDelete }: Props) {
 
       <Footer onDelete={onDelete} />
     </>
+  );
+}
+
+/**
+ * Max retries, committed on blur / Enter — never per keystroke.
+ *
+ * Clamping as the user types cannot work: the way to reach "10" is to type "1"
+ * first, and a clamp on every change rewrites that to 1 (and persists it) before
+ * the 0 arrives — the field is unable to hold two digits. So the input owns its
+ * text while focused, and only a finished edit is clamped and written back.
+ */
+function MaxRetriesField({
+  node,
+  onUpdate,
+}: {
+  node: FlowNode;
+  onUpdate: (patch: Partial<FlowNode>) => void;
+}) {
+  const current = node.maxRetries ?? 3;
+  const [text, setText] = useState(String(current));
+
+  // Re-sync when the inspector switches node, or when a commit clamps the value
+  // under us (15 → 10). Not while typing: the node's value does not move then.
+  useEffect(() => {
+    setText(String(node.maxRetries ?? 3));
+  }, [node.id, node.maxRetries]);
+
+  const commit = (): void => {
+    const n = Math.round(Number(text.trim()));
+    if (!text.trim() || !Number.isFinite(n)) {
+      setText(String(current)); // '' or junk — the last good value stands
+      return;
+    }
+    const clamped = Math.min(10, Math.max(1, n));
+    setText(String(clamped));
+    if (clamped !== current) onUpdate({ maxRetries: clamped });
+  };
+
+  return (
+    <Field label="Max retries">
+      <input
+        type="number"
+        min={1}
+        max={10}
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            commit();
+          }
+        }}
+        className={inputCls}
+      />
+      <p className="mt-1.5 text-[10.5px] leading-relaxed text-text-dim">
+        How many times the fail branch may re-queue its target before the run
+        fails. The fail edge is the only legal cycle in a flow.
+      </p>
+    </Field>
   );
 }
 

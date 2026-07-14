@@ -27,6 +27,13 @@ const leadMsg = (id: string, text = 'on it'): FlowChatMessage => ({
   at: 1000,
 });
 
+const userMsg = (id: string, text: string): FlowChatMessage => ({
+  id,
+  role: 'user',
+  text,
+  at: 2000,
+});
+
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(api.flows.chat.send).mockResolvedValue({ ok: true });
@@ -36,6 +43,7 @@ beforeEach(() => {
     busy: false,
     error: null,
     loading: false,
+    pendingUser: null,
   });
 });
 
@@ -147,11 +155,52 @@ describe('flowChat — applyEvent', () => {
     // a renderer-side one, so an id-only check would double the message.
     useFlowChatStore.getState().applyEvent({
       projectPath: '/p',
-      message: { id: 'server-1', role: 'user', text: 'add tests', at: 2000 },
+      message: userMsg('server-1', 'add tests'),
     });
 
-    const users = useFlowChatStore.getState().messages.filter((m) => m.role === 'user');
+    const s = useFlowChatStore.getState();
+    const users = s.messages.filter((m) => m.role === 'user');
     expect(users).toHaveLength(1);
+    // …and it is MAIN's copy that survives: the durable id is the one the next
+    // event (and the next reload) will match on.
+    expect(users[0].id).toBe('server-1');
+    expect(s.pendingUser).toBeNull();
+  });
+
+  // The window that did NOT send has no optimistic bubble to reconcile, so every
+  // message main pushes is new to it. Reconciling on (role, text) across the
+  // whole transcript — the phase-2 rule — silently swallowed the second one:
+  // typing "again" twice showed up once in every other window.
+  it('keeps a message the user genuinely sent twice', () => {
+    const store = useFlowChatStore.getState();
+    store.applyEvent({ projectPath: '/p', message: userMsg('server-1', 'again'), busy: true });
+    store.applyEvent({ projectPath: '/p', message: userMsg('server-2', 'again'), busy: true });
+
+    const s = useFlowChatStore.getState();
+    expect(s.messages.map((m) => m.id)).toEqual(['server-1', 'server-2']);
+  });
+
+  it('reconciles only the pending bubble, then goes back to matching on id', async () => {
+    await useFlowChatStore.getState().send('again');
+    useFlowChatStore
+      .getState()
+      .applyEvent({ projectPath: '/p', message: userMsg('server-1', 'again') });
+    // A second "again" — from this window's next turn or another window's — is a
+    // real second message, not an echo of the first.
+    useFlowChatStore
+      .getState()
+      .applyEvent({ projectPath: '/p', message: userMsg('server-2', 'again') });
+
+    expect(useFlowChatStore.getState().messages.map((m) => m.id)).toEqual([
+      'server-1',
+      'server-2',
+    ]);
+  });
+
+  it('drops the pending bubble when main refuses the turn', async () => {
+    vi.mocked(api.flows.chat.send).mockResolvedValue({ ok: false, error: 'busy' });
+    await useFlowChatStore.getState().send('nope');
+    expect(useFlowChatStore.getState().pendingUser).toBeNull();
   });
 
   it('releases busy on a lead reply even if main omitted the flag', async () => {

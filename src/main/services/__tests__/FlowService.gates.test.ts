@@ -18,7 +18,12 @@ interface ExecRec {
   resolve: (r: { ok: boolean; text: string; error?: string }) => void;
 }
 
-const hoisted = vi.hoisted(() => ({ execs: [] as ExecRec[] }));
+const hoisted = vi.hoisted(() => ({
+  execs: [] as ExecRec[],
+  // What getSessionStats() reports — an interactive node is 'done' when its PTY
+  // has been quiet for IDLE_DONE_MS *after* first speaking.
+  stats: [] as Array<{ id: string; lastActivityAt: number }>,
+}));
 
 vi.mock('@main/services/flowExec', () => ({
   startClaudePrintIn: vi.fn(
@@ -40,9 +45,18 @@ vi.mock('@main/services/flowExec', () => ({
 
 vi.mock('@main/services/flowSessions', () => ({
   OUTPUT_CAP: 20_000,
-  launchFlowSession: vi.fn(async () => 'p1:claude-cli:flow-r1-x'),
+  launchFlowSession: vi.fn(
+    async (n: { id: string }, o: { runId: string }) => `p1:claude-cli:flow-${o.runId}-${n.id}`,
+  ),
   killFlowSession: vi.fn(async () => undefined),
-  captureFlowOutput: vi.fn(() => () => undefined),
+  // The agent speaks as soon as it boots — that is what arms the idle heuristic.
+  captureFlowOutput: vi.fn(
+    (_key: string, sink: { append: (t: string) => void; onFirstData: () => void }) => {
+      sink.onFirstData();
+      sink.append('interactive work done');
+      return () => undefined;
+    },
+  ),
   sendToFlowSession: vi.fn(),
 }));
 
@@ -54,12 +68,13 @@ vi.mock('@main/services/flowStore', () => ({
   loadRecentRuns: vi.fn(async () => []),
 }));
 
-vi.mock('@main/services/PtyPool', () => ({ getSessionStats: vi.fn(() => []) }));
+vi.mock('@main/services/PtyPool', () => ({ getSessionStats: vi.fn(() => hoisted.stats) }));
 vi.mock('@main/services/ProjectScanner', () => ({ projectIdForPath: () => 'p1' }));
 vi.mock('@main/services/ClaudeAuthService', () => ({
   resolveAuthEnvPairs: vi.fn(async () => ['ANTHROPIC_API_KEY=k']),
 }));
 
+import { killFlowSession, launchFlowSession, sendToFlowSession } from '../flowSessions';
 import { createFlowService, type FlowService } from '../FlowService';
 
 // The flow under test, swapped per-test (the flowStore mock reads it lazily).
@@ -102,6 +117,9 @@ const loopGraph = (gateOver: Partial<FlowNode> = {}): FlowGraph => ({
 
 let svc: FlowService;
 let last: FlowRun;
+// The engine's wall clock (deps.now). Interactive completion is a *duration*, so
+// the tests move it by hand; the fake timers only drive the tick interval.
+let clock: number;
 
 const flush = async (): Promise<void> => {
   for (let i = 0; i < 8; i++) await Promise.resolve();
@@ -124,8 +142,9 @@ const answer = async (
 
 const start = async (g: FlowGraph): Promise<void> => {
   graphRef.current = g;
-  const res = await svc.runFlow('/ws/p', 'pipeline', 'add dark mode');
-  expect(res.ok).toBe(true);
+  const res = await svc.runFlow('/ws/p', g.name, 'add dark mode');
+  expect(res).toMatchObject({ ok: true }); // an invalid graph reports why
+
   await flush(); // runFlow ticks immediately — let the entry node launch
 };
 
@@ -133,12 +152,15 @@ const nodeOf = (id: string) => last.nodes.find((n) => n.nodeId === id);
 
 beforeEach(() => {
   vi.useFakeTimers();
+  vi.clearAllMocks();
   hoisted.execs.length = 0;
+  hoisted.stats.length = 0;
+  clock = 1_000;
   svc = createFlowService({
     onRunChanged: (run) => {
       last = run;
     },
-    now: () => 1_000,
+    now: () => clock,
     idgen: () => 'r1',
   });
 });
@@ -290,6 +312,133 @@ describe('gate retry loop', () => {
     expect(last.status).toBe('failed');
     expect(last.error).toMatch(/condition failed/);
     expect(last.error).toMatch(/the suite is red/);
+  });
+});
+
+// An inner gate inside an OUTER gate's loop body: code → test → gi → review → go,
+// where gi loops back to code on FAIL and so does go. Both fail targets reach
+// their gate again (validateGraph requires it), so both are real retry loops.
+const nestedGraph = (): FlowGraph => ({
+  id: 'f2',
+  name: 'nested',
+  description: 'a gate inside another gate’s loop',
+  nodes: [
+    node('code'),
+    node('test'),
+    node('gi', { kind: 'gate', condition: 'the suite is green', maxRetries: 1 }),
+    node('review'),
+    node('go', { kind: 'gate', condition: 'the review is clean', maxRetries: 3 }),
+    node('ship'),
+  ],
+  edges: [
+    { from: 'code', to: 'test' },
+    { from: 'test', to: 'gi' },
+    { from: 'gi', to: 'review', branch: 'pass' },
+    { from: 'gi', to: 'code', branch: 'fail' },
+    { from: 'review', to: 'go' },
+    { from: 'go', to: 'ship', branch: 'pass' },
+    { from: 'go', to: 'code', branch: 'fail' },
+  ],
+  createdAt: 0,
+  updatedAt: 0,
+});
+
+describe('retry budget — a gate spends its OWN rejections', () => {
+  it('gives an inner gate its full budget however often an outer loop re-ran it', async () => {
+    await start(nestedGraph());
+
+    // Two outer iterations. The inner gate PASSES both times — it has rejected
+    // nothing, so it has spent nothing. Its *launch* count climbs all the same.
+    for (let i = 0; i < 2; i++) {
+      const b = i * 5;
+      await answer(b, { ok: true, text: 'code' });
+      await tick();
+      await answer(b + 1, { ok: true, text: 'suite green' });
+      await tick();
+      await answer(b + 2, { ok: true, text: 'PASS' }); // inner gate
+      await tick();
+      await answer(b + 3, { ok: true, text: 'reviewed' });
+      await tick();
+      await answer(b + 4, { ok: true, text: 'FAIL\nthe review found a leak' }); // outer
+      await tick();
+    }
+
+    // Third pass through the body — and NOW the inner gate rejects, for the
+    // first time in the run.
+    await answer(10, { ok: true, text: 'code' });
+    await tick();
+    await answer(11, { ok: true, text: 'still 3 failures' });
+    await tick();
+    expect(nodeOf('gi')?.attempts).toBe(3); // three launches …
+    await answer(12, { ok: true, text: 'FAIL\nthe suite is red' }); // … one rejection
+
+    // Reading the budget off `attempts` (the phase-2 bug) makes this its THIRD
+    // strike against a budget of 1, and the run dies here having never once let
+    // the inner gate retry.
+    expect(last.status).toBe('running');
+    expect(nodeOf('gi')?.status).toBe('queued');
+    expect(nodeOf('code')?.status).toBe('queued');
+
+    // Its budget is 1, so the SECOND rejection is the one that ends the run.
+    await tick();
+    await answer(13, { ok: true, text: 'code' });
+    await tick();
+    await answer(14, { ok: true, text: 'still 3 failures' });
+    await tick();
+    await answer(15, { ok: true, text: 'FAIL\nstill red' });
+
+    expect(last.status).toBe('failed');
+    expect(last.error).toMatch(/condition failed after 1 retry/);
+  });
+});
+
+describe('interactive nodes — retry', () => {
+  it('relaunches into a FRESH session and never types the brief into a live TUI', async () => {
+    const g = loopGraph({ maxRetries: 2 });
+    g.nodes[0] = node('code', { mode: 'interactive' });
+    await start(g);
+
+    const key = 'p1:claude-cli:flow-r1-code';
+    hoisted.stats.push({ id: key, lastActivityAt: clock }); // the PTY is alive
+    expect(vi.mocked(launchFlowSession)).toHaveBeenCalledTimes(1);
+    expect(nodeOf('code')?.sessionKey).toBe(key);
+
+    // The agent goes quiet → the idle heuristic calls it done, the tester runs,
+    // and the gate rejects the work.
+    clock += 30_000;
+    await tick();
+    expect(nodeOf('code')?.status).toBe('done');
+
+    await answer(0, { ok: true, text: 'red: 3 failures' }); // tester
+    await tick();
+    await answer(1, { ok: true, text: 'FAIL\nfix theme.test.ts' }); // gate
+    expect(nodeOf('code')?.status).toBe('queued');
+
+    await tick(); // …the retry launch
+
+    // The old session is killed FIRST, so the relaunch is a plain first launch:
+    // claude takes the brief as its argument. Typing a multi-line brief into the
+    // live TUI (the phase-2 path) submits it one fragment per newline.
+    expect(vi.mocked(killFlowSession)).toHaveBeenCalledWith('p1', 'claude', 'r1', 'code');
+    expect(vi.mocked(sendToFlowSession)).not.toHaveBeenCalled();
+    expect(vi.mocked(launchFlowSession)).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(killFlowSession).mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(launchFlowSession).mock.invocationCallOrder[1],
+    );
+
+    // …and the fresh session is briefed with WHY it is retrying.
+    const opts = vi.mocked(launchFlowSession).mock.calls[1][1];
+    expect(opts.prompt).toContain('fix theme.test.ts');
+    expect(nodeOf('code')?.attempts).toBe(2);
+  });
+
+  it('takes no kill path on a FIRST launch', async () => {
+    const g = loopGraph();
+    g.nodes[0] = node('code', { mode: 'interactive' });
+    await start(g);
+
+    expect(vi.mocked(launchFlowSession)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(killFlowSession)).not.toHaveBeenCalled();
   });
 });
 
