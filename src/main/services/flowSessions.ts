@@ -141,6 +141,8 @@ export async function launchFlowSession(
           ...base,
           cliProfileId: node.cliProfileId,
           initialPrompt: opts.prompt,
+          // Per-node model, on top of the profile's default (codex --model).
+          model: node.model,
         }),
       );
       return key;
@@ -150,6 +152,7 @@ export async function launchFlowSession(
           ...base,
           cliProfileId: node.cliProfileId,
           initialPrompt: opts.prompt,
+          model: node.model,
         }),
       );
       return key;

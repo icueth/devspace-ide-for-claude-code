@@ -397,6 +397,13 @@ export interface PlainTuiLaunchOptions {
    * is delivered exactly once.
    */
   initialPrompt?: string;
+  /**
+   * Per-session model override, passed through the CLI's own flag (codex
+   * `--model`, gemini `-m`). Rides on top of the profile's default — a flow
+   * node can pick a different model without a whole new CliProfile. Ignored
+   * by launchers whose CLI has no model flag (opencode, antigravity).
+   */
+  model?: string;
 }
 
 /**
@@ -500,6 +507,7 @@ export async function launchCodexCli(
         'https://github.com/openai/codex',
         [
           '--dangerously-bypass-approvals-and-sandbox',
+          ...(opts.model ? ['--model', opts.model] : []),
           ...(opts.initialPrompt ? [opts.initialPrompt] : []),
         ],
         [`CODEX_HOME=${configDir}`, `${keyEnv}=${keyValue}`],
@@ -516,6 +524,7 @@ export async function launchCodexCli(
     'https://github.com/openai/codex',
     [
       '--dangerously-bypass-approvals-and-sandbox',
+      ...(opts.model ? ['--model', opts.model] : []),
       ...(opts.initialPrompt ? [opts.initialPrompt] : []),
     ],
     [],
@@ -538,6 +547,7 @@ export async function launchGeminiCli(
     [
       '--skip-trust',
       '--yolo',
+      ...(opts.model ? ['-m', opts.model] : []),
       // -i = run this prompt, then STAY interactive (a bare positional would
       // make gemini answer once and exit).
       ...(opts.initialPrompt ? ['-i', opts.initialPrompt] : []),

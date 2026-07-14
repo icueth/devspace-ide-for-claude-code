@@ -71,33 +71,52 @@ export function ModeBtn({
   );
 }
 
-/** The model picker — free text with suggestions (see CLAUDE_MODELS). */
+/** The model picker — free text; claude gets alias suggestions (CLAUDE_MODELS),
+ *  codex/gemini ride their profile's provider so any model it serves is legal. */
 export function ModelField({
+  cliId,
   value,
   onChange,
 }: {
+  cliId: string;
   value: string | undefined;
   onChange: (model: string | undefined) => void;
 }) {
+  const isClaude = cliId === 'claude';
   return (
     <Field label="Model">
       <input
         type="text"
-        list="flow-claude-models"
+        list={isClaude ? 'flow-claude-models' : undefined}
         value={value ?? ''}
-        placeholder="CLI default"
+        placeholder={isClaude ? 'CLI default' : 'profile default'}
         onChange={(e) => onChange(e.target.value.trim() || undefined)}
         className={inputCls}
       />
-      <datalist id="flow-claude-models">
-        {CLAUDE_MODELS.map((m) => (
-          <option key={m} value={m} />
-        ))}
-      </datalist>
+      {isClaude && (
+        <datalist id="flow-claude-models">
+          {CLAUDE_MODELS.map((m) => (
+            <option key={m} value={m} />
+          ))}
+        </datalist>
+      )}
       <p className="mt-1.5 text-[10.5px] leading-relaxed text-text-dim">
-        Passed as <code className="font-mono text-accent">--model</code> for this node —
-        a claude alias (fable / opus / sonnet / haiku) or a full model id. Leave empty
-        to use the CLI's own default.
+        {isClaude ? (
+          <>
+            Passed as <code className="font-mono text-accent">--model</code> — a claude
+            alias (fable / opus / sonnet / haiku) or a full model id. Leave empty for
+            the CLI's default.
+          </>
+        ) : (
+          <>
+            Passed as{' '}
+            <code className="font-mono text-accent">
+              {cliId === 'gemini' ? '-m' : '--model'}
+            </code>{' '}
+            — any model your {cliId} profile's provider serves. Leave empty for the
+            profile's own default.
+          </>
+        )}
       </p>
     </Field>
   );

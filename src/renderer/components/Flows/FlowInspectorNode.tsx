@@ -72,13 +72,15 @@ function AgentFields({
             ];
             // Headless is `claude -p` only (see flowTypes / validateGraph):
             // switching to another provider must not leave an unrunnable graph.
-            // `model` + auth profile are claude things — drop them with it.
+            // `model` values are provider-specific ('opus' means nothing to
+            // codex) — a provider change always clears it. Auth profile is a
+            // claude thing — dropped when leaving claude.
             onUpdate({
               cliId,
               cliProfileId: profileId || undefined,
+              model: undefined,
               ...(cliId !== 'claude'
                 ? {
-                    model: undefined,
                     authProfileId: undefined,
                     ...(node.mode === 'headless' ? { mode: 'interactive' as const } : {}),
                   }
@@ -124,9 +126,14 @@ function AgentFields({
         </Field>
       )}
 
-      {/* Non-claude models come from the CliProfile, not from --model. */}
-      {isClaude && (
-        <ModelField value={node.model} onChange={(model) => onUpdate({ model })} />
+      {/* claude, codex, and gemini all take a per-session model flag; opencode
+          and antigravity have none, so their model stays profile-driven. */}
+      {['claude', 'codex', 'gemini'].includes(node.cliId) && (
+        <ModelField
+          cliId={node.cliId}
+          value={node.model}
+          onChange={(model) => onUpdate({ model })}
+        />
       )}
 
       <Field label="Execution">
@@ -233,7 +240,12 @@ function GateFields({ node, nodeRun, onUpdate, onDelete }: Props) {
 
       <MaxRetriesField node={node} onUpdate={onUpdate} />
 
-      <ModelField value={node.model} onChange={(model) => onUpdate({ model })} />
+      {/* The gate judge always runs on claude -p, whatever the node's cliId. */}
+      <ModelField
+        cliId="claude"
+        value={node.model}
+        onChange={(model) => onUpdate({ model })}
+      />
 
       {nodeRun?.verdict && (
         <Field label="Latest verdict">
