@@ -387,6 +387,16 @@ export interface PlainTuiLaunchOptions {
   rows?: number;
   /** Custom-provider CliProfile (Codex) — isolated config + key, no login. */
   cliProfileId?: string;
+  /**
+   * Initial brief, delivered through the CLI's own argv where the TUI supports
+   * one (codex: positional PROMPT; gemini: -i). Typing it into the composer
+   * after boot is NOT reliable — a pasted multi-line brief sits unsubmitted at
+   * the prompt, the idle heuristic then declares the node done, and the flow
+   * hands terminal junk downstream (first real E2E run died exactly there).
+   * Like claude's initialPrompt: dropped on a `new-session -A` reattach, so it
+   * is delivered exactly once.
+   */
+  initialPrompt?: string;
 }
 
 /**
@@ -488,7 +498,10 @@ export async function launchCodexCli(
         'codex',
         'cx',
         'https://github.com/openai/codex',
-        ['--dangerously-bypass-approvals-and-sandbox'],
+        [
+          '--dangerously-bypass-approvals-and-sandbox',
+          ...(opts.initialPrompt ? [opts.initialPrompt] : []),
+        ],
         [`CODEX_HOME=${configDir}`, `${keyEnv}=${keyValue}`],
         opts,
       );
@@ -501,7 +514,10 @@ export async function launchCodexCli(
     'codex',
     'cx',
     'https://github.com/openai/codex',
-    ['--dangerously-bypass-approvals-and-sandbox'],
+    [
+      '--dangerously-bypass-approvals-and-sandbox',
+      ...(opts.initialPrompt ? [opts.initialPrompt] : []),
+    ],
     [],
     opts,
   );
@@ -519,7 +535,13 @@ export async function launchGeminiCli(
     'gemini',
     'gm',
     'https://github.com/google-gemini/gemini-cli',
-    ['--skip-trust', '--yolo'],
+    [
+      '--skip-trust',
+      '--yolo',
+      // -i = run this prompt, then STAY interactive (a bare positional would
+      // make gemini answer once and exit).
+      ...(opts.initialPrompt ? ['-i', opts.initialPrompt] : []),
+    ],
     [],
     opts,
   );

@@ -86,8 +86,12 @@ export function stripAnsi(s: string): string {
 
 /**
  * Launch the node's CLI in a tmux-backed PTY and return its PtyPool session key.
- * Claude takes the brief as its first message (delivered exactly once, on first
- * launch); the other CLIs get it typed in after their TUI boots.
+ * Claude, codex, and gemini take the brief through their own argv (positional /
+ * -i) — delivered exactly once, on first launch. Only the CLIs with no such
+ * argument (opencode, antigravity) fall back to typing it in after the TUI
+ * boots; the first real E2E run proved a typed multi-line brief is fragile
+ * (it sat unsubmitted in codex's composer and the idle heuristic declared the
+ * node done), so argv delivery is used wherever the CLI allows it.
  */
 export async function launchFlowSession(
   node: FlowNode,
@@ -107,30 +111,48 @@ export async function launchFlowSession(
         model: node.model,
       });
       return key;
+    case 'codex':
+      await launchCodexCli({
+        ...base,
+        cliProfileId: node.cliProfileId,
+        initialPrompt: opts.prompt,
+      });
+      return key;
+    case 'gemini':
+      await launchGeminiCli({
+        ...base,
+        cliProfileId: node.cliProfileId,
+        initialPrompt: opts.prompt,
+      });
+      return key;
     case 'opencode':
       await launchOpenCodeCli({ ...base, cliProfileId: node.cliProfileId });
-      break;
-    case 'codex':
-      await launchCodexCli({ ...base, cliProfileId: node.cliProfileId });
-      break;
-    case 'gemini':
-      await launchGeminiCli({ ...base, cliProfileId: node.cliProfileId });
       break;
     case 'antigravity':
       await launchAntigravityCli({ ...base, cliProfileId: node.cliProfileId });
       break;
   }
 
-  // Type the brief once the TUI is up. Detached on purpose: the engine tick must
-  // not block for six seconds waiting on a TUI to draw.
+  // Typed fallback for the CLIs with no initial-prompt argv. Detached on
+  // purpose: the engine tick must not block for six seconds waiting on a TUI.
   const timer = setTimeout(() => sendToFlowSession(key, opts.prompt), TUI_BOOT_MS);
   timer.unref?.();
   return key;
 }
 
-/** Type text into a live flow session (send_flow, and the initial brief above). */
+// The composer submits a typed brief far more reliably when Enter arrives as
+// its own keypress a beat after the paste — glued to the text it is treated as
+// part of the paste and the brief just sits there.
+const ENTER_DELAY_MS = 400;
+
+/** Type text into a live flow session (send_flow, and the typed fallback). */
 export function sendToFlowSession(key: string, text: string): void {
-  writeToPty(key, /[\r\n]$/.test(text) ? text : `${text}\r`);
+  // TUI composers treat raw newlines as submits/line-breaks mid-paste —
+  // flatten to spaces; the brief's markdown structure matters less than the
+  // agent actually receiving one complete message.
+  writeToPty(key, text.replace(/\s*[\r\n]+\s*/g, ' ').trim());
+  const timer = setTimeout(() => writeToPty(key, '\r'), ENTER_DELAY_MS);
+  timer.unref?.();
 }
 
 /**

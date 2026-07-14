@@ -148,10 +148,17 @@ export async function startClaudePrintIn(
     child.on('error', (err) => finish({ ok: false, text: '', error: err.message }));
     child.on('close', (code) => {
       if (killed) return; // kill() already settled with 'stopped'
+      // A bad --model (or auth) makes claude -p exit 1 with NOTHING on either
+      // stream (the message only lands in its session log) — without the hint
+      // the journal just says "exit 1" and the user has nowhere to look.
+      const silent = !stderr.trim() && !stdout.trim();
+      const hint = silent
+        ? ` with no output — check the node's model (${model?.trim() ? `"${model.trim()}"` : 'CLI default'}) and auth values`
+        : '';
       finish({
         ok: code === 0,
         text: stdout,
-        error: code !== 0 ? stderr.trim() || `exit ${code}` : undefined,
+        error: code !== 0 ? stderr.trim() || `exit ${code}${hint}` : undefined,
       });
     });
 

@@ -7,7 +7,11 @@ export const inputCls =
 
 // Claude models a node may pin. Suggestions, not a closed list: `--model` also
 // takes aliases and full ids, and the CLI's own default (empty) is valid.
-export const CLAUDE_MODELS = ['fable-5', 'opus-4.8', 'sonnet-5', 'haiku-4.5'];
+// Values `claude --model` actually accepts: the CLI's short aliases. Marketing
+// names ("opus-4.8", "fable-5") make print-mode exit 1 with model_not_found —
+// the first real flow run died on exactly that. Full ids (claude-opus-4-8)
+// also work; the free-text input allows them.
+export const CLAUDE_MODELS = ['fable', 'opus', 'sonnet', 'haiku'];
 
 export function Head({ title, kind }: { title: string; kind: string }) {
   return (
@@ -91,8 +95,9 @@ export function ModelField({
         ))}
       </datalist>
       <p className="mt-1.5 text-[10.5px] leading-relaxed text-text-dim">
-        Passed as <code className="font-mono text-accent">--model</code> for this node.
-        Leave empty to use the CLI's own default.
+        Passed as <code className="font-mono text-accent">--model</code> for this node —
+        a claude alias (fable / opus / sonnet / haiku) or a full model id. Leave empty
+        to use the CLI's own default.
       </p>
     </Field>
   );
