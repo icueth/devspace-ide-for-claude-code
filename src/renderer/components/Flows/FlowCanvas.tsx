@@ -1,11 +1,12 @@
+import * as RadixMenu from '@radix-ui/react-context-menu';
 import { Maximize2, Minus, Plus } from 'lucide-react';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 
 import { FlowEdges } from '@renderer/components/Flows/FlowEdges';
 import { FlowNodeCard } from '@renderer/components/Flows/FlowNodeCard';
 import {
-  ContextMenu,
-  type Menu,
+  CanvasMenuContent,
+  type MenuCtx,
   ZoomBtn,
 } from '@renderer/components/Flows/FlowCanvasChrome';
 import { graphBounds } from '@renderer/components/Flows/flowGeometry';
@@ -63,9 +64,13 @@ export function FlowCanvas({
   const viewportRef = useRef<HTMLDivElement>(null);
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 40, y: 40 });
-  const [menu, setMenu] = useState<Menu | null>(null);
   const [wire, setWire] = useState<Wire | null>(null);
   const [selectedEdge, setSelectedEdge] = useState<FlowEdge | null>(null);
+  // What the cursor was over when the radix menu opened. A ref + version bump:
+  // the value is recorded in onContextMenu (before radix opens) and only needs
+  // to re-render the menu content, never the canvas.
+  const menuCtxRef = useRef<MenuCtx>({ worldX: 0, worldY: 0, nodeId: null, edge: null });
+  const [menuGen, setMenuGen] = useState(0);
 
   // Drag lives in a ref: pointermove fires far faster than React can commit,
   // and the handler must read the CURRENT gesture, not a closed-over snapshot.
@@ -124,7 +129,6 @@ export function FlowCanvas({
         return;
       }
       if (e.key === 'Escape') {
-        setMenu(null);
         setSelectedEdge(null);
         onSelectNode(null);
         return;
@@ -207,7 +211,6 @@ export function FlowCanvas({
   }, [clientToWorld, onMoveNode, onConnect, onDisconnect]);
 
   const onViewportPointerDown = (e: React.PointerEvent) => {
-    setMenu(null);
     if (e.button !== 0) return;
     const el = e.target as HTMLElement;
     if (el.closest('[data-node-id]')) return; // node/port handlers own the gesture
@@ -235,8 +238,10 @@ export function FlowCanvas({
     );
   };
 
+  // Runs just before radix's own contextmenu listener opens the menu — records
+  // WHAT was clicked (radix owns WHERE the menu goes). No preventDefault here:
+  // radix needs the event to open.
   const onContextMenu = (e: React.MouseEvent) => {
-    e.preventDefault();
     const [wx, wy] = clientToWorld(e.clientX, e.clientY);
     const nodeId =
       (e.target as HTMLElement)
@@ -244,17 +249,18 @@ export function FlowCanvas({
         ?.getAttribute('data-node-id') ?? null;
     const edge = nodeId ? null : edgeAt(e.target as Element);
     if (edge) setSelectedEdge(edge);
-    setMenu({
-      clientX: e.clientX,
-      clientY: e.clientY,
-      worldX: wx,
-      worldY: wy,
-      nodeId,
-      edge,
-    });
+    menuCtxRef.current = { worldX: wx, worldY: wy, nodeId, edge };
+    setMenuGen((g) => g + 1);
   };
 
+  const menuCtx = menuCtxRef.current;
+  const edgeFromGate =
+    !!menuCtx.edge &&
+    (graph.nodes.find((n) => n.id === menuCtx.edge!.from)?.kind ?? 'agent') === 'gate';
+
   return (
+    <RadixMenu.Root>
+    <RadixMenu.Trigger asChild>
     <div
       ref={viewportRef}
       onPointerDown={onViewportPointerDown}
@@ -355,24 +361,21 @@ export function FlowCanvas({
         </ZoomBtn>
       </div>
 
-      {menu && (
-        <ContextMenu
-          menu={menu}
-          edgeFromGate={
-            !!menu.edge &&
-            (graph.nodes.find((n) => n.id === menu.edge!.from)?.kind ?? 'agent') ===
-              'gate'
-          }
-          onClose={() => setMenu(null)}
-          onAddNode={onAddNode}
-          onDeleteNode={onDeleteNode}
-          onDeleteEdge={(edge) => {
-            onDisconnect(edge);
-            setSelectedEdge(null);
-          }}
-          onSetEdgeBranch={onSetEdgeBranch}
-        />
-      )}
     </div>
+    </RadixMenu.Trigger>
+
+    <CanvasMenuContent
+      key={menuGen}
+      ctx={menuCtx}
+      edgeFromGate={edgeFromGate}
+      onAddNode={onAddNode}
+      onDeleteNode={onDeleteNode}
+      onDeleteEdge={(edge) => {
+        onDisconnect(edge);
+        setSelectedEdge(null);
+      }}
+      onSetEdgeBranch={onSetEdgeBranch}
+    />
+    </RadixMenu.Root>
   );
 }
