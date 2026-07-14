@@ -110,7 +110,7 @@ const TOOLS = [
   {
     name: 'list_flows',
     description:
-      "List the Agent Flows the user has designed for this project: id, name, description, and the node graph (role + CLI + mode per node). Each flow's description says what kind of work it is for — read it to decide whether the user's request matches. Call this BEFORE run_flow, never guess a flow name.",
+      "List the Agent Flows the user has designed for this project: id, name, description, and the node graph (role + CLI + mode per node). Each flow's description says what kind of work it is for — read it to decide whether the user's request matches. Call this BEFORE run_flow, never guess a flow name. If MORE THAN ONE flow plausibly fits (or none clearly does), ask the user which to use — list the candidates with one-line reasons — instead of picking silently. If the user names a flow themselves, use that one.",
     inputSchema: {
       type: 'object',
       properties: {
