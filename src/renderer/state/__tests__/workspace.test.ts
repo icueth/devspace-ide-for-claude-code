@@ -11,6 +11,33 @@ import {
   useWorkspaceStore,
 } from '../workspace';
 
+// Module-level api stub: the pickFolder/openPath/setActive flows drive
+// api.workspace.*, and killProjectPtys reaches api.pty.* through the cliTabs
+// store. Per-test behavior is set via vi.mocked(api.workspace.*).
+vi.mock('@renderer/lib/api', () => ({
+  api: {
+    workspace: {
+      list: vi.fn(async () => ({ active: null, workspaces: [] })),
+      pickFolder: vi.fn(async () => null),
+      open: vi.fn(async () => null),
+      setActive: vi.fn(async () => null),
+      scan: vi.fn(async () => []),
+      suspend: vi.fn(async () => undefined),
+    },
+    pty: {
+      killSessionTree: vi.fn(async () => undefined),
+      restartClaude: vi.fn(async () => undefined),
+      setPinned: vi.fn(async () => undefined),
+      onAutoClosed: vi.fn(() => () => undefined),
+    },
+    flows: {
+      select: vi.fn(async () => undefined),
+    },
+  },
+}));
+
+import { api } from '@renderer/lib/api';
+
 describe('activateOpenedLocationRoot', () => {
   const root = {
     id: 'root',
@@ -612,5 +639,105 @@ describe('workspace store — sidebar/tab sync actions', () => {
     useWorkspaceStore.getState().followTab(b2);
     useWorkspaceStore.getState().activateProject('b');
     expect(useEditorStore.getState().activeTabPath).toBe(b2);
+  });
+});
+
+// Regression: opening a NEW workspace folder (pickFolder/openPath) pre-set
+// `active: ws` and then called setActive(ws.id) — the same-id guard saw the
+// OLD workspace's loaded projects (`projects.length > 0`) and returned before
+// scanning, so the new workspace's projects never appeared until a manual
+// "Rescan projects".
+describe('pickFolder / openPath scan the newly opened workspace', () => {
+  const wsA = { id: 'wsA', name: 'a', path: '/ws/a', lastOpened: 0 };
+  const wsB = { id: 'wsB', name: 'b', path: '/ws/b', lastOpened: 0 };
+  const projA = {
+    id: 'pa',
+    name: 'pa',
+    path: '/ws/a/pa',
+    workspaceId: 'wsA',
+    vcs: 'git' as const,
+    detectedRuntime: [],
+  };
+  const projB = {
+    id: 'pb',
+    name: 'pb',
+    path: '/ws/b',
+    workspaceId: 'wsB',
+    vcs: 'git' as const,
+    detectedRuntime: [],
+    isWorkspaceRoot: true,
+  };
+
+  const mem = new Map<string, string>();
+
+  afterEach(() => {
+    delete (globalThis as { localStorage?: unknown }).localStorage;
+  });
+
+  beforeEach(() => {
+    // Call history must not leak between tests here — the no-op test asserts
+    // scan was NOT called, which earlier tests in this describe do trigger.
+    vi.clearAllMocks();
+    mem.clear();
+    (globalThis as unknown as { localStorage: unknown }).localStorage = {
+      getItem: (k: string) => mem.get(k) ?? null,
+      setItem: (k: string, v: string) => void mem.set(k, v),
+      removeItem: (k: string) => void mem.delete(k),
+    };
+    __resetProjectMruForTests();
+    useCliTabsStore.setState({
+      tabsByProject: {},
+      activeTabIdByProject: {},
+      projectsById: {},
+      dockedOrder: [],
+      activeDockedProjectId: null,
+      columns: [{ id: 'col-0', pin: null }],
+      activeColumnId: 'col-0',
+    });
+    // Workspace A is fully loaded — its projects are what tripped the guard.
+    useWorkspaceStore.setState({
+      active: wsA,
+      known: [wsA],
+      projects: [projA],
+      activeProjectId: 'pa',
+      openedProjectIds: ['pa'],
+      scanning: false,
+      error: null,
+    });
+    vi.mocked(api.workspace.setActive).mockImplementation(async (id: string) =>
+      id === wsB.id ? wsB : id === wsA.id ? wsA : null,
+    );
+    vi.mocked(api.workspace.scan).mockResolvedValue([projB]);
+  });
+
+  it('pickFolder scans the picked workspace instead of keeping stale projects', async () => {
+    vi.mocked(api.workspace.pickFolder).mockResolvedValue(wsB);
+
+    await useWorkspaceStore.getState().pickFolder();
+
+    expect(api.workspace.scan).toHaveBeenCalledWith(wsB.id, wsB.path);
+    const s = useWorkspaceStore.getState();
+    expect(s.active?.id).toBe('wsB');
+    expect(s.projects).toEqual([projB]);
+  });
+
+  it('openPath scans the opened workspace instead of keeping stale projects', async () => {
+    vi.mocked(api.workspace.open).mockResolvedValue(wsB);
+
+    await useWorkspaceStore.getState().openPath('/ws/b');
+
+    expect(api.workspace.scan).toHaveBeenCalledWith(wsB.id, wsB.path);
+    expect(useWorkspaceStore.getState().projects).toEqual([projB]);
+  });
+
+  it('re-picking the CURRENT workspace stays a no-op (no wipe, no rescan)', async () => {
+    vi.mocked(api.workspace.pickFolder).mockResolvedValue(wsA);
+
+    await useWorkspaceStore.getState().pickFolder();
+
+    expect(api.workspace.scan).not.toHaveBeenCalled();
+    const s = useWorkspaceStore.getState();
+    expect(s.projects).toEqual([projA]);
+    expect(s.activeProjectId).toBe('pa');
   });
 });

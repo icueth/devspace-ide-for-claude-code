@@ -363,7 +363,11 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     set({ error: null });
     const ws = await api.workspace.pickFolder();
     if (!ws) return;
-    set({ active: ws, known: [...get().known.filter((w) => w.id !== ws.id), ws] });
+    // Register in `known` only — setActive() flips `active` itself. Pre-setting
+    // `active` here tripped setActive's same-id guard against the PREVIOUS
+    // workspace's loaded projects, skipping the scan entirely: the new
+    // workspace showed stale projects until a manual "Rescan projects".
+    set({ known: [...get().known.filter((w) => w.id !== ws.id), ws] });
     await get().setActive(ws.id);
     activateOpenedLocationRoot();
   },
@@ -371,7 +375,9 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   async openPath(path: string) {
     set({ error: null });
     const ws = await api.workspace.open(path);
-    set({ active: ws, known: [...get().known.filter((w) => w.id !== ws.id), ws] });
+    if (!ws) return;
+    // Same rule as pickFolder: never pre-claim `active` before setActive().
+    set({ known: [...get().known.filter((w) => w.id !== ws.id), ws] });
     await get().setActive(ws.id);
     activateOpenedLocationRoot();
   },
