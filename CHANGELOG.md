@@ -5,6 +5,43 @@ All notable changes to DevSpace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.38.0] — 2026-07-15
+
+**Stable release of the 0.38 line — headlined by the Agent Flow Builder:
+design a graph of real CLI agents on a canvas, then run it from chat.**
+(Betas 16–56 shipped incrementally; per-beta detail lives in git history.)
+
+### Added
+- **Agent Flow Builder** (Flows tab in the workbench rail). Node = a real CLI
+  agent (claude / codex / gemini / opencode / antigravity — including custom
+  profiles) with role prompt, per-node model and headless/interactive mode;
+  edge = the handoff that pipes one node's output into the next. Right-click
+  to add agent / gate / note nodes, drag edges to connect, retarget or delete
+  them. Gate nodes judge upstream output PASS/FAIL (LLM judge) and route fail
+  edges back for bounded retries.
+- **Chat is the only run trigger.** Flows never run from the canvas — pin a
+  flow to a claude dock tab (right-click tab → *Use flow*), then just talk:
+  casual questions get answers, procedural work flows through the pinned
+  graph (`run_flow` / `flow_status` / `send_flow` / `stop_flow` MCP tools).
+  The canvas stays a design surface + live run monitor.
+- **One live run per flow** with a *Clone flow* button for parallel runs;
+  **Test nodes** preflight probes every CLI/model/profile combo in a flow
+  without running it; codex model field accepts `model@effort`
+  (e.g. `gpt-5.6-sol@xhigh`); per-node `--model` for codex and gemini.
+- **Eight flow templates** built into the app — pipeline+gate, fan-out,
+  supervisor, code fan-out, big feature, debug-first, research duo,
+  research→code — each encoding field-tested role prompts.
+- Live Preview for any HTML file (right-click → Live Preview), effort chip in
+  the tab header, and the rest of the beta-line features.
+
+### Fixed
+- **Cmd+Q no longer forgets the last session** — DOM storage is flushed
+  before the hard exit, so dock tabs and open projects survive a quit.
+- **Opening a new workspace folder scans immediately** — no more manual
+  "Rescan projects" after Open folder…
+- File-tree clicks never hijack the dock; idle CLI tabs no longer auto-close
+  by default (opt-in reaper); Live Preview never docks a CLI.
+
 ## [0.38.0-beta.15] — 2026-06-15 (prod branch, local beta — not on GH)
 
 **Two workflow-breaking fixes: file-tree clicks no longer hijack the dock, and
