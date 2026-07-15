@@ -178,7 +178,7 @@ function FlowList({ selectedFlowId }: { selectedFlowId: string | null }) {
 function TemplateRail() {
   const createFlow = useFlowsStore((s) => s.createFlow);
   return (
-    <div className="shrink-0 border-t border-border p-1.5">
+    <div className="max-h-[38vh] shrink-0 overflow-y-auto border-t border-border p-1.5">
       <span className="mb-1 block px-1.5 text-[10px] font-semibold uppercase tracking-wider text-text-dim">
         Templates
       </span>
